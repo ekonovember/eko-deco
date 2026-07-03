@@ -1,0 +1,504 @@
+"""
+Bühlmann ZHL-16C decompression model with Erik Baker's Gradient Factors.
+
+References
+----------
+* A.A. Bühlmann, "Tauchmedizin" (1995), ZHL-16 coefficients (variant C).
+* Erik C. Baker, "Clearing Up The Confusion About 'Deep Stops'" and
+  "Understanding M-values" (gradient factor formulation).
+* Subsurface dive log source (cross-check of constants).
+
+Units
+-----
+* depth: meters of sea water (msw); 1 bar ≈ 10 msw (configurable)
+* pressure: bar absolute
+* time: minutes
+* gas fractions: 0..1
+"""
+
+from __future__ import annotations
+
+import math
+from dataclasses import dataclass, field
+from typing import Iterable, List, Optional, Sequence, Tuple
+
+# -----------------------------------------------------------------------------
+# ZHL-16C constants (16 compartments). N2 and He.
+# Sources: Bühlmann 1990/1995, cross-checked with Subsurface deco.c.
+# -----------------------------------------------------------------------------
+
+N2_HALFTIME = (
+    5.0, 8.0, 12.5, 18.5, 27.0, 38.3, 54.3, 77.0,
+    109.0, 146.0, 187.0, 239.0, 305.0, 390.0, 498.0, 635.0,
+)
+N2_A = (
+    1.1696, 1.0000, 0.8618, 0.7562, 0.6200, 0.5043, 0.4410, 0.4000,
+    0.3750, 0.3500, 0.3295, 0.3065, 0.2835, 0.2610, 0.2480, 0.2327,
+)
+N2_B = (
+    0.5578, 0.6514, 0.7222, 0.7825, 0.8126, 0.8434, 0.8693, 0.8910,
+    0.9092, 0.9222, 0.9319, 0.9403, 0.9477, 0.9544, 0.9602, 0.9653,
+)
+
+HE_HALFTIME = (
+    1.88, 3.02, 4.72, 6.99, 10.21, 14.48, 20.53, 29.11,
+    41.20, 55.19, 70.69, 90.34, 115.29, 147.42, 188.24, 240.03,
+)
+HE_A = (
+    1.6189, 1.3830, 1.1919, 1.0458, 0.9220, 0.8205, 0.7305, 0.6502,
+    0.5950, 0.5545, 0.5333, 0.5189, 0.5181, 0.5176, 0.5172, 0.5119,
+)
+HE_B = (
+    0.4770, 0.5747, 0.6527, 0.7223, 0.7582, 0.7957, 0.8279, 0.8553,
+    0.8757, 0.8903, 0.8997, 0.9073, 0.9122, 0.9171, 0.9217, 0.9267,
+)
+
+N_COMP = 16
+
+# Bühlmann uses 0.0627 bar for water-vapor pressure in the alveoli (37 °C).
+P_H2O = 0.0627
+# Atmospheric pressure at sea level (bar).
+P_ATM = 1.01325
+# msw per bar (sea water). Use 10.0 for "metric-friendly" rounding.
+MSW_PER_BAR = 10.0
+
+
+def depth_to_p_amb(depth_m: float, surface_p: float = P_ATM,
+                   msw_per_bar: float = MSW_PER_BAR) -> float:
+    return surface_p + depth_m / msw_per_bar
+
+
+def p_amb_to_depth(p_amb: float, surface_p: float = P_ATM,
+                   msw_per_bar: float = MSW_PER_BAR) -> float:
+    return max(0.0, (p_amb - surface_p) * msw_per_bar)
+
+
+# -----------------------------------------------------------------------------
+# Gas
+# -----------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class Gas:
+    """Breathing gas. fO2 + fHe + fN2 == 1."""
+    fO2: float
+    fHe: float = 0.0
+
+    @property
+    def fN2(self) -> float:
+        return 1.0 - self.fO2 - self.fHe
+
+    def __post_init__(self) -> None:
+        if not (0.0 < self.fO2 <= 1.0):
+            raise ValueError(f"fO2 out of range: {self.fO2}")
+        if not (0.0 <= self.fHe < 1.0):
+            raise ValueError(f"fHe out of range: {self.fHe}")
+        if self.fN2 < -1e-9:
+            raise ValueError("fO2 + fHe > 1")
+
+    def mod(self, ppo2_max: float = 1.4, surface_p: float = P_ATM,
+            msw_per_bar: float = MSW_PER_BAR) -> float:
+        """Maximum operating depth in msw for the given ppO2 limit."""
+        return (ppo2_max / self.fO2 - surface_p) * msw_per_bar
+
+    def ppo2(self, depth_m: float, surface_p: float = P_ATM,
+             msw_per_bar: float = MSW_PER_BAR) -> float:
+        """Partial pressure of O2 (bar) at the given depth."""
+        return self.fO2 * depth_to_p_amb(depth_m, surface_p, msw_per_bar)
+
+    def min_depth(self, ppo2_min: float = 0.18, surface_p: float = P_ATM,
+                  msw_per_bar: float = MSW_PER_BAR) -> float:
+        """Shallowest depth (msw) where ppO2 >= ppo2_min. 0 if breathable at the
+        surface; positive for a hypoxic mix that needs a travel gas above it."""
+        return max(0.0, (ppo2_min / self.fO2 - surface_p) * msw_per_bar)
+
+    def __repr__(self) -> str:  # pragma: no cover - cosmetic
+        if self.fHe > 0:
+            return f"Trimix {int(round(self.fO2*100))}/{int(round(self.fHe*100))}"
+        if abs(self.fO2 - 0.21) < 1e-6:
+            return "Air"
+        return f"EAN{int(round(self.fO2*100))}"
+
+
+AIR = Gas(0.21)
+EAN32 = Gas(0.32)
+EAN50 = Gas(0.50)
+O2 = Gas(1.00)
+
+
+# -----------------------------------------------------------------------------
+# Tissue compartments
+# -----------------------------------------------------------------------------
+
+@dataclass
+class Tissues:
+    """16-compartment N2/He loading (partial pressures, bar)."""
+    pN2: List[float] = field(default_factory=lambda: [0.0] * N_COMP)
+    pHe: List[float] = field(default_factory=lambda: [0.0] * N_COMP)
+
+    @classmethod
+    def at_surface(cls, surface_p: float = P_ATM, gas: Gas = AIR) -> "Tissues":
+        """Fully saturated at surface on the given gas (default air)."""
+        p_insp_n2 = (surface_p - P_H2O) * gas.fN2
+        p_insp_he = (surface_p - P_H2O) * gas.fHe
+        return cls(pN2=[p_insp_n2] * N_COMP, pHe=[p_insp_he] * N_COMP)
+
+    def copy(self) -> "Tissues":
+        return Tissues(pN2=list(self.pN2), pHe=list(self.pHe))
+
+
+def _schreiner(p0: float, p_insp_start: float, rate_insp: float,
+               t: float, halftime: float) -> float:
+    """Schreiner equation for one compartment, one gas.
+
+    Reduces to the Haldane instantaneous-equilibrium update when rate = 0.
+
+    p0           initial compartment partial pressure (bar)
+    p_insp_start initial inspired inert-gas partial pressure (bar)
+    rate_insp    rate of change of inspired inert-gas pressure (bar/min)
+    t            interval length (min)
+    halftime     compartment half-time (min)
+    """
+    k = math.log(2.0) / halftime
+    return (p_insp_start
+            + rate_insp * (t - 1.0 / k)
+            - (p_insp_start - p0 - rate_insp / k) * math.exp(-k * t))
+
+
+def update_tissues(tissues: Tissues, gas: Gas,
+                   p_amb_start: float, p_amb_end: float,
+                   t_min: float) -> None:
+    """Update all 16 compartments over a segment of constant ascent/descent
+    rate (or flat, if p_amb_start == p_amb_end). In-place."""
+    if t_min <= 0:
+        return
+    rate_amb = (p_amb_end - p_amb_start) / t_min
+    p_insp_n2_0 = (p_amb_start - P_H2O) * gas.fN2
+    p_insp_he_0 = (p_amb_start - P_H2O) * gas.fHe
+    rate_n2 = rate_amb * gas.fN2
+    rate_he = rate_amb * gas.fHe
+    for i in range(N_COMP):
+        tissues.pN2[i] = _schreiner(tissues.pN2[i], p_insp_n2_0, rate_n2,
+                                    t_min, N2_HALFTIME[i])
+        tissues.pHe[i] = _schreiner(tissues.pHe[i], p_insp_he_0, rate_he,
+                                    t_min, HE_HALFTIME[i])
+
+
+# -----------------------------------------------------------------------------
+# M-values, ceiling, gradient factors
+# -----------------------------------------------------------------------------
+
+def compartment_ab(pN2: float, pHe: float, idx: int) -> Tuple[float, float]:
+    """Bühlmann combined a/b coefficients weighted by N2/He partial pressure."""
+    total = pN2 + pHe
+    if total <= 0:
+        return N2_A[idx], N2_B[idx]
+    a = (N2_A[idx] * pN2 + HE_A[idx] * pHe) / total
+    b = (N2_B[idx] * pN2 + HE_B[idx] * pHe) / total
+    return a, b
+
+
+def ceiling(tissues: Tissues, gf: float) -> float:
+    """Lowest tolerated ambient pressure (bar) across all 16 compartments
+    at the given gradient factor (0..1). Baker's formula:
+
+        P_amb_tol = (P_comp - a*GF) / (GF/b + 1 - GF)
+    """
+    worst = 0.0
+    for i in range(N_COMP):
+        p_comp = tissues.pN2[i] + tissues.pHe[i]
+        a, b = compartment_ab(tissues.pN2[i], tissues.pHe[i], i)
+        p_tol = (p_comp - a * gf) / (gf / b + 1.0 - gf)
+        if p_tol > worst:
+            worst = p_tol
+    return worst
+
+
+def ceiling_depth(tissues: Tissues, gf: float,
+                  surface_p: float = P_ATM,
+                  msw_per_bar: float = MSW_PER_BAR) -> float:
+    return p_amb_to_depth(ceiling(tissues, gf), surface_p, msw_per_bar)
+
+
+def gf_at(p_amb: float, gf_low: float, gf_high: float,
+          p_first_stop: float, p_surface: float = P_ATM) -> float:
+    """Linearly interpolate GF between GF-Low at the first stop and
+    GF-High at the surface."""
+    if p_first_stop <= p_surface:
+        return gf_high
+    if p_amb >= p_first_stop:
+        return gf_low
+    if p_amb <= p_surface:
+        return gf_high
+    frac = (p_first_stop - p_amb) / (p_first_stop - p_surface)
+    return gf_low + (gf_high - gf_low) * frac
+
+
+# -----------------------------------------------------------------------------
+# Dive planner
+# -----------------------------------------------------------------------------
+
+@dataclass
+class DiveSegment:
+    """One leg of the dive. depth in msw, duration in min, gas used."""
+    kind: str          # "descent" | "bottom" | "ascent" | "stop"
+    depth_start: float
+    depth_end: float
+    duration: float
+    gas: Gas
+    gf_used: Optional[float] = None  # for stops / ceiling at end
+
+    def as_dict(self) -> dict:
+        return {
+            "kind": self.kind,
+            "depth_start_m": round(self.depth_start, 2),
+            "depth_end_m": round(self.depth_end, 2),
+            "duration_min": round(self.duration, 2),
+            "gas": repr(self.gas),
+            "gf_used": None if self.gf_used is None else round(self.gf_used, 3),
+        }
+
+
+@dataclass
+class DivePlan:
+    descent_rate: float = 18.0   # m/min
+    ascent_rate: float = 10.0    # m/min  (used between bottom and stops, and stop-to-stop)
+    stop_interval: float = 3.0   # m
+    gf_low: float = 0.30
+    gf_high: float = 0.80
+    surface_p: float = P_ATM
+    msw_per_bar: float = MSW_PER_BAR
+    # Travel (descent) gases: breathed while the bottom gas is too hypoxic to use
+    # near the surface (e.g. a hypoxic trimix such as 10/70).
+    travel_gases: Sequence[Gas] = field(default_factory=tuple)
+    # Deco / acceleration gases, switched to on ascent at their MOD.
+    deco_gases: Sequence[Gas] = field(default_factory=tuple)
+    ppo2_deco: float = 1.6      # ppO2 ceiling for deco gases on ascent
+    ppo2_bottom: float = 1.4    # ppO2 ceiling for the bottom/travel gas going down
+    ppo2_min: float = 0.18      # hypoxia floor: a gas is not breathable below this ppO2
+
+    def _usable(self, gas: Gas, depth: float, ppo2_ceiling: float) -> bool:
+        pp = gas.ppo2(depth, self.surface_p, self.msw_per_bar)
+        return self.ppo2_min - 1e-9 <= pp <= ppo2_ceiling + 1e-9
+
+    def best_gas(self, depth: float, bottom_gas: Gas) -> Gas:
+        """Richest breathable gas for the ASCENT at `depth` (bottom + travel +
+        deco gases), capped at ppo2_deco and floored at ppo2_min."""
+        candidates = [bottom_gas, *self.travel_gases, *self.deco_gases]
+        usable = [g for g in candidates if self._usable(g, depth, self.ppo2_deco)]
+        if not usable:
+            return bottom_gas
+        return max(usable, key=lambda g: g.fO2)
+
+    def descent_gas(self, depth: float, bottom_gas: Gas) -> Gas:
+        """Gas to breathe on the way DOWN at `depth`: the bottom gas as soon as it
+        is breathable (ppO2 >= ppo2_min), otherwise the richest usable travel gas."""
+        if self._usable(bottom_gas, depth, self.ppo2_bottom):
+            return bottom_gas
+        travel = [g for g in self.travel_gases if self._usable(g, depth, self.ppo2_bottom)]
+        if travel:
+            return max(travel, key=lambda g: g.fO2)
+        candidates = [bottom_gas, *self.travel_gases, *self.deco_gases]
+        usable = [g for g in candidates if self._usable(g, depth, self.ppo2_bottom)]
+        return max(usable, key=lambda g: g.fO2) if usable else bottom_gas
+
+
+def _round_up_to_stop(depth: float, interval: float) -> float:
+    if depth <= 0:
+        return 0.0
+    return math.ceil(depth / interval - 1e-9) * interval
+
+
+def _gas_switch_depths(plan: DivePlan, bottom_gas: Gas) -> List[float]:
+    """Depths (msw) where the breathable-gas choice can change: each gas MOD (at
+    both ppO2 ceilings) and each hypoxic mix's minimum breathable depth."""
+    depths = set()
+    for g in (bottom_gas, *plan.travel_gases, *plan.deco_gases):
+        for ceiling_ppo2 in (plan.ppo2_bottom, plan.ppo2_deco):
+            mod = g.mod(ceiling_ppo2, plan.surface_p, plan.msw_per_bar)
+            if mod > 0:
+                depths.add(round(mod, 6))
+        dmin = g.min_depth(plan.ppo2_min, plan.surface_p, plan.msw_per_bar)
+        if dmin > 0:
+            depths.add(round(dmin, 6))
+    return sorted(depths)
+
+
+def _move(tissues: Tissues, segs: List[DiveSegment], plan: DivePlan,
+          bottom_gas: Gas, from_depth: float, to_depth: float, gas_for,
+          kind: str, p_first_stop: float) -> None:
+    """Change depth continuously from `from_depth` to `to_depth`, splitting into
+    sub-segments at gas-switch depths and loading tissues with the gas chosen
+    (by `gas_for`) for each sub-segment."""
+    if abs(to_depth - from_depth) < 1e-9:
+        return
+    descending = to_depth > from_depth
+    rate = plan.descent_rate if descending else plan.ascent_rate
+    lo, hi = min(from_depth, to_depth), max(from_depth, to_depth)
+    breaks = [d for d in _gas_switch_depths(plan, bottom_gas)
+              if lo + 1e-9 < d < hi - 1e-9]
+    seq = [from_depth] + (breaks if descending else breaks[::-1]) + [to_depth]
+    runs: List[Tuple[float, float, Gas]] = []
+    for a, c in zip(seq, seq[1:]):
+        gas = gas_for((a + c) / 2.0)
+        if runs and runs[-1][2] == gas:
+            runs[-1] = (runs[-1][0], c, gas)   # coalesce same-gas sub-segments
+        else:
+            runs.append((a, c, gas))
+    for a, c, gas in runs:
+        p_a = depth_to_p_amb(a, plan.surface_p, plan.msw_per_bar)
+        p_c = depth_to_p_amb(c, plan.surface_p, plan.msw_per_bar)
+        t = abs(c - a) / rate
+        update_tissues(tissues, gas, p_a, p_c, t)
+        gf = (gf_at(p_c, plan.gf_low, plan.gf_high, p_first_stop, plan.surface_p)
+              if kind == "ascent" else None)
+        segs.append(DiveSegment(kind, a, c, t, gas, gf_used=gf))
+
+
+def plan_dive(bottom_depth: float, bottom_time: float, bottom_gas: Gas,
+              plan: DivePlan = DivePlan(),
+              start_tissues: Optional[Tissues] = None
+              ) -> Tuple[List[DiveSegment], Tissues]:
+    """Compute a square-profile dive plan with deco stops.
+
+    `bottom_time` is the total runtime to leaving the bottom (descent + flat).
+    Returns the segment list and the final tissue state.
+    """
+    tissues = (start_tissues.copy() if start_tissues
+               else Tissues.at_surface(plan.surface_p, AIR))
+    segs: List[DiveSegment] = []
+    descent_gas_for = lambda d: plan.descent_gas(d, bottom_gas)
+    ascent_gas_for = lambda d: plan.best_gas(d, bottom_gas)
+
+    # ---- descent (switches travel -> bottom gas as it becomes breathable) ----
+    _move(tissues, segs, plan, bottom_gas, 0.0, bottom_depth,
+          descent_gas_for, "descent", plan.surface_p)
+    t_desc = bottom_depth / plan.descent_rate
+
+    # ---- bottom ----
+    p_bot = depth_to_p_amb(bottom_depth, plan.surface_p, plan.msw_per_bar)
+    t_flat = max(0.0, bottom_time - t_desc)
+    update_tissues(tissues, bottom_gas, p_bot, p_bot, t_flat)
+    segs.append(DiveSegment("bottom", bottom_depth, bottom_depth, t_flat, bottom_gas))
+
+    # ---- find first stop using GF-Low ----
+    ceil_low = ceiling_depth(tissues, plan.gf_low, plan.surface_p, plan.msw_per_bar)
+    first_stop_depth = _round_up_to_stop(ceil_low, plan.stop_interval)
+    if first_stop_depth <= 0:
+        # No deco: ascend to the surface, switching to a breathable gas if the
+        # bottom mix is hypoxic near the surface.
+        _move(tissues, segs, plan, bottom_gas, bottom_depth, 0.0,
+              ascent_gas_for, "ascent", plan.surface_p)
+        return segs, tissues
+
+    p_first_stop = depth_to_p_amb(first_stop_depth, plan.surface_p, plan.msw_per_bar)
+
+    # ---- ascend from bottom to first stop ----
+    _move(tissues, segs, plan, bottom_gas, bottom_depth, first_stop_depth,
+          ascent_gas_for, "ascent", p_first_stop)
+
+    # ---- iterate stops ----
+    current_depth = first_stop_depth
+    while current_depth > 0:
+        next_depth = max(0.0, current_depth - plan.stop_interval)
+        p_next = depth_to_p_amb(next_depth, plan.surface_p, plan.msw_per_bar)
+        gf_at_next = gf_at(p_next, plan.gf_low, plan.gf_high,
+                           p_first_stop, plan.surface_p)
+        gas_here = plan.best_gas(current_depth, bottom_gas)
+        p_here = depth_to_p_amb(current_depth, plan.surface_p, plan.msw_per_bar)
+
+        # Wait at this stop in 1-minute increments until ceiling allows next stop.
+        stop_minutes = 0.0
+        while ceiling(tissues, gf_at_next) > p_next + 1e-6:
+            update_tissues(tissues, gas_here, p_here, p_here, 1.0)
+            stop_minutes += 1.0
+            if stop_minutes > 24 * 60:
+                raise RuntimeError("Stop exceeded 24h; aborting (bad input?)")
+        if stop_minutes > 0:
+            segs.append(DiveSegment("stop", current_depth, current_depth,
+                                    stop_minutes, gas_here, gf_used=gf_at_next))
+
+        # Ascend to the next stop, switching gas at any MOD crossed on the way up.
+        if next_depth < current_depth:
+            _move(tissues, segs, plan, bottom_gas, current_depth, next_depth,
+                  ascent_gas_for, "ascent", p_first_stop)
+        current_depth = next_depth
+
+    return segs, tissues
+
+
+# -----------------------------------------------------------------------------
+# Convenience: NDL (no-decompression limit) at a given depth on a gas
+# -----------------------------------------------------------------------------
+
+def ndl(depth_m: float, gas: Gas = AIR, plan: DivePlan = DivePlan(),
+        start_tissues: Optional[Tissues] = None,
+        max_min: int = 600) -> Optional[int]:
+    """Minutes you can stay at `depth_m` (after instantaneous descent) before
+    a stop is required at GF-High. Returns None if > max_min."""
+    base = (start_tissues.copy() if start_tissues
+            else Tissues.at_surface(plan.surface_p, AIR))
+    p_amb = depth_to_p_amb(depth_m, plan.surface_p, plan.msw_per_bar)
+    for minute in range(1, max_min + 1):
+        update_tissues(base, gas, p_amb, p_amb, 1.0)
+        if ceiling(base, plan.gf_high) > plan.surface_p + 1e-6:
+            return minute - 1
+    return None
+
+
+def total_runtime(segments: Iterable[DiveSegment]) -> float:
+    return sum(s.duration for s in segments)
+
+
+def time_to_surface(segments: Iterable[DiveSegment]) -> float:
+    """TTS — minutes from leaving the bottom to surfacing (all ascent + stop time)."""
+    return sum(s.duration for s in segments if s.kind in ("ascent", "stop"))
+
+
+# -----------------------------------------------------------------------------
+# Gas management: consumption, TTS and "rock bottom" (minimum) gas
+# -----------------------------------------------------------------------------
+
+@dataclass
+class GasPlan:
+    """Consumption inputs. SAC = surface air consumption in litres/min at 1 bar."""
+    sac: float                            # normal / working SAC
+    sac_stress: float                     # distress / emergency SAC
+    divers: int = 2                       # divers sharing gas in the emergency
+    problem_minutes: float = 1.0          # time solving the problem at max depth
+    tank_liters: Optional[float] = None   # total cylinder volume, for bar output
+
+
+def segment_gas_liters(segments: Iterable[DiveSegment], sac: float,
+                       surface_p: float = P_ATM, msw_per_bar: float = MSW_PER_BAR,
+                       divers: int = 1,
+                       kinds: Optional[Tuple[str, ...]] = None) -> float:
+    """Litres breathed across `segments` at `sac`, using each segment's average
+    depth. `kinds` optionally restricts which segment kinds are counted."""
+    total = 0.0
+    for s in segments:
+        if kinds is not None and s.kind not in kinds:
+            continue
+        avg_depth = (s.depth_start + s.depth_end) / 2.0
+        ata = depth_to_p_amb(avg_depth, surface_p, msw_per_bar)
+        total += sac * ata * s.duration * divers
+    return total
+
+
+def rock_bottom_liters(bottom_depth: float, gas_plan: GasPlan,
+                       ascent_rate: float = 10.0, surface_p: float = P_ATM,
+                       msw_per_bar: float = MSW_PER_BAR) -> float:
+    """Minimum gas ("rock bottom") in litres for `gas_plan.divers` divers to leave
+    the worst point (max depth) and reach the surface in an emergency, breathing at
+    the stressed SAC: time solving the problem at depth plus a **direct** ascent to
+    the surface at `ascent_rate` (average ambient pressure = the mid-depth value).
+
+    This is the standard minimum-gas reserve. It deliberately does not bill the full
+    decompression schedule to the back gas — in a lost/shared-gas scenario the team
+    ascends and switches onto the deco gas — so the reserve stays realistic (a
+    full-deco figure would be many hundreds of bar on a deep dive)."""
+    p_max = depth_to_p_amb(bottom_depth, surface_p, msw_per_bar)
+    p_avg = surface_p + (bottom_depth / 2.0) / msw_per_bar
+    ascent_min = bottom_depth / ascent_rate if ascent_rate > 0 else 0.0
+    solve = gas_plan.sac_stress * p_max * gas_plan.problem_minutes * gas_plan.divers
+    ascent = gas_plan.sac_stress * p_avg * ascent_min * gas_plan.divers
+    return solve + ascent

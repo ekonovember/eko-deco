@@ -1,0 +1,12 @@
+__pycache__/
+*.py[cod]
+*.egg-info/
+.venv/
+venv/
+
+# Personal (uncommitted) agent settings
+.claude/settings.local.json
+
+# User dive state + exports (GUI Save / Export; falls back to defaults if absent)
+dive_plan.json
+runtime.png
