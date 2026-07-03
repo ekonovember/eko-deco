@@ -1,0 +1,33 @@
+{
+  "depth_m": 35.77319587628866,
+  "bottom_time_min": 24.93470790378007,
+  "gf_low": 30,
+  "gf_high": 70,
+  "solo": false,
+  "sac_normal": 20.0,
+  "sac_stress": 40.0,
+  "problem_minutes": 1.0,
+  "ascent_rate": 10.0,
+  "descent_rate": 18.0,
+  "stop_interval": 3.0,
+  "ppo2_bottom": 1.4,
+  "ppo2_deco": 1.6,
+  "ppo2_min": 0.18,
+  "show_rd": true,
+  "gases": [
+    {
+      "role": "Bottom",
+      "o2": 21,
+      "he": 0,
+      "tank_l": 24.0,
+      "pressure_bar": 220.0
+    },
+    {
+      "role": "Deco",
+      "o2": 50,
+      "he": 0,
+      "tank_l": 11.0,
+      "pressure_bar": 200.0
+    }
+  ]
+}
