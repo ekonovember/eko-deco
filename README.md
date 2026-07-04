@@ -1,7 +1,20 @@
-# deco — Bühlmann ZHL-16C + Gradient Factors
+<div align="center">
 
-A small Python implementation of the Bühlmann ZHL-16C decompression model
-with Erik Baker's gradient factors. ~400 lines, zero dependencies.
+<img src="pictures/logo.png" alt="eko-deco logo" width="380">
+
+# eko-deco — Bühlmann ZHL-16C + Gradient Factors
+
+A small Python implementation of the Bühlmann ZHL-16C decompression model with
+Erik Baker's gradient factors — a zero-dependency core, plus a CLI and a Tkinter GUI.
+
+**⚠️ Educational only — not validated for planning real dives.**
+
+<img src="pictures/app_ui.png" alt="eko-deco GUI" width="900">
+
+</div>
+
+> Dive inputs on the left, the depth/time profile with a Ratio-Deco overlay in the
+> centre, and framed results + a printable wetnotes runtime on the right.
 
 ## What it does
 
@@ -26,11 +39,29 @@ with Erik Baker's gradient factors. ~400 lines, zero dependencies.
   plus TTS and minimum-gas / turn pressure — exportable to PNG to take in the water.
 - NDL calculator and tissue-loading report.
 
+## The app (GUI)
+
+Run `python app.py` for the visual planner shown above:
+
+- **Left** — every input: depth, bottom time, gradient factors, an editable gas
+  stack (bottom / travel / deco, each with its own O₂, He, tank and fill), SAC and
+  solo/team, plus **Save / Reload** of the shared `dive_plan.json`.
+- **Centre** — the depth-vs-time profile: the Bühlmann GF ascent with stops and
+  gas switches, and the Ratio-Deco schedule overlaid for comparison.
+- **Right** — results as framed cards (gas, dive summary, per-cylinder gas + rock
+  bottom, Ratio-Deco cross-check, stops) and a printable **runtime** wetnotes card,
+  exportable to PNG with the `<//> eko-deco` mark.
+
 ## Install
 
-Just Python 3.10+. No dependencies.
+Python 3.10+. The core library and CLI need **nothing** beyond the standard
+library; the GUI (`app.py`) also needs `matplotlib` (tkinter ships with CPython):
 
-## Run
+```bash
+pip install matplotlib   # GUI only
+```
+
+## Command line
 
 ```bash
 # Recreational
@@ -77,4 +108,3 @@ behaviour, TTS / rock-bottom gas, and the Ratio Deco schedule.
   factors).
 - E. C. Baker, *Understanding M-values*.
 - Subsurface dive-log source (constants cross-check).
-"# eko-deco" 

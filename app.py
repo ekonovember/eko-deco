@@ -1,4 +1,4 @@
-"""Interactive dive-profile visualizer for the Bühlmann ZHL-16C + GF model.
+"""eko-deco — interactive dive-profile visualizer for the Bühlmann ZHL-16C + GF model.
 
 Left panel: dive settings (depth, bottom time, gradient factors, a fully editable
 gas list where every mix — bottom / travel / deco — has its own O2, He and tank,
@@ -18,7 +18,7 @@ from __future__ import annotations
 import os
 import tkinter as tk
 from tkinter import ttk
-from typing import List, Tuple
+from typing import List, Optional, Tuple
 
 import matplotlib
 matplotlib.use("TkAgg")
@@ -32,6 +32,11 @@ import ratio_deco as rd
 # The GUI ascends at a fixed rate; keep it in step with the CLI DivePlan default
 # (10 m/min) so the same inputs give the same schedule in both.
 ASCENT_RATE = 10.0
+
+# Branding: the eko-deco wordmark and its "<//>" logo mark.
+APP_NAME = "eko-deco"
+LOGO_MARK = "<//>"
+LOGO_COLOR = "#0a84ff"
 
 
 def build_profile_points(segs) -> Tuple[List[float], List[float]]:
@@ -72,11 +77,72 @@ def build_ratio_profile(segs, rd_result, ascent_rate: float
     return t, d
 
 
+def format_card(title_lines: List[str], rows: List[List[str]],
+                headers: Optional[List[str]] = None,
+                footer_lines: Optional[List[str]] = None,
+                aligns: Optional[List[str]] = None) -> List[str]:
+    """Render a monospace box-drawing "slate" and return its lines. Every section
+    is optional: full-width ``title_lines`` on top, an optional column ``headers``
+    row, the ``rows`` grid, then optional full-width ``footer_lines`` — all framed
+    to one width so columns line up in the Tk card and the exported PNG alike.
+
+    ``aligns`` gives ``"<"`` / ``">"`` / ``"^"`` per grid column (default: first
+    column left, the rest right)."""
+    title_lines = list(title_lines or [])
+    footer_lines = list(footer_lines or [])
+    grid_rows = [[str(c) for c in row] for row in rows]
+    cols = len(headers) if headers else (len(grid_rows[0]) if grid_rows else 1)
+    aligns = aligns or (["<"] + [">"] * (cols - 1))
+    widths = [len(str(headers[i])) if headers else 0 for i in range(cols)]
+    for row in grid_rows:
+        for i in range(cols):
+            widths[i] = max(widths[i], len(row[i]))
+
+    # Inner width spanned by the column grid: each cell is padded by a space on
+    # both sides (w + 2) and columns are joined by a single divider.
+    inner = sum(w + 2 for w in widths) + (cols - 1)
+    longest = max((len(s) for s in title_lines + footer_lines), default=0)
+    if longest > inner - 2:                        # widen last column to fit the text
+        widths[-1] += longest - (inner - 2)
+        inner = sum(w + 2 for w in widths) + (cols - 1)
+
+    def full(s: str) -> str:                       # a full-width (spanning) row
+        return "│ " + f"{s:<{inner - 2}}" + " │"
+
+    def grid(cells: List[str]) -> str:
+        return "│ " + " │ ".join(
+            f"{cells[i]:{aligns[i]}{widths[i]}}" for i in range(cols)) + " │"
+
+    def cols_rule(left: str, mid: str, right: str) -> str:
+        return left + mid.join("─" * (w + 2) for w in widths) + right
+
+    def flat_rule(left: str, right: str) -> str:
+        return left + "─" * inner + right
+
+    out = [flat_rule("┌", "┐") if title_lines else cols_rule("┌", "┬", "┐")]
+    out += [full(s) for s in title_lines]
+    if title_lines:
+        out.append(cols_rule("├", "┬", "┤"))
+    if headers:
+        out.append(grid([str(h) for h in headers]))
+        out.append(cols_rule("├", "┼", "┤"))
+    out += [grid(row) for row in grid_rows]
+    if footer_lines:
+        out.append(cols_rule("├", "┴", "┤"))
+        out += [full(s) for s in footer_lines]
+        out.append(flat_rule("└", "┘"))
+    else:
+        out.append(cols_rule("└", "┴", "┘"))
+    return out
+
+
 class DecoApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
-        root.title("Bühlmann ZHL-16C — Deco Profile Visualizer")
+        root.title(f"{APP_NAME} — Bühlmann ZHL-16C + gradient factors + ratio deco "
+                   "+ rock bottom")
         root.geometry("1500x900")
+        self._set_window_icon()
 
         self._building = True
         self._base_cfg = dc.default_config()
@@ -87,6 +153,30 @@ class DecoApp:
         self.recompute()
 
     # ---------------------------------------------------------------- UI ----
+
+    def _set_window_icon(self) -> None:
+        """Render the <//> logo mark to a PNG and use it as the window icon."""
+        try:
+            import base64
+            import io
+
+            from matplotlib.backends.backend_agg import FigureCanvasAgg
+            from matplotlib.figure import Figure
+
+            fig = Figure(figsize=(1, 1), dpi=64)
+            FigureCanvasAgg(fig)
+            fig.patch.set_alpha(0.0)
+            fig.text(0.5, 0.5, LOGO_MARK, ha="center", va="center",
+                     fontsize=26, fontweight="bold", color=LOGO_COLOR,
+                     family="monospace")
+            buf = io.BytesIO()
+            fig.savefig(buf, format="png", transparent=True)
+            self._icon = tk.PhotoImage(
+                data=base64.b64encode(buf.getvalue()).decode("ascii"))
+            self.root.iconphoto(True, self._icon)
+        except Exception:
+            # A missing icon must never stop the app from opening.
+            pass
 
     def _build_layout(self) -> None:
         main = ttk.Frame(self.root, padding=6)
@@ -130,8 +220,9 @@ class DecoApp:
         self.sac = self._add_slider(gp, "SAC normal (L/min)", 5, 40, 1, 20)
         self.sac_stress = self._add_slider(gp, "SAC distress (L/min)", 5, 80, 1, 40)
         self.solo = tk.BooleanVar(value=False)
-        ttk.Checkbutton(gp, text="Solo dive (else 2 divers)", variable=self.solo,
-                        command=lambda: None if self._building else self.recompute()
+        self.solo.trace_add("write",
+                            lambda *_: None if self._building else self.recompute())
+        ttk.Checkbutton(gp, text="Solo dive (else 2 divers)", variable=self.solo
                         ).pack(anchor="w", pady=(2, 0))
 
         self.show_rd = self._add_checkbox(
@@ -147,7 +238,8 @@ class DecoApp:
         self.cfg_status.pack(side=tk.LEFT, padx=4)
 
         # --- results panel (scrollable) ---
-        self.readout = tk.Text(results, width=46, height=28, font=("Consolas", 9),
+        self.readout = tk.Text(results, width=54, height=28, wrap="none",
+                               font=("Consolas", 9),
                                relief="flat", bg=self.root.cget("bg"))
         scroll = ttk.Scrollbar(results, command=self.readout.yview)
         self.readout.configure(yscrollcommand=scroll.set)
@@ -155,10 +247,15 @@ class DecoApp:
         self.readout.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         # --- runtime "wetnotes" card (bottom-right, printable) ---
-        self.runtime_text = tk.Text(runtime_frame, width=46, height=14,
+        rt_body = ttk.Frame(runtime_frame)
+        rt_body.pack(fill=tk.BOTH, expand=True)
+        self.runtime_text = tk.Text(rt_body, width=50, height=18, wrap="none",
                                     font=("Consolas", 9), relief="flat",
                                     bg=self.root.cget("bg"))
-        self.runtime_text.pack(fill=tk.X)
+        rt_scroll = ttk.Scrollbar(rt_body, command=self.runtime_text.yview)
+        self.runtime_text.configure(yscrollcommand=rt_scroll.set)
+        rt_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        self.runtime_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         rt_btns = ttk.Frame(runtime_frame)
         rt_btns.pack(fill=tk.X, pady=(4, 0))
         ttk.Button(rt_btns, text="Export PNG",
@@ -189,22 +286,24 @@ class DecoApp:
         value_lbl = ttk.Label(head, text=f"{init:g}", width=6, anchor="e")
         value_lbl.pack(side=tk.RIGHT)
 
-        def on_change(_):
+        def on_change(*_):
             value_lbl.config(text=f"{var.get():.0f}")
             if not self._building:
                 self.recompute()
 
-        scale = ttk.Scale(row, from_=lo, to=hi, orient="horizontal",
-                          variable=var, command=on_change)
+        # Drive the label + recompute from a variable trace, not the Scale's
+        # command: ttk.Scale fires -command only on user drags, so a programmatic
+        # var.set() (loading dive_plan.json) would leave the label/results stale.
+        var.trace_add("write", on_change)
+        scale = ttk.Scale(row, from_=lo, to=hi, orient="horizontal", variable=var)
         scale.pack(fill=tk.X)
         return var
 
     def _add_checkbox(self, parent, label, init=False) -> tk.BooleanVar:
         var = tk.BooleanVar(value=init)
-        ttk.Checkbutton(
-            parent, text=label, variable=var,
-            command=lambda: None if self._building else self.recompute(),
-        ).pack(side=tk.LEFT, anchor="w", padx=(0, 8))
+        var.trace_add("write", lambda *_: None if self._building else self.recompute())
+        ttk.Checkbutton(parent, text=label, variable=var).pack(
+            side=tk.LEFT, anchor="w", padx=(0, 8))
         return var
 
     def _add_gf_row(self, parent) -> None:
@@ -404,32 +503,39 @@ class DecoApp:
         ndl_min = b.ndl(depth, gas, plan)
         ndl_label = ">10 h" if ndl_min is None else f"{ndl_min} min"
 
-        lines = [
-            f"Bottom gas : {gas!r}",
-            f"  fO₂ {gas.fO2*100:.0f}%  fHe {gas.fHe*100:.0f}%  fN₂ {gas.fN2*100:.0f}%",
-            f"  ppO₂@{depth:.0f}m: {gas.ppo2(depth):.2f} bar",
-            f"  MOD 1.4   : {gas.mod(1.4):.0f} m",
+        cards: List[List[str]] = []
+
+        # --- GAS ---
+        gas_rows = [
+            ["fractions", f"O₂ {gas.fO2*100:.0f}% · He {gas.fHe*100:.0f}%"
+                          f" · N₂ {gas.fN2*100:.0f}%"],
+            [f"ppO₂ @ {depth:.0f} m", f"{gas.ppo2(depth):.2f} bar"],
+            ["MOD @ 1.4", f"{gas.mod(1.4):.0f} m"],
         ]
         if gas.min_depth(plan.ppo2_min) > 0:
-            note = "" if plan.travel_gases else "  (need travel gas!)"
-            lines.append(f"  hypoxic <  : {gas.min_depth(plan.ppo2_min):.0f} m{note}")
+            note = "" if plan.travel_gases else " (need travel gas!)"
+            gas_rows.append(["hypoxic below",
+                             f"{gas.min_depth(plan.ppo2_min):.0f} m{note}"])
         if plan.travel_gases:
-            lines.append(f"  travel    : {', '.join(repr(g) for g in plan.travel_gases)}")
+            gas_rows.append(["travel gas",
+                             ", ".join(repr(g) for g in plan.travel_gases)])
         if plan.deco_gases:
-            lines.append(f"  deco      : {', '.join(repr(g) for g in plan.deco_gases)}")
+            gas_rows.append(["deco gas",
+                             ", ".join(repr(g) for g in plan.deco_gases)])
+        cards.append(format_card([f"GAS · {gas!r}"], gas_rows, aligns=["<", "<"]))
 
-        lines += [
-            "",
-            f"GF low/high : {plan.gf_low*100:.0f} / {plan.gf_high*100:.0f}",
-            f"NDL @ {depth:.0f} m : {ndl_label}",
-            f"Bottom time : {bottom_time:.0f} min",
-            f"Runtime     : {total:.0f} min",
-            f"TTS         : {tts:.0f} min",
-            f"Deco total  : {deco_total:.0f} min ({len(stops)} stops)",
-            f"Final ceil  : {ceil_now:.2f} m",
-        ]
+        # --- DIVE ---
+        cards.append(format_card(["DIVE"], [
+            ["GF low / high", f"{plan.gf_low*100:.0f} / {plan.gf_high*100:.0f}"],
+            [f"NDL @ {depth:.0f} m", ndl_label],
+            ["bottom time", f"{bottom_time:.0f} min"],
+            ["runtime", f"{total:.0f} min"],
+            ["TTS", f"{tts:.0f} min"],
+            ["deco total", f"{deco_total:.0f} min · {len(stops)} stops"],
+            ["final ceiling", f"{ceil_now:.2f} m"],
+        ], aligns=["<", "<"]))
 
-        # --- per-cylinder gas + rock bottom ---
+        # --- GAS PLAN (per-cylinder + rock bottom) ---
         sac = float(self.sac.get())
         sac_stress = float(self.sac_stress.get())
         divers = 1 if self.solo.get() else 2
@@ -447,9 +553,8 @@ class DecoApp:
             if row["role"].get() == "Bottom" and g == gas:
                 back_tank = self._row_tank(row)
                 back_pressure = self._row_pressure(row)
-        lines += ["", f"Gas  SAC {sac:.0f}/{sac_stress:.0f}, "
-                      f"{'solo' if divers == 1 else '2 divers'}:"]
-        seen = []
+        plan_rows: List[List[str]] = []
+        seen: List[str] = []
         for s in segs:
             key = repr(s.gas)
             if key in seen:
@@ -460,55 +565,74 @@ class DecoApp:
             pr = press.get(key, 0.0)
             label = roles.get(key, "stage")
             if tk_l <= 0:
-                lines.append(f"  {label} {s.gas!r}: {liters:.0f} L (set tank)")
+                need, have = f"{liters:.0f} L", "set tank"
             elif pr > 0:
                 used = liters / tk_l
-                short = "  SHORT!" if used > pr + 1e-9 else ""
-                lines.append(f"  {label} {s.gas!r}: {used:.0f}/{pr:.0f} bar "
-                             f"({pr - used:.0f} left) / {tk_l:.0f} L{short}")
+                need = f"{used:.0f} bar" + (" SHORT!" if used > pr + 1e-9 else "")
+                have = f"{pr:.0f} bar"
             else:
-                lines.append(f"  {label} {s.gas!r}: {liters / tk_l:.0f} bar / {tk_l:.0f} L")
+                need, have = f"{liters / tk_l:.0f} bar", f"{tk_l:.0f} L"
+            plan_rows.append([label, key, need, have])
         rock = b.rock_bottom_liters(depth, gp, plan.ascent_rate)
         if back_tank > 0:
             rock_bar = rock / back_tank
-            line = f"  Rock bottom: {rock_bar:.0f} bar reserve"
-            if back_pressure > 0:
-                usable = back_pressure - rock_bar
-                if usable > 0:
-                    line += (f"; from {back_pressure:.0f} turn "
-                             f"~{back_pressure - usable / 2.0:.0f} bar")
-                else:
-                    line += f" — over {back_pressure:.0f} bar fill!"
-            lines.append(line)
+            usable = back_pressure - rock_bar
+            if back_pressure <= 0:
+                rb_line = f"rock bottom {rock_bar:.0f} bar reserve"
+            elif usable > 0:
+                rb_line = (f"rock bottom {rock_bar:.0f} bar · "
+                           f"turn ~{back_pressure - usable / 2.0:.0f} bar")
+            else:
+                rb_line = (f"rock bottom {rock_bar:.0f} bar · "
+                           f"over {back_pressure:.0f} bar fill!")
         else:
-            lines.append(f"  Rock bottom: {rock:.0f} L (set bottom tank)")
+            rb_line = f"rock bottom {rock:.0f} L (set bottom tank)"
+        gp_title = (f"GAS PLAN · SAC {sac:.0f}/{sac_stress:.0f} · "
+                    f"{'solo' if divers == 1 else '2 divers'}")
+        cards.append(format_card([gp_title], plan_rows,
+                                 headers=["role", "gas", "need", "have"],
+                                 footer_lines=[rb_line],
+                                 aligns=["<", "<", ">", ">"]))
 
-        # --- Ratio Deco comparison ---
+        # --- Ratio Deco (educational) ---
         if rd_result is not None and self.show_rd.get():
             r = rd_result
-            std = r.bottom_gas + (f" + {', '.join(r.deco_gases)}" if r.deco_gases else "")
-            lines += ["", "Ratio Deco vs Bühlmann (educational):",
-                      f"  std gas : {std}"]
+            std = r.bottom_gas + (f" + {', '.join(r.deco_gases)}"
+                                  if r.deco_gases else "")
+            rd_rows = [["std gas", std]]
             if r.min_deco:
-                lines.append(f"  ratio {r.ratio:.2f} -> min deco (no stops)")
-                lines.append(f"  deco:  Bühlmann {deco_total:.0f}  |  RD 0 min")
+                rd_rows.append(["ratio", f"{r.ratio:.2f} → min deco (no stops)"])
+                rd_rows.append(["deco", f"Bühlmann {deco_total:.0f} · RD 0 min"])
             else:
-                lines.append(f"  ratio {r.ratio:.2f}   first stop {r.first_stop_m:.0f} m")
-                lines.append(f"  deco:  Bühlmann {deco_total:.0f}  |  RD "
-                             f"{r.scheduled_deco_min:.0f} min")
-                for s in r.stops:
-                    lines.append(f"  {s.depth_m:>3.0f} m  {s.minutes:>4.1f} min   "
-                                 f"on {s.gas}")
+                rd_rows.append(["ratio", f"{r.ratio:.2f}"])
+                rd_rows.append(["first stop", f"{r.first_stop_m:.0f} m"])
+                rd_rows.append(["deco", f"Bühlmann {deco_total:.0f} · "
+                                        f"RD {r.scheduled_deco_min:.0f} min"])
+            cards.append(format_card(["RATIO DECO vs Bühlmann (educational)"],
+                                     rd_rows, aligns=["<", "<"]))
+            if not r.min_deco and r.stops:
+                cards.append(format_card(
+                    ["RATIO DECO stops"],
+                    [[f"{s.depth_m:.0f} m", f"{s.minutes:.1f}", str(s.gas)]
+                     for s in r.stops],
+                    headers=["depth", "min", "gas"], aligns=[">", ">", "<"]))
 
         # --- Bühlmann stops ---
-        lines += ["", "Bühlmann stops:"]
         if not stops:
-            lines.append("  (none — no mandatory stops)")
+            cards.append(format_card(["BÜHLMANN STOPS"],
+                                     [["—", "no mandatory stops"]], aligns=["<", "<"]))
         else:
-            for s in stops:
-                lines.append(f"  {s.depth_start:>3.0f} m  "
-                             f"{s.duration:>4.0f} min   on {s.gas!r}")
+            cards.append(format_card(
+                ["BÜHLMANN STOPS"],
+                [[f"{s.depth_start:.0f} m", f"{s.duration:.0f}", repr(s.gas)]
+                 for s in stops],
+                headers=["depth", "min", "gas"], aligns=[">", ">", "<"]))
 
+        lines: List[str] = []
+        for i, card in enumerate(cards):
+            if i:
+                lines.append("")
+            lines += card
         self.readout.delete("1.0", tk.END)
         self.readout.insert(tk.END, "\n".join(lines))
 
@@ -519,26 +643,21 @@ class DecoApp:
     # ----------------------------------------------------------- runtime ----
 
     def _write_runtime(self, depth, gas, plan, bottom_time, segs) -> None:
-        """Compact wetnotes runtime: max depth + each stop with cumulative runtime
-        and gas, plus TTS and the minimum-gas / turn pressure."""
+        """Compact wetnotes runtime as a framed slate: max depth + each stop with
+        cumulative runtime and gas, plus TTS and the minimum-gas / turn pressure."""
         total = b.total_runtime(segs)
         tts = b.time_to_surface(segs)
-        lines = [
-            f"RUNTIME   {depth:.0f} m / {bottom_time:.0f} min",
-            f"{gas!r}   GF {plan.gf_low*100:.0f}/{plan.gf_high*100:.0f}"
-            f"   TTS {tts:.0f}   RT {total:.0f}",
-            " depth  stop   run   gas",
-            "-" * 30,
-        ]
+
+        rows: List[List[str]] = []
         run = 0.0
         for s in segs:
             run += s.duration
             if s.kind == "bottom":
-                lines.append(f" {s.depth_end:>4.0f} m    -  {run:>4.0f}   {s.gas!r}")
+                rows.append([f"{s.depth_end:.0f} m", "-", f"{run:.0f}", repr(s.gas)])
             elif s.kind == "stop" and s.duration > 0:
-                lines.append(f" {s.depth_start:>4.0f} m  {s.duration:>3.0f}  "
-                             f"{run:>4.0f}   {s.gas!r}")
-        lines.append(f"  surf      -  {total:>4.0f}")
+                rows.append([f"{s.depth_start:.0f} m", f"{s.duration:.0f}",
+                             f"{run:.0f}", repr(s.gas)])
+        rows.append(["surf", "-", f"{total:.0f}", ""])
 
         sac = float(self.sac.get())
         divers = 1 if self.solo.get() else 2
@@ -551,28 +670,38 @@ class DecoApp:
             g = self._row_gas(row)
             if g is not None and row["role"].get() == "Bottom" and g == gas:
                 back_tank, back_pressure = self._row_tank(row), self._row_pressure(row)
-        lines.append("-" * 30)
         if back_tank > 0:
             rb = rock / back_tank
-            slate = f" MIN GAS {rb:.0f} bar ({'solo' if divers == 1 else '2 divers'})"
+            min_gas = (f"MIN GAS {rb:.0f} bar "
+                       f"({'solo' if divers == 1 else '2 divers'})")
             if back_pressure > rb:
-                slate += f"   TURN {back_pressure - (back_pressure - rb) / 2:.0f} bar"
-            lines.append(slate)
+                min_gas += (f" · TURN "
+                            f"{back_pressure - (back_pressure - rb) / 2:.0f} bar")
         else:
-            lines.append(f" MIN GAS {rock:.0f} L")
+            min_gas = f"MIN GAS {rock:.0f} L"
+
+        title = [
+            f"RUNTIME   {depth:.0f} m / {bottom_time:.0f} min",
+            f"{gas!r} · GF {plan.gf_low*100:.0f}/{plan.gf_high*100:.0f}"
+            f" · TTS {tts:.0f} · RT {total:.0f}",
+        ]
+        card = format_card(title, rows, headers=["depth", "stop", "run", "gas"],
+                           footer_lines=[min_gas], aligns=[">", ">", ">", "<"])
 
         self.runtime_text.delete("1.0", tk.END)
-        self.runtime_text.insert(tk.END, "\n".join(lines))
+        self.runtime_text.insert(tk.END, "\n".join(card))
 
     def _render_runtime_png(self, path: str) -> str:
         from matplotlib.figure import Figure
         from matplotlib.backends.backend_agg import FigureCanvasAgg
-        text = self.runtime_text.get("1.0", tk.END).rstrip("\n")
-        n = text.count("\n") + 1
+        body = self.runtime_text.get("1.0", tk.END).rstrip("\n")
+        n = body.count("\n") + 2  # body lines + the eko-deco brand line
         fig = Figure(figsize=(4.6, max(2.0, 0.24 * n + 0.5)), dpi=150)
         FigureCanvasAgg(fig)
         fig.patch.set_facecolor("white")
-        fig.text(0.04, 0.98, text, va="top", ha="left", family="monospace",
+        fig.text(0.04, 0.98, f"{LOGO_MARK} {APP_NAME}", va="top", ha="left",
+                 family="monospace", fontsize=11, fontweight="bold", color=LOGO_COLOR)
+        fig.text(0.04, 0.98, "\n" + body, va="top", ha="left", family="monospace",
                  fontsize=10, linespacing=1.4)
         fig.savefig(path, facecolor="white", bbox_inches="tight")
         return path
