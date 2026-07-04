@@ -52,6 +52,10 @@ Run `python app.py` for the visual planner shown above:
   bottom, Ratio-Deco cross-check, stops) and a printable **runtime** wetnotes card,
   exportable to PNG with the `<//> eko-deco` mark.
 
+A **Dark mode** checkbox themes the whole app including the chart; the choice is
+remembered in `ui_settings.json` (per-user, git-ignored), kept separate from the
+dive itself in `dive_plan.json`.
+
 ## Install
 
 Python 3.10+. The core library and CLI need **nothing** beyond the standard

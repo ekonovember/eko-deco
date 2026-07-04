@@ -15,6 +15,7 @@ Run:
 
 from __future__ import annotations
 
+import json
 import os
 import tkinter as tk
 from tkinter import ttk
@@ -37,6 +38,36 @@ ASCENT_RATE = 10.0
 APP_NAME = "eko-deco"
 LOGO_MARK = "<//>"
 LOGO_COLOR = "#0a84ff"
+
+# UI preferences (dark mode, …) live in their own file so they never mix with
+# the dive itself: dive_plan.json stays shareable between CLI/GUI and machines.
+UI_SETTINGS_PATH = os.path.join(
+    os.path.dirname(os.path.abspath(__file__)), "ui_settings.json")
+
+# Widget + chart palettes for the clam ttk theme.
+LIGHT = {"bg": "#dcdad5", "fg": "#000000", "field": "#ffffff",
+         "trough": "#c8c6c1", "border": "#9e9a91", "active": "#eeebe7",
+         "chart_bg": "#ffffff", "chart_fg": "#000000", "grid": "#b0b0b0"}
+DARK = {"bg": "#2b2b2b", "fg": "#e6e6e6", "field": "#3c3f41",
+        "trough": "#1f1f1f", "border": "#555555", "active": "#3a3d3f",
+        "chart_bg": "#1e1e1e", "chart_fg": "#d0d0d0", "grid": "#666666"}
+
+
+def load_ui_settings() -> dict:
+    try:
+        with open(UI_SETTINGS_PATH, encoding="utf-8") as f:
+            return dict(json.load(f))
+    except (OSError, ValueError):
+        return {}
+
+
+def save_ui_settings(settings: dict) -> None:
+    try:
+        with open(UI_SETTINGS_PATH, "w", encoding="utf-8") as f:
+            json.dump(settings, f, indent=2)
+            f.write("\n")
+    except OSError:
+        pass                                   # cosmetic preference; never fatal
 
 
 def build_profile_points(segs) -> Tuple[List[float], List[float]]:
@@ -147,7 +178,9 @@ class DecoApp:
         self._building = True
         self._base_cfg = dc.default_config()
         self._ascent = ASCENT_RATE
+        self._ui_settings = load_ui_settings()
         self._build_layout()
+        self._apply_theme()
         self._apply_config(dc.load())
         self._building = False
         self.recompute()
@@ -204,12 +237,14 @@ class DecoApp:
         # --- gases (bottom / travel / deco, each with O2/He + tank) ---
         gases = ttk.LabelFrame(left, text="Gases", padding=6)
         gases.pack(fill=tk.X, pady=(8, 0))
-        hdr = ttk.Frame(gases)
-        hdr.pack(fill=tk.X)
-        for text, w in (("role", 7), ("O₂%", 5), ("He%", 5), ("tank L", 6), ("bar", 5)):
-            ttk.Label(hdr, text=text, width=w, anchor="w").pack(side=tk.LEFT, padx=1)
         self.gas_list = ttk.Frame(gases)
         self.gas_list.pack(fill=tk.X)
+        # Strip the theme's vertical padding so the ✕ matches the row height;
+        # keep some horizontal padding and center the glyph so it isn't clipped.
+        ttk.Style().configure("GasDel.TButton", padding=(4, 0), anchor="center")
+        for col, text in enumerate(("role", "O₂%", "He%", "tank L", "bar")):
+            ttk.Label(self.gas_list, text=text, anchor="w").grid(
+                row=0, column=col, padx=1, sticky="w")
         self.gas_rows = []
         ttk.Button(gases, text="+ Add gas", command=self._add_gas_row).pack(
             anchor="w", pady=(4, 0))
@@ -227,6 +262,12 @@ class DecoApp:
 
         self.show_rd = self._add_checkbox(
             self._packed(ttk.Frame(left)), "Ratio Deco vs Bühlmann panel", True)
+
+        # --- dark mode (persisted to ui_settings.json, not the dive plan) ---
+        self.dark = tk.BooleanVar(value=bool(self._ui_settings.get("dark_mode")))
+        self.dark.trace_add("write", self._on_dark_toggle)
+        ttk.Checkbutton(self._packed(ttk.Frame(left)), text="Dark mode",
+                        variable=self.dark).pack(side=tk.LEFT, anchor="w")
 
         # --- config file save / reload ---
         cfgrow = ttk.Frame(left)
@@ -270,6 +311,40 @@ class DecoApp:
         self.ax = self.fig.add_subplot(111)
         self.canvas = FigureCanvasTkAgg(self.fig, master=center)
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+
+    # ------------------------------------------------------------- theme ----
+
+    @property
+    def _pal(self) -> dict:
+        return DARK if self.dark.get() else LIGHT
+
+    def _apply_theme(self) -> None:
+        p = self._pal
+        style = ttk.Style()
+        style.configure(".", background=p["bg"], foreground=p["fg"],
+                        fieldbackground=p["field"], troughcolor=p["trough"],
+                        bordercolor=p["border"], lightcolor=p["bg"],
+                        darkcolor=p["bg"], insertcolor=p["fg"],
+                        arrowcolor=p["fg"])
+        for w in ("TCombobox", "TSpinbox"):
+            style.map(w, fieldbackground=[("readonly", p["field"])],
+                      foreground=[("readonly", p["fg"])])
+        style.map("TButton", background=[("active", p["active"])])
+        style.map("TCheckbutton", background=[("active", p["bg"])])
+        # The combobox dropdown is a plain Tk listbox; option_add styles it on
+        # creation (existing popdowns keep their colors until reopened).
+        self.root.option_add("*TCombobox*Listbox.background", p["field"])
+        self.root.option_add("*TCombobox*Listbox.foreground", p["fg"])
+        self.root.configure(bg=p["bg"])
+        for txt in (self.readout, self.runtime_text):
+            txt.configure(bg=p["bg"], fg=p["fg"], insertbackground=p["fg"])
+
+    def _on_dark_toggle(self, *_) -> None:
+        self._apply_theme()
+        self._ui_settings["dark_mode"] = bool(self.dark.get())
+        save_ui_settings(self._ui_settings)
+        if not self._building:
+            self.recompute()               # restyle the chart with the new palette
 
     def _packed(self, frame) -> ttk.Frame:
         frame.pack(fill=tk.X, pady=(8, 0))
@@ -323,40 +398,48 @@ class DecoApp:
     def _add_gas_row(self, role: str = "Deco", fo2: float = 50, fhe: float = 0,
                      tank: float = 11, pressure: float = 232,
                      recompute: bool = True) -> None:
-        rf = ttk.Frame(self.gas_list)
-        rf.pack(fill=tk.X, pady=1)
         role_var = tk.StringVar(value=role)
         fo2_var = tk.StringVar(value=str(int(fo2)))
         fhe_var = tk.StringVar(value=str(int(fhe)))
         tank_var = tk.StringVar(value=str(int(tank)))
         press_var = tk.StringVar(value=str(int(pressure)))
 
-        ttk.Combobox(rf, textvariable=role_var, width=6, state="readonly",
-                     values=dc.ROLES).pack(side=tk.LEFT, padx=1)
-        ttk.Spinbox(rf, from_=5, to=100, width=4, textvariable=fo2_var).pack(
-            side=tk.LEFT, padx=1)
-        ttk.Spinbox(rf, from_=0, to=95, width=4, textvariable=fhe_var).pack(
-            side=tk.LEFT, padx=1)
-        ttk.Spinbox(rf, from_=0, to=30, width=5, textvariable=tank_var).pack(
-            side=tk.LEFT, padx=1)
-        ttk.Spinbox(rf, from_=0, to=300, width=4, textvariable=press_var).pack(
-            side=tk.LEFT, padx=1)
+        widgets = [
+            ttk.Combobox(self.gas_list, textvariable=role_var, width=6,
+                         state="readonly", values=dc.ROLES),
+            ttk.Spinbox(self.gas_list, from_=5, to=100, width=4, textvariable=fo2_var),
+            ttk.Spinbox(self.gas_list, from_=0, to=95, width=4, textvariable=fhe_var),
+            ttk.Spinbox(self.gas_list, from_=0, to=30, width=5, textvariable=tank_var),
+            ttk.Spinbox(self.gas_list, from_=0, to=300, width=4, textvariable=press_var),
+        ]
 
-        row = {"frame": rf, "role": role_var, "fo2": fo2_var,
+        row = {"widgets": widgets, "role": role_var, "fo2": fo2_var,
                "fhe": fhe_var, "tank": tank_var, "pressure": press_var}
-        ttk.Button(rf, text="✕", width=2,
-                   command=lambda: self._remove_gas_row(row)).pack(side=tk.LEFT, padx=1)
+        widgets.append(ttk.Button(self.gas_list, text="✕", width=2,
+                                  style="GasDel.TButton",
+                                  command=lambda: self._remove_gas_row(row)))
         for var in (role_var, fo2_var, fhe_var, tank_var, press_var):
             var.trace_add("write",
                           lambda *_: None if self._building else self.recompute())
         self.gas_rows.append(row)
+        self._regrid_gas_rows()
         if recompute and not self._building:
             self.recompute()
+
+    def _regrid_gas_rows(self) -> None:
+        # Shares columns with the header (row 0) so labels line up over the
+        # fields regardless of each widget's own decoration width (spin
+        # arrows, combobox dropdown) — a plain pack() can't guarantee that.
+        for i, row in enumerate(self.gas_rows, start=1):
+            for col, w in enumerate(row["widgets"]):
+                w.grid(row=i, column=col, padx=1, pady=1, sticky="w")
 
     def _remove_gas_row(self, row) -> None:
         if row in self.gas_rows:
             self.gas_rows.remove(row)
-            row["frame"].destroy()
+            for w in row["widgets"]:
+                w.destroy()
+            self._regrid_gas_rows()
             if not self._building:
                 self.recompute()
 
@@ -472,20 +555,30 @@ class DecoApp:
             prev = s.gas
             run_t += s.duration
 
+        p = self._pal
         if rd_result is not None and self.show_rd.get():
             t2, d2 = build_ratio_profile(segs, rd_result, self._ascent)
             self.ax.plot(t2, d2, color="#ff7f0e", linewidth=1.6, linestyle="--",
                          label="Ratio Deco (std gas)")
             x_max = max(x_max, max(t2))
-            self.ax.legend(loc="lower right", fontsize=8)
+            leg = self.ax.legend(loc="lower right", fontsize=8,
+                                 facecolor=p["chart_bg"], edgecolor=p["grid"])
+            for text in leg.get_texts():
+                text.set_color(p["chart_fg"])
 
-        self.ax.set_xlabel("Runtime (min)")
-        self.ax.set_ylabel("Depth (m)")
+        self.fig.patch.set_facecolor(p["chart_bg"])
+        self.ax.set_facecolor(p["chart_bg"])
+        self.ax.tick_params(colors=p["chart_fg"])
+        for spine in self.ax.spines.values():
+            spine.set_color(p["chart_fg"])
+        self.ax.set_xlabel("Runtime (min)", color=p["chart_fg"])
+        self.ax.set_ylabel("Depth (m)", color=p["chart_fg"])
         self.ax.set_title(
             f"Profile  —  bottom {bottom_depth:.0f} m for {bottom_time:.0f} min "
-            f"(total {sum(s.duration for s in segs):.0f} min)")
+            f"(total {sum(s.duration for s in segs):.0f} min)",
+            color=p["chart_fg"])
         self.ax.invert_yaxis()
-        self.ax.grid(True, alpha=0.3)
+        self.ax.grid(True, alpha=0.3, color=p["grid"])
         self.ax.set_xlim(0, x_max * 1.02 + 1)
         self.ax.set_ylim(max(d) * 1.10 + 2, 0)
         self.fig.tight_layout()

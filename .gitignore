@@ -9,3 +9,6 @@ venv/
 
 # GUI PNG export
 runtime.png
+
+# Per-user GUI preferences (dark mode, …) — the dive itself is dive_plan.json
+ui_settings.json

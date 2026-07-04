@@ -30,7 +30,7 @@ A small, dependency-free Python library (+ CLI and optional GUI) that computes:
 | `ratio_deco.py` | Ratio Deco (GUE/UTD) with standard gases: `standard_bottom_gas`, `ratio_deco`. Educational. | buhlmann |
 | `dive_config.py` | Shared JSON dive config (`load`/`save`/`to_buhlmann`) read by the GUI and written by `plan --save`. | buhlmann |
 | `dive_plan.json` | The full dive: depth, time, GF, gas stack (per-gas tank + fill pressure), SAC, solo, problem time, ascent/descent/stop rates + ppO2 window, RD toggle. Agent-editable. | — |
-| `app.py` | Tkinter + matplotlib GUI: left settings (editable gas list w/ tank+bar, GF row, SAC, solo), middle profile + Ratio-Deco overlay, right results + a printable **Runtime** wetnotes card (PNG export). Loads/saves `dive_plan.json`. | matplotlib, tkinter, dive_config |
+| `app.py` | Tkinter + matplotlib GUI: left settings (editable gas list w/ tank+bar, GF row, SAC, solo), middle profile + Ratio-Deco overlay, right results + a printable **Runtime** wetnotes card (PNG export). Loads/saves `dive_plan.json`; dark mode persisted to `ui_settings.json` (per-user, git-ignored — never mix UI prefs into the dive config). | matplotlib, tkinter, dive_config |
 | `tests/` | `unittest` suites: `test_buhlmann.py`, `test_ratio_deco.py`, `test_dive_config.py`. | stdlib |
 | `examples/*.json` | Ready-to-run command snippets. | — |
 
