@@ -2,7 +2,7 @@
 
 <img src="pictures/logo.png" alt="eko-deco logo" width="380">
 
-# eko-deco — Bühlmann ZHL-16C + gradient factors + ratio deco + rock bottom
+# Bühlmann ZHL-16C + gradient factors + ratio deco + rock bottom
 
 A small Python implementation of the Bühlmann ZHL-16C decompression model with
 Erik Baker's gradient factors — a zero-dependency core, plus a CLI and a Tkinter GUI.
