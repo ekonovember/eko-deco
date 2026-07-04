@@ -81,7 +81,7 @@ python cli.py plan --depth 60 --time 25 --gas 10/70@24 \
     --sac 18 --sac-stress 36
 
 # Save a dive to the shared config, then re-plan it (the GUI reads the same file)
-python cli.py plan --depth 45 --time 10 --gas air@24 --deco-gas 50@11 --sac 20 --save
+python cli.py plan --depth 45 --time 10 --gas air@24@232 --deco-gas 50@11@200 --sac 20 --save
 python cli.py plan dive_plan.json     # positional config (or --load)
 
 # Ratio Deco with GUE standard gases (+ Bühlmann cross-check)
@@ -93,7 +93,20 @@ python cli.py tissues --depth 40 --time 20 --gas ean32 --json
 ```
 
 Gas syntax: `air`, `o2`, `ean32` / `nx32` / `32`, trimix `21/35` (fO₂/fHe %).
-Add `--json` to any command for machine-readable output.
+Each gas takes an optional cylinder suffix `mix@tank@bar` — tank size in litres
+and fill pressure in bar (e.g. `air@24@232` = 24 L twinset filled to 232 bar;
+`50@11` = 11 L stage at the default fill) — used for per-cylinder gas needs and
+rock bottom. Add `--json` to any command for machine-readable output.
+
+There are more knobs than shown above — ascent/descent/stop rates, the ppO₂
+window (`--ppo2-bottom` / `--ppo2-deco` / `--ppo2-min`), team size and problem
+time for rock bottom (`--divers`, `--problem-time`), `ratio --avg-depth` — see
+`python cli.py plan -h` (or `ratio -h`, …) for the full list. Ready-to-run
+command snippets live in [`examples/`](examples/).
+
+> **Windows note:** the source is UTF-8 (`Bühlmann`, `₂`); the default cp1252
+> console renders those as mojibake — cosmetic only. Set `PYTHONUTF8=1` (or run
+> `chcp 65001`) for clean output.
 
 ## Test
 
@@ -104,6 +117,26 @@ python -m unittest discover -s tests -v
 Sanity tests cover constant counts, surface saturation, Haldane equivalence,
 NDLs against published Bühlmann values (±5 min), gas-switch and travel-gas
 behaviour, TTS / rock-bottom gas, and the Ratio Deco schedule.
+
+## AI-agent friendly
+
+The repo ships instructions and tooling for coding agents — open it in
+**Claude Code** or **GitHub Copilot CLI** and the agent already knows the
+project:
+
+- `CLAUDE.md` — canonical agent instructions (module map, commands, conventions),
+  also read by Copilot CLI; `AGENTS.md` points here for other tools.
+- `.claude/skills/deco-buhlmann/` — an Agent Skill for dive-planning math.
+- `.claude/commands/` — slash commands: `/plan-dive`, `/ndl`, `/tissues`,
+  `/ratio`, `/run-tests`.
+- `.claude/agents/dive-planner.md` — a dive-planning subagent.
+- `dive_plan.json` is agent-editable: ask the agent to change the dive and
+  hit **Reload** in the GUI.
+
+## License
+
+[MIT](LICENSE). The educational disclaimer stands regardless of license: this
+code is **not validated for planning real dives**.
 
 ## References
 
