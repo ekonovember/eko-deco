@@ -331,6 +331,13 @@ class DecoApp:
                       foreground=[("readonly", p["fg"])])
         style.map("TButton", background=[("active", p["active"])])
         style.map("TCheckbutton", background=[("active", p["bg"])])
+        # A scrollbar with nothing to scroll (e.g. the runtime card when it
+        # fits) is in the "disabled" state; clam paints that thumb with its
+        # light default, so map every state back onto the palette.
+        for bar in ("Vertical.TScrollbar", "Horizontal.TScrollbar"):
+            style.map(bar,
+                      background=[("disabled", p["bg"]), ("active", p["active"])],
+                      arrowcolor=[("disabled", p["fg"])])
         # The combobox dropdown is a plain Tk listbox; option_add styles it on
         # creation (existing popdowns keep their colors until reopened).
         self.root.option_add("*TCombobox*Listbox.background", p["field"])
