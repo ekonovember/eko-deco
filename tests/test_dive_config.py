@@ -14,8 +14,8 @@ import dive_config as dc
 class TestDiveConfig(unittest.TestCase):
     def test_default_has_required_keys(self):
         cfg = dc.default_config()
-        for k in ("depth_m", "bottom_time_min", "gf_low", "gf_high", "solo",
-                  "sac_normal", "sac_stress", "gases"):
+        for k in ("depth_m", "bottom_time_min", "gf_low", "gf_high",
+                  "sac_normal", "sac_multiplier", "gases"):
             self.assertIn(k, cfg)
         self.assertTrue(any(g["role"] == "Bottom" for g in cfg["gases"]))
 
@@ -67,7 +67,7 @@ class TestDiveConfig(unittest.TestCase):
     def test_to_buhlmann_maps_roles(self):
         cfg = {
             "depth_m": 60, "bottom_time_min": 20, "gf_low": 30, "gf_high": 70,
-            "solo": False, "sac_normal": 20, "sac_stress": 40, "problem_minutes": 1,
+            "sac_normal": 20, "sac_multiplier": 2.0, "problem_minutes": 1,
             "gases": [
                 {"role": "Bottom", "o2": 10, "he": 70, "tank_l": 24},
                 {"role": "Travel", "o2": 35, "he": 25, "tank_l": 11},
@@ -81,14 +81,38 @@ class TestDiveConfig(unittest.TestCase):
         self.assertEqual(len(plan.deco_gases), 1)
         self.assertAlmostEqual(plan.gf_low, 0.30)
         self.assertAlmostEqual(plan.gf_high, 0.70)
-        self.assertEqual(gp.divers, 2)
+        self.assertAlmostEqual(gp.sac_multiplier, 2.0)
         self.assertEqual(len(gases), 3)
 
-    def test_solo_sets_one_diver(self):
+    def test_sac_multiplier_maps_to_gasplan(self):
         cfg = dc.default_config()
-        cfg["solo"] = True
+        cfg["sac_multiplier"] = 1.5
         _b, _p, gp, _g = dc.to_buhlmann(cfg)
-        self.assertEqual(gp.divers, 1)
+        self.assertAlmostEqual(gp.sac_multiplier, 1.5)
+
+    def test_legacy_sac_stress_migrates_to_multiplier(self):
+        # Old configs stored an absolute distress SAC and a solo flag.
+        cfg = dc._merged({"sac_normal": 20, "sac_stress": 30, "solo": True})
+        self.assertAlmostEqual(cfg["sac_multiplier"], 1.5)
+        self.assertNotIn("sac_stress", cfg)
+        self.assertNotIn("solo", cfg)
+
+    def test_disabled_gas_is_left_out_of_the_plan(self):
+        cfg = dc.default_config()
+        cfg["gases"][1]["enabled"] = False       # the EAN50 deco stage
+        _b, plan, _gp, gases = dc.to_buhlmann(cfg)
+        self.assertEqual(len(plan.deco_gases), 0)
+        self.assertEqual(len(gases), 1)
+
+    def test_enabled_flag_round_trips(self):
+        cfg = dc.default_config()
+        cfg["gases"][1]["enabled"] = False
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "c.json")
+            dc.save(cfg, path)
+            back = dc.load(path)
+        self.assertTrue(back["gases"][0]["enabled"])
+        self.assertFalse(back["gases"][1]["enabled"])
 
     def test_invalid_role_coerced_to_deco(self):
         cfg = dc.default_config()
