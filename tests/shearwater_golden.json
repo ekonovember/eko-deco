@@ -1,0 +1,336 @@
+{
+  "_readme": [
+    "Golden schedules transcribed from real planners (MultiDeco, Shearwater",
+    "Cloud Desktop, on-unit Petrel/Perdix planner). Fill 'expected' for a dive",
+    "after planning EXACTLY the same profile there:",
+    "  - same GF low/high, descent/ascent rate, last stop depth",
+    "  - bottom_time_min counts from the start of the descent (runtime)",
+    "  - Shearwater: Salinity = EN13319 (default); MultiDeco: salt water",
+    "expected = {\"stops\": [[depth_m, minutes], ...], \"tts_min\": N}",
+    "Record the planner + version in 'source'. Dives with expected: null are",
+    "reported as skipped tests until filled in.",
+    "Optional per-dive fields: stop_tol_min (default 2), tts_tol_min (3),",
+    "p_h2o (bar) to match the source planner's water-vapour constant",
+    "(MultiDeco uses Schreiner 0.0567; eko-deco's default is Buhlmann 0.0627)."
+  ],
+  "_multideco_provenance": [
+    "The four 45m dives below are transcribed from MultiDeco screenshots taken",
+    "2026-07-10 (multideco_screenshots/ in the repo root): dive #1, OC, bottom",
+    "gas air, deco EAN50 @21m + O2 @6m, with the gas-loss scenario table",
+    "(columns OK / lost 50 / lost 100 / both lost). The settings panel was not",
+    "captured; GF 35/75 + ZHL-16C + descent 10 m/min + P_H2O 0.0567 were",
+    "inferred by parameter scan - the no-loss schedule matches eko-deco",
+    "EXACTLY under those settings and the three loss columns agree within",
+    "1-2 min/stop. If you still have the plan, confirm GF in Konf and update",
+    "this note. tts here = runtime shown by MultiDeco minus 25 min bottom."
+  ],
+  "dives": [
+    {
+      "name": "MD 45m/25min air +EAN50+O2 GF35/75",
+      "source": "MultiDeco screenshot 2026-07-10 (settings inferred, see _multideco_provenance)",
+      "depth_m": 45,
+      "bottom_time_min": 25,
+      "bottom_gas": {
+        "o2": 21,
+        "he": 0
+      },
+      "deco_gases": [
+        {
+          "o2": 50,
+          "he": 0
+        },
+        {
+          "o2": 100,
+          "he": 0
+        }
+      ],
+      "gf": [
+        35,
+        75
+      ],
+      "descent_rate": 10,
+      "ascent_rate": 10,
+      "last_stop_m": 3,
+      "p_h2o": 0.0567,
+      "expected": {
+        "stops": [
+          [
+            18,
+            1
+          ],
+          [
+            15,
+            1
+          ],
+          [
+            12,
+            2
+          ],
+          [
+            9,
+            3
+          ],
+          [
+            6,
+            4
+          ],
+          [
+            3,
+            8
+          ]
+        ],
+        "tts_min": 22
+      },
+      "stop_tol_min": 1,
+      "tts_tol_min": 2
+    },
+    {
+      "name": "MD 45m/25min air +O2 (lost EAN50) GF35/75",
+      "source": "MultiDeco screenshot 2026-07-10, 'utrata gazu 50' column",
+      "depth_m": 45,
+      "bottom_time_min": 25,
+      "bottom_gas": {
+        "o2": 21,
+        "he": 0
+      },
+      "deco_gases": [
+        {
+          "o2": 100,
+          "he": 0
+        }
+      ],
+      "gf": [
+        35,
+        75
+      ],
+      "descent_rate": 10,
+      "ascent_rate": 10,
+      "last_stop_m": 3,
+      "p_h2o": 0.0567,
+      "expected": {
+        "stops": [
+          [
+            18,
+            1
+          ],
+          [
+            15,
+            1
+          ],
+          [
+            12,
+            4
+          ],
+          [
+            9,
+            5
+          ],
+          [
+            6,
+            4
+          ],
+          [
+            3,
+            9
+          ]
+        ],
+        "tts_min": 27
+      },
+      "stop_tol_min": 2,
+      "tts_tol_min": 4
+    },
+    {
+      "name": "MD 45m/25min air +EAN50 (lost O2) GF35/75",
+      "source": "MultiDeco screenshot 2026-07-10, 'utrata gazu 100' column",
+      "depth_m": 45,
+      "bottom_time_min": 25,
+      "bottom_gas": {
+        "o2": 21,
+        "he": 0
+      },
+      "deco_gases": [
+        {
+          "o2": 50,
+          "he": 0
+        }
+      ],
+      "gf": [
+        35,
+        75
+      ],
+      "descent_rate": 10,
+      "ascent_rate": 10,
+      "last_stop_m": 3,
+      "p_h2o": 0.0567,
+      "expected": {
+        "stops": [
+          [
+            18,
+            1
+          ],
+          [
+            15,
+            1
+          ],
+          [
+            12,
+            2
+          ],
+          [
+            9,
+            3
+          ],
+          [
+            6,
+            5
+          ],
+          [
+            3,
+            13
+          ]
+        ],
+        "tts_min": 28
+      },
+      "stop_tol_min": 2,
+      "tts_tol_min": 4
+    },
+    {
+      "name": "MD 45m/25min air only (lost both) GF35/75",
+      "source": "MultiDeco screenshot 2026-07-10, 'Obie' column",
+      "depth_m": 45,
+      "bottom_time_min": 25,
+      "bottom_gas": {
+        "o2": 21,
+        "he": 0
+      },
+      "deco_gases": [],
+      "gf": [
+        35,
+        75
+      ],
+      "descent_rate": 10,
+      "ascent_rate": 10,
+      "last_stop_m": 3,
+      "p_h2o": 0.0567,
+      "expected": {
+        "stops": [
+          [
+            18,
+            1
+          ],
+          [
+            15,
+            1
+          ],
+          [
+            12,
+            4
+          ],
+          [
+            9,
+            5
+          ],
+          [
+            6,
+            9
+          ],
+          [
+            3,
+            24
+          ]
+        ],
+        "tts_min": 47
+      },
+      "stop_tol_min": 2,
+      "tts_tol_min": 7
+    },
+    {
+      "name": "SW Perdix2 manual 40m/20min EAN28 +EAN50 GF30/70",
+      "source": "Shearwater Perdix 2 Technical manual Doc 13301-Tec-RevB p.59 (see _shearwater_provenance)",
+      "depth_m": 40,
+      "bottom_time_min": 20,
+      "bottom_gas": {
+        "o2": 28,
+        "he": 0
+      },
+      "deco_gases": [
+        {
+          "o2": 50,
+          "he": 0
+        }
+      ],
+      "gf": [
+        30,
+        70
+      ],
+      "descent_rate": 18,
+      "ascent_rate": 10,
+      "last_stop_m": 3,
+      "expected": {
+        "stops": [
+          [
+            12,
+            1
+          ],
+          [
+            9,
+            1
+          ],
+          [
+            6,
+            3
+          ],
+          [
+            3,
+            6
+          ]
+        ],
+        "tts_min": 14
+      },
+      "stop_tol_min": 1,
+      "tts_tol_min": 1
+    },
+    {
+      "name": "45m/25min 21/35 +EAN50+O2 GF30/80 last stop 6m (fill from Shearwater Cloud)",
+      "source": null,
+      "_note": "No published Shearwater last-stop-6m OC schedule found; the only candidate (Perdix 2 manual p.30) failed validation - see _shearwater_provenance. Plan this in Shearwater Cloud with Last Stop 6m and fill in.",
+      "depth_m": 45,
+      "bottom_time_min": 25,
+      "bottom_gas": {
+        "o2": 21,
+        "he": 35
+      },
+      "deco_gases": [
+        {
+          "o2": 50,
+          "he": 0
+        },
+        {
+          "o2": 100,
+          "he": 0
+        }
+      ],
+      "gf": [
+        30,
+        80
+      ],
+      "descent_rate": 18,
+      "ascent_rate": 10,
+      "last_stop_m": 6,
+      "expected": null
+    }
+  ],
+  "_shearwater_provenance": [
+    "The 40m/20min dive is the official worked example from the Shearwater",
+    "Perdix 2 Technical manual, Doc 13301-Tec-RevB (2022-05-25), p.58-59:",
+    "OC, EAN28 bottom + EAN50 deco, planner settings screen shows GF 30/70,",
+    "Last Stop 3m, RMV 15; manual states descent 18 m/min, ascent 10 m/min,",
+    "highest-ppO2-gas selection. Manual result: stops 12:1 9:1 6:3 3:6,",
+    "Run 34 min, Deco 14 min, gas 28%: 1534 L, 50%: 287 L. Shearwater's",
+    "displayed stop minutes absorb the inter-stop ascent fractions (runtime",
+    "bookkeeping), hence the 1 min tolerance on stops while run/TTS match",
+    "exactly. The 30m/30min walkthrough on p.30 was evaluated and REJECTED",
+    "as golden data: its table is truncated mid-schedule (runtime shown is",
+    "inconsistent with the in-dive TTS on the same pages)."
+  ]
+}

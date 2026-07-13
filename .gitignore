@@ -12,3 +12,7 @@ runtime.png
 
 # Per-user GUI preferences (dark mode, …) — the dive itself is dive_plan.json
 ui_settings.json
+
+# Built test oracle (tests/subsurface_oracle/build.sh output)
+*.so
+tests/baker_oracle/gfdeco

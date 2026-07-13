@@ -133,12 +133,14 @@ class TestMultiGasTravel(unittest.TestCase):
                 f"{s.gas!r} hypoxic on {s.kind} at {shallow:.1f} m")
 
     def test_no_segment_exceeds_deco_ppo2_ceiling(self):
+        # switches snap to stop depths, so ppO2 may exceed ppo2_deco by at
+        # most ppo2_switch_tol (O2 at the 6 m stop: 1.613 bar)
         plan = b.DivePlan(deco_gases=(b.EAN50, b.O2))
         segs, _ = b.plan_dive(45, 25, b.AIR, plan)
         for s in segs:
             deep = max(s.depth_start, s.depth_end)
             self.assertLessEqual(
-                s.gas.ppo2(deep), plan.ppo2_deco + 1e-6,
+                s.gas.ppo2(deep), plan.ppo2_deco + plan.ppo2_switch_tol + 1e-6,
                 f"{s.gas!r} ppO2 too high on {s.kind} at {deep:.1f} m")
 
     def test_descent_stays_on_bottom_gas_when_normoxic(self):
@@ -156,9 +158,19 @@ class TestMultiGasTravel(unittest.TestCase):
         self.assertAlmostEqual(shallowest.gas.fO2, 1.0)
         for s in stops:
             if s.gas.fO2 == 1.0:
-                self.assertLessEqual(s.depth_start, b.O2.mod(plan.ppo2_deco) + 1e-6)
+                self.assertLessEqual(s.depth_start, plan.switch_depth(b.O2) + 1e-6)
             if s.gas.fO2 == 0.50:
-                self.assertLessEqual(s.depth_start, b.EAN50.mod(plan.ppo2_deco) + 1e-6)
+                self.assertLessEqual(s.depth_start, plan.switch_depth(b.EAN50) + 1e-6)
+
+    def test_switch_depths_snap_to_stops(self):
+        plan = b.DivePlan()
+        # O2: MOD 5.87 m at ppO2 1.6 -> standard 6 m stop (excess 0.013 bar)
+        self.assertAlmostEqual(plan.switch_depth(b.O2), 6.0)
+        # EAN50: MOD 21.87 m -> 21 m stop (nearest, no excess)
+        self.assertAlmostEqual(plan.switch_depth(b.EAN50), 21.0)
+        # a switch is never rounded deeper than ppo2_switch_tol allows
+        tight = b.DivePlan(ppo2_switch_tol=0.001)
+        self.assertAlmostEqual(tight.switch_depth(b.O2), 3.0)
 
     def test_min_depth_and_ppo2_helpers(self):
         self.assertAlmostEqual(self.HYPOXIC.min_depth(0.18),
@@ -179,43 +191,81 @@ class TestTTSandRockBottom(unittest.TestCase):
         self.assertFalse(any(s.kind == "stop" for s in segs))
         self.assertAlmostEqual(b.time_to_surface(segs), 18 / 10.0, places=6)
 
-    def test_rock_bottom_scales_linearly_with_divers(self):
-        gp1 = b.GasPlan(sac=20, sac_stress=40, divers=1)
-        gp2 = b.GasPlan(sac=20, sac_stress=40, divers=2)
+    def test_rock_bottom_scales_linearly_with_multiplier(self):
+        gp1 = b.GasPlan(sac=20, sac_multiplier=1.0)
+        gp2 = b.GasPlan(sac=20, sac_multiplier=2.0)
         self.assertAlmostEqual(b.rock_bottom_liters(30, gp2),
                                2 * b.rock_bottom_liters(30, gp1), places=6)
 
-    def test_rock_bottom_grows_with_stress_sac(self):
-        lo = b.rock_bottom_liters(30, b.GasPlan(sac=20, sac_stress=30))
-        hi = b.rock_bottom_liters(30, b.GasPlan(sac=20, sac_stress=60))
+    def test_rock_bottom_grows_with_multiplier(self):
+        lo = b.rock_bottom_liters(30, b.GasPlan(sac=20, sac_multiplier=1.5))
+        hi = b.rock_bottom_liters(30, b.GasPlan(sac=20, sac_multiplier=3.0))
         self.assertGreater(hi, lo)
 
     def test_rock_bottom_is_problem_plus_direct_ascent(self):
-        gp = b.GasPlan(sac=20, sac_stress=40, divers=2, problem_minutes=2.0)
-        problem = 40 * b.depth_to_p_amb(30) * 2.0 * 2
+        gp = b.GasPlan(sac=20, sac_multiplier=2.0, problem_minutes=2.0)
+        emergency = 20 * 2.0                                # sac * multiplier
+        problem = emergency * b.depth_to_p_amb(30) * 2.0
         p_avg = b.P_ATM + 15.0 / 10.0                       # mid-depth of 30 m
-        ascent = 40 * p_avg * (30 / 10.0) * 2
+        ascent = emergency * p_avg * (30 / 10.0)
         self.assertAlmostEqual(b.rock_bottom_liters(30, gp, 10.0),
                                problem + ascent, places=6)
 
     def test_rock_bottom_grows_with_depth(self):
-        gp = b.GasPlan(sac=20, sac_stress=40, divers=2)
+        gp = b.GasPlan(sac=20, sac_multiplier=2.0)
         self.assertGreater(b.rock_bottom_liters(45, gp),
                            b.rock_bottom_liters(30, gp))
 
     def test_rock_bottom_is_a_practical_reserve(self):
-        # 45 m team min gas on a 24 L twinset is a realistic reserve — tens of
-        # bar, not the hundreds the old full-deco method produced.
-        gp = b.GasPlan(sac=20, sac_stress=40, divers=2)
+        # 45 m single-diver min gas on a 24 L twinset is a realistic reserve —
+        # tens of bar, not the hundreds the old full-deco method produced.
+        gp = b.GasPlan(sac=20, sac_multiplier=2.0)
         bar = b.rock_bottom_liters(45, gp) / 24.0
-        self.assertGreater(bar, 30)
+        self.assertGreater(bar, 15)
         self.assertLess(bar, 120)
 
     def test_segment_gas_liters_hand_calc_single_segment(self):
         seg = b.DiveSegment("bottom", 20, 20, 10.0, b.AIR)
         ata = b.depth_to_p_amb(20)
-        self.assertAlmostEqual(b.segment_gas_liters([seg], 15, divers=2),
-                               15 * ata * 10.0 * 2, places=6)
+        self.assertAlmostEqual(b.segment_gas_liters([seg], 15),
+                               15 * ata * 10.0, places=6)
+
+
+class TestLastStopDepth(unittest.TestCase):
+    """last_stop_depth=6 — the Shearwater/MultiDeco 'last stop 6 m' option."""
+
+    def schedules(self, last_stop, depth=40, time=30):
+        plan = b.DivePlan(gf_low=0.30, gf_high=0.80, last_stop_depth=last_stop)
+        segs, _ = b.plan_dive(depth, time, b.AIR, plan)
+        return ([(s.depth_start, s.duration) for s in segs if s.kind == "stop"],
+                b.time_to_surface(segs))
+
+    def test_no_stop_shallower_than_last_stop(self):
+        stops, _ = self.schedules(6.0)
+        self.assertTrue(stops)
+        self.assertGreaterEqual(min(d for d, _t in stops), 6.0)
+
+    def test_deeper_stops_unchanged(self):
+        stops3, _ = self.schedules(3.0)
+        stops6, _ = self.schedules(6.0)
+        self.assertEqual([s for s in stops3 if s[0] > 6.0],
+                         [s for s in stops6 if s[0] > 6.0])
+
+    def test_shallow_deco_served_at_6m_takes_longer(self):
+        # off-gassing at 6 m is slower than at 3 m, so folding the 3 m stop
+        # into the 6 m stop must not shorten the schedule
+        (stops3, tts3), (stops6, tts6) = self.schedules(3.0), self.schedules(6.0)
+        self.assertGreater(dict(stops6)[6.0], dict(stops3)[6.0])
+        self.assertGreaterEqual(tts6, tts3)
+
+    def test_shallow_only_deco_collapses_to_single_6m_stop(self):
+        # 21 m / 50 min air needs only 6 m + 3 m stops; with last stop 6 m the
+        # whole obligation is served in one 6 m stop
+        stops, _ = self.schedules(6.0, depth=21, time=50)
+        self.assertEqual([d for d, _t in stops], [6.0])
+
+    def test_default_is_unchanged(self):
+        self.assertEqual(b.DivePlan().last_stop_depth, 3.0)
 
 
 if __name__ == "__main__":

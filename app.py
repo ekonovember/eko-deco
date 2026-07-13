@@ -2,8 +2,9 @@
 
 Left panel: dive settings (depth, bottom time, gradient factors, a fully editable
 gas list where every mix — bottom / travel / deco — has its own O2, He and tank,
-plus SAC and solo/team). Middle: the depth-vs-time profile with a Ratio-Deco
-overlay. Right: the results panel (schedule, TTS, per-cylinder gas + rock bottom).
+plus SAC and an emergency SAC multiplier; single diver). Middle: the depth-vs-time
+profile with a Ratio-Deco overlay. Right: the results panel (schedule, TTS,
+per-cylinder gas + rock bottom, lost-deco-gas scenarios) and a wetnotes card.
 
 The dive is loaded from and saved to ``dive_plan.json`` (see ``dive_config.py``),
 the same file the console planner reads/writes — so ``cli.py plan --save`` shows
@@ -17,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+from dataclasses import replace
 import tkinter as tk
 from tkinter import ttk
 from typing import List, Optional, Tuple
@@ -218,20 +220,25 @@ class DecoApp:
         left = ttk.LabelFrame(main, text="Dive", padding=8)
         left.pack(side=tk.LEFT, fill=tk.Y)
 
-        right = ttk.Frame(main)
-        right.pack(side=tk.RIGHT, fill=tk.Y, padx=(6, 0))
-        results = ttk.LabelFrame(right, text="Results", padding=6)
-        runtime_frame = ttk.LabelFrame(right, text="Runtime — wetnotes (printable)",
+        # The output panel is the main information area (MultiDeco-style): it
+        # sits inboard next to the settings and takes the spare width; the
+        # profile chart keeps a fixed, smaller footprint on the right.
+        mid = ttk.Frame(main)
+        mid.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(6, 0))
+        results = ttk.LabelFrame(mid, text="Results", padding=6)
+        runtime_frame = ttk.LabelFrame(mid, text="Runtime — wetnotes (printable)",
                                        padding=6)
         runtime_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=(6, 0))
         results.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
 
         center = ttk.Frame(main)
-        center.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(6, 0))
+        center.pack(side=tk.RIGHT, fill=tk.Y, padx=(6, 0))
 
-        # --- dive settings ---
-        self.depth = self._add_slider(left, "Depth (m)", 6, 120, 1, 45)
-        self.bottom = self._add_slider(left, "Bottom time (min)", 1, 200, 1, 10)
+        # --- dive settings (numeric up/downs on one row) ---
+        dt = ttk.Frame(left)
+        dt.pack(fill=tk.X, pady=2)
+        self.depth = self._add_spin(dt, "Depth (m)", 1, 200, 1, 45)
+        self.bottom = self._add_spin(dt, "Bottom (min)", 1, 999, 1, 10)
         self._add_gf_row(left)
 
         # --- gases (bottom / travel / deco, each with O2/He + tank) ---
@@ -242,32 +249,33 @@ class DecoApp:
         # Strip the theme's vertical padding so the ✕ matches the row height;
         # keep some horizontal padding and center the glyph so it isn't clipped.
         ttk.Style().configure("GasDel.TButton", padding=(4, 0), anchor="center")
-        for col, text in enumerate(("role", "O₂%", "He%", "tank L", "bar")):
+        for col, text in enumerate(("role", "O₂%", "He%", "tank L", "bar", "use")):
             ttk.Label(self.gas_list, text=text, anchor="w").grid(
                 row=0, column=col, padx=1, sticky="w")
         self.gas_rows = []
         ttk.Button(gases, text="+ Add gas", command=self._add_gas_row).pack(
             anchor="w", pady=(4, 0))
 
-        # --- gas planning ---
+        # --- gas planning (single diver: SAC + emergency multiplier) ---
         gp = ttk.LabelFrame(left, text="Gas planning (rock bottom)", padding=6)
         gp.pack(fill=tk.X, pady=(8, 0))
-        self.sac = self._add_slider(gp, "SAC normal (L/min)", 5, 40, 1, 20)
-        self.sac_stress = self._add_slider(gp, "SAC distress (L/min)", 5, 80, 1, 40)
-        self.solo = tk.BooleanVar(value=False)
-        self.solo.trace_add("write",
-                            lambda *_: None if self._building else self.recompute())
-        ttk.Checkbutton(gp, text="Solo dive (else 2 divers)", variable=self.solo
-                        ).pack(anchor="w", pady=(2, 0))
+        sacrow = ttk.Frame(gp)
+        sacrow.pack(fill=tk.X, pady=2)
+        self.sac = self._add_spin(sacrow, "SAC (L/min)", 1, 99, 1, 20)
+        self.sac_mult = self._add_spin(sacrow, "Emergency ×", 1.0, 9.0, 0.05, 2.0,
+                                       fmt="%.2f")
 
         self.show_rd = self._add_checkbox(
             self._packed(ttk.Frame(left)), "Ratio Deco vs Bühlmann panel", True)
 
-        # --- dark mode (persisted to ui_settings.json, not the dive plan) ---
+        # --- Settings menu: dark mode (ui_settings.json, not the dive plan) ---
         self.dark = tk.BooleanVar(value=bool(self._ui_settings.get("dark_mode")))
         self.dark.trace_add("write", self._on_dark_toggle)
-        ttk.Checkbutton(self._packed(ttk.Frame(left)), text="Dark mode",
-                        variable=self.dark).pack(side=tk.LEFT, anchor="w")
+        menubar = tk.Menu(self.root)
+        settings_menu = tk.Menu(menubar, tearoff=0)
+        settings_menu.add_checkbutton(label="Dark mode", variable=self.dark)
+        menubar.add_cascade(label="Settings", menu=settings_menu)
+        self.root.config(menu=menubar)
 
         # --- config file save / reload ---
         cfgrow = ttk.Frame(left)
@@ -279,23 +287,31 @@ class DecoApp:
         self.cfg_status.pack(side=tk.LEFT, padx=4)
 
         # --- results panel (scrollable) ---
-        self.readout = tk.Text(results, width=54, height=28, wrap="none",
-                               font=("Consolas", 9),
+        self.readout = tk.Text(results, width=58, height=28, wrap="none",
+                               font=("Consolas", 10),
                                relief="flat", bg=self.root.cget("bg"))
         scroll = ttk.Scrollbar(results, command=self.readout.yview)
-        self.readout.configure(yscrollcommand=scroll.set)
+        xscroll = ttk.Scrollbar(results, orient="horizontal",
+                                command=self.readout.xview)
+        self.readout.configure(yscrollcommand=scroll.set,
+                               xscrollcommand=xscroll.set)
         scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        xscroll.pack(side=tk.BOTTOM, fill=tk.X)
         self.readout.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         # --- runtime "wetnotes" card (bottom-right, printable) ---
         rt_body = ttk.Frame(runtime_frame)
         rt_body.pack(fill=tk.BOTH, expand=True)
-        self.runtime_text = tk.Text(rt_body, width=50, height=18, wrap="none",
+        self.runtime_text = tk.Text(rt_body, width=66, height=18, wrap="none",
                                     font=("Consolas", 9), relief="flat",
                                     bg=self.root.cget("bg"))
         rt_scroll = ttk.Scrollbar(rt_body, command=self.runtime_text.yview)
-        self.runtime_text.configure(yscrollcommand=rt_scroll.set)
+        rt_xscroll = ttk.Scrollbar(rt_body, orient="horizontal",
+                                   command=self.runtime_text.xview)
+        self.runtime_text.configure(yscrollcommand=rt_scroll.set,
+                                    xscrollcommand=rt_xscroll.set)
         rt_scroll.pack(side=tk.RIGHT, fill=tk.Y)
+        rt_xscroll.pack(side=tk.BOTTOM, fill=tk.X)
         self.runtime_text.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         rt_btns = ttk.Frame(runtime_frame)
         rt_btns.pack(fill=tk.X, pady=(4, 0))
@@ -307,7 +323,7 @@ class DecoApp:
         self.runtime_status.pack(side=tk.LEFT, padx=4)
 
         # --- chart ---
-        self.fig = Figure(figsize=(8, 6), dpi=100)
+        self.fig = Figure(figsize=(5.4, 5.2), dpi=100)
         self.ax = self.fig.add_subplot(111)
         self.canvas = FigureCanvasTkAgg(self.fig, master=center)
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
@@ -357,29 +373,27 @@ class DecoApp:
         frame.pack(fill=tk.X, pady=(8, 0))
         return frame
 
-    def _add_slider(self, parent, label, lo, hi, step, init) -> tk.DoubleVar:
-        row = ttk.Frame(parent)
-        row.pack(fill=tk.X, pady=2)
-        var = tk.DoubleVar(value=init)
-
-        head = ttk.Frame(row)
-        head.pack(fill=tk.X)
-        ttk.Label(head, text=label).pack(side=tk.LEFT)
-        value_lbl = ttk.Label(head, text=f"{init:g}", width=6, anchor="e")
-        value_lbl.pack(side=tk.RIGHT)
-
-        def on_change(*_):
-            value_lbl.config(text=f"{var.get():.0f}")
-            if not self._building:
-                self.recompute()
-
-        # Drive the label + recompute from a variable trace, not the Scale's
-        # command: ttk.Scale fires -command only on user drags, so a programmatic
-        # var.set() (loading dive_plan.json) would leave the label/results stale.
-        var.trace_add("write", on_change)
-        scale = ttk.Scale(row, from_=lo, to=hi, orient="horizontal", variable=var)
-        scale.pack(fill=tk.X)
+    def _add_spin(self, row, label, lo, hi, increment, init,
+                  width: int = 5, fmt: Optional[str] = None) -> tk.StringVar:
+        """Labelled numeric up/down packed onto `row` (several fit one line)."""
+        ttk.Label(row, text=label).pack(side=tk.LEFT)
+        var = tk.StringVar(value=(fmt % init) if fmt else f"{init:g}")
+        kwargs = {"format": fmt} if fmt else {}
+        ttk.Spinbox(row, from_=lo, to=hi, increment=increment, width=width,
+                    textvariable=var, **kwargs).pack(side=tk.LEFT, padx=(4, 10))
+        # Recompute from a variable trace, not the Spinbox command, so a
+        # programmatic var.set() (loading dive_plan.json) refreshes too.
+        var.trace_add("write",
+                      lambda *_: None if self._building else self.recompute())
         return var
+
+    def _num(self, var, default: float, lo: Optional[float] = None) -> float:
+        """Float value of a spinbox var; `default` while the entry is mid-edit."""
+        try:
+            v = float(var.get())
+        except (ValueError, tk.TclError):
+            return default
+        return v if lo is None else max(lo, v)
 
     def _add_checkbox(self, parent, label, init=False) -> tk.BooleanVar:
         var = tk.BooleanVar(value=init)
@@ -399,17 +413,22 @@ class DecoApp:
         ttk.Label(row, text="/").pack(side=tk.LEFT)
         ttk.Spinbox(row, from_=5, to=100, width=4, textvariable=self.gf_hi).pack(
             side=tk.LEFT, padx=1)
-        for v in (self.gf_lo, self.gf_hi):
+        # Shearwater/MultiDeco-style shallowest stop: off = 3 m, on = 6 m
+        self.last_stop6 = tk.BooleanVar(value=False)
+        ttk.Checkbutton(row, text="Last stop 6 m",
+                        variable=self.last_stop6).pack(side=tk.LEFT, padx=(10, 0))
+        for v in (self.gf_lo, self.gf_hi, self.last_stop6):
             v.trace_add("write", lambda *_: None if self._building else self.recompute())
 
     def _add_gas_row(self, role: str = "Deco", fo2: float = 50, fhe: float = 0,
                      tank: float = 11, pressure: float = 232,
-                     recompute: bool = True) -> None:
+                     enabled: bool = True, recompute: bool = True) -> None:
         role_var = tk.StringVar(value=role)
         fo2_var = tk.StringVar(value=str(int(fo2)))
         fhe_var = tk.StringVar(value=str(int(fhe)))
         tank_var = tk.StringVar(value=str(int(tank)))
         press_var = tk.StringVar(value=str(int(pressure)))
+        use_var = tk.BooleanVar(value=enabled)     # unticked = don't count
 
         widgets = [
             ttk.Combobox(self.gas_list, textvariable=role_var, width=6,
@@ -421,11 +440,13 @@ class DecoApp:
         ]
 
         row = {"widgets": widgets, "role": role_var, "fo2": fo2_var,
-               "fhe": fhe_var, "tank": tank_var, "pressure": press_var}
+               "fhe": fhe_var, "tank": tank_var, "pressure": press_var,
+               "use": use_var}
+        widgets.append(ttk.Checkbutton(self.gas_list, variable=use_var))
         widgets.append(ttk.Button(self.gas_list, text="✕", width=2,
                                   style="GasDel.TButton",
                                   command=lambda: self._remove_gas_row(row)))
-        for var in (role_var, fo2_var, fhe_var, tank_var, press_var):
+        for var in (role_var, fo2_var, fhe_var, tank_var, press_var, use_var):
             var.trace_add("write",
                           lambda *_: None if self._building else self.recompute())
         self.gas_rows.append(row)
@@ -451,6 +472,8 @@ class DecoApp:
                 self.recompute()
 
     def _row_gas(self, row):
+        if not row["use"].get():               # unticked: gas doesn't count
+            return None
         try:
             fo2 = float(row["fo2"].get()) / 100.0
             fhe = float(row["fhe"].get() or 0) / 100.0
@@ -507,6 +530,7 @@ class DecoApp:
             ascent_rate=base.get("ascent_rate", ASCENT_RATE),
             descent_rate=base.get("descent_rate", 18.0),
             stop_interval=base.get("stop_interval", 3.0),
+            last_stop_depth=6.0 if self.last_stop6.get() else 3.0,
             ppo2_bottom=base.get("ppo2_bottom", 1.4),
             ppo2_deco=base.get("ppo2_deco", 1.6),
             ppo2_min=base.get("ppo2_min", 0.18),
@@ -515,10 +539,10 @@ class DecoApp:
         )
 
     def recompute(self) -> None:
-        depth = float(self.depth.get())
+        depth = self._num(self.depth, 45.0, lo=1.0)
         gas = self._bottom_gas()
         plan = self._make_plan()
-        bottom_time = max(1.0, float(self.bottom.get()))
+        bottom_time = self._num(self.bottom, 10.0, lo=1.0)
 
         try:
             segs, tissues = b.plan_dive(depth, bottom_time, gas, plan)
@@ -527,10 +551,56 @@ class DecoApp:
             return
 
         rd_result = rd.ratio_deco(depth, bottom_time)
+        scenarios = self._lost_gas_scenarios(depth, bottom_time, gas, plan, segs)
         self._ascent = plan.ascent_rate
         self._draw(segs, depth, bottom_time, rd_result)
-        self._write_readout(depth, gas, plan, bottom_time, segs, tissues, rd_result)
-        self._write_runtime(depth, gas, plan, bottom_time, segs)
+        self._write_readout(depth, gas, plan, bottom_time, segs, tissues,
+                            rd_result, scenarios)
+        self._write_runtime(depth, gas, plan, bottom_time, segs, scenarios)
+
+    def _lost_gas_scenarios(self, depth, bottom_time, gas, plan,
+                            segs) -> List[Tuple[str, list]]:
+        """Contingency schedules for losing deco gas, MultiDeco-style: the normal
+        dive ("OK"), then one re-plan per deco gas without it, and — with two or
+        more deco gases — an "all" worst case with every deco gas gone. Only
+        Deco-role gases can be lost; bottom and travel gases always stay. Works
+        for any number of deco gases (nothing assumes two)."""
+        scenarios: List[Tuple[str, list]] = [("OK", segs)]
+        losses = [(repr(g), tuple(d for d in plan.deco_gases if d is not g))
+                  for g in plan.deco_gases]
+        if len(plan.deco_gases) > 1:
+            losses.append(("all", ()))
+        for label, remaining in losses:
+            try:
+                lost_segs, _ = b.plan_dive(depth, bottom_time, gas,
+                                           replace(plan, deco_gases=remaining))
+            except Exception:  # noqa: BLE001 - a scenario that can't be planned
+                continue       # (e.g. hypoxic gap) just drops its column
+            scenarios.append((label, lost_segs))
+        return scenarios
+
+    @staticmethod
+    def _stops_by_depth(segs) -> Tuple[dict, float]:
+        """{stop depth (m, int): (minutes, runtime at end of stop)} + total RT."""
+        run, at = 0.0, {}
+        for s in segs:
+            run += s.duration
+            if s.kind == "stop" and s.duration > 0:
+                at[int(round(s.depth_start))] = (s.duration, run)
+        return at, run
+
+    @staticmethod
+    def _liters_by_gas(segs, sac: float) -> List[Tuple[str, float]]:
+        """[(gas repr, litres at `sac`)] in order of first use."""
+        out, seen = [], []
+        for s in segs:
+            key = repr(s.gas)
+            if key in seen:
+                continue
+            seen.append(key)
+            out.append((key, b.segment_gas_liters(
+                [x for x in segs if repr(x.gas) == key], sac)))
+        return out
 
     # -------------------------------------------------------------- draw ----
 
@@ -594,7 +664,7 @@ class DecoApp:
     # ----------------------------------------------------------- readout ----
 
     def _write_readout(self, depth, gas, plan, bottom_time,
-                       segs, tissues, rd_result=None) -> None:
+                       segs, tissues, rd_result=None, scenarios=None) -> None:
         ceil_now = b.ceiling_depth(tissues, plan.gf_high)
         total = b.total_runtime(segs)
         tts = b.time_to_surface(segs)
@@ -604,6 +674,11 @@ class DecoApp:
         ndl_label = ">10 h" if ndl_min is None else f"{ndl_min} min"
 
         cards: List[List[str]] = []
+
+        # --- header line, MultiDeco-style ---
+        suffix = (" with unusable deco mix scenario"
+                  if scenarios and len(scenarios) > 1 else "")
+        cards.append([f"Dive {depth:.0f} m / {bottom_time:.0f} min{suffix}"])
 
         # --- GAS ---
         gas_rows = [
@@ -636,10 +711,9 @@ class DecoApp:
         ], aligns=["<", "<"]))
 
         # --- GAS PLAN (per-cylinder + rock bottom) ---
-        sac = float(self.sac.get())
-        sac_stress = float(self.sac_stress.get())
-        divers = 1 if self.solo.get() else 2
-        gp = b.GasPlan(sac=sac, sac_stress=sac_stress, divers=divers,
+        sac = self._num(self.sac, 20.0, lo=1.0)
+        sac_mult = self._num(self.sac_mult, 2.0, lo=1.0)
+        gp = b.GasPlan(sac=sac, sac_multiplier=sac_mult,
                        problem_minutes=self._base_cfg.get("problem_minutes", 1.0))
         tanks, roles, press = {}, {}, {}
         back_tank = back_pressure = 0.0
@@ -687,12 +761,73 @@ class DecoApp:
                            f"over {back_pressure:.0f} bar fill!")
         else:
             rb_line = f"rock bottom {rock:.0f} L (set bottom tank)"
-        gp_title = (f"GAS PLAN · SAC {sac:.0f}/{sac_stress:.0f} · "
-                    f"{'solo' if divers == 1 else '2 divers'}")
-        cards.append(format_card([gp_title], plan_rows,
-                                 headers=["role", "gas", "need", "have"],
-                                 footer_lines=[rb_line],
-                                 aligns=["<", "<", ">", ">"]))
+        gp_title = f"GAS PLAN · SAC {sac:.0f} ×{sac_mult:.2f} emergency"
+        gas_plan_card = format_card([gp_title], plan_rows,
+                                    headers=["role", "gas", "need", "have"],
+                                    footer_lines=[rb_line],
+                                    aligns=["<", "<", ">", ">"])
+
+        # --- stops + gas usage, formatted exactly like MultiDeco's output
+        # pane: an unframed "-- lost gas -->" table with one column per
+        # scenario (cells "stop (runtime)", bare depths, the bottom row
+        # first) and per-scenario "Gas usage" blocks in "ltr" lines. ---
+        stop_cards: List[List[str]] = []
+        if scenarios and len(scenarios) > 1:
+            per = [(label, *self._stops_by_depth(ss)) for label, ss in scenarios]
+            depths_u = sorted({d for _l, at, _t in per for d in at}, reverse=True)
+            run_bottom = 0.0                 # runtime when leaving the bottom
+            for s in segs:
+                run_bottom += s.duration
+                if s.kind == "bottom":
+                    break
+            labels = ["All" if l == "all" else l for l, _at, _t in per]
+            body = [[f"({run_bottom:.0f})"] * len(per)]
+            body += [["" if dm not in at
+                      else f"{at[dm][0]:.0f} ({at[dm][1]:.0f})"
+                      for _l, at, _t in per]
+                     for dm in depths_u]
+            widths = [max(len(labels[i]), max(len(r[i]) for r in body))
+                      for i in range(len(per))]
+
+            def trow(depth_cell, cells) -> str:
+                return (f"{depth_cell:>4}" + "".join(
+                    f"   {cells[i]:>{widths[i]}}"
+                    for i in range(len(per)))).rstrip()
+
+            table_w = 4 + sum(w + 3 for w in widths)
+            table = [f"{'-- lost gas -->':^{table_w}}".rstrip(), ""]
+            table.append(trow("", labels))
+            for dm, cells in zip([int(round(depth))] + depths_u, body):
+                table.append(trow(dm, cells))
+            stop_cards.append(table)
+
+            usage = ["Gas usage"]
+            for label, ss in scenarios:
+                usage.append("")
+                usage.append("No failures - normal dive - OK" if label == "OK"
+                             else f"Loss or lack of deco mix: "
+                                  f"{'All' if label == 'all' else label}")
+                tot_l = 0.0
+                for key, liters in self._liters_by_gas(ss, sac):
+                    tot_l += liters
+                    have = tanks.get(key, 0.0) * press.get(key, 0.0)
+                    short = "   SHORT!" if 0 < have < liters else ""
+                    usage.append(f"   {liters:.1f} ltr {key}{short}")
+                usage.append(f"   {tot_l:.1f} ltr TOTAL")
+            stop_cards.append(usage)
+        elif not stops:
+            stop_cards.append(format_card(["BÜHLMANN STOPS"],
+                                          [["—", "no mandatory stops"]],
+                                          aligns=["<", "<"]))
+        else:
+            stop_cards.append(format_card(
+                ["BÜHLMANN STOPS"],
+                [[f"{s.depth_start:.0f} m", f"{s.duration:.0f}", repr(s.gas)]
+                 for s in stops],
+                headers=["depth", "min", "gas"], aligns=[">", ">", "<"]))
+
+        cards[1:1] = stop_cards               # right under the header line
+        cards.append(gas_plan_card)
 
         # --- Ratio Deco (educational) ---
         if rd_result is not None and self.show_rd.get():
@@ -717,17 +852,6 @@ class DecoApp:
                      for s in r.stops],
                     headers=["depth", "min", "gas"], aligns=[">", ">", "<"]))
 
-        # --- Bühlmann stops ---
-        if not stops:
-            cards.append(format_card(["BÜHLMANN STOPS"],
-                                     [["—", "no mandatory stops"]], aligns=["<", "<"]))
-        else:
-            cards.append(format_card(
-                ["BÜHLMANN STOPS"],
-                [[f"{s.depth_start:.0f} m", f"{s.duration:.0f}", repr(s.gas)]
-                 for s in stops],
-                headers=["depth", "min", "gas"], aligns=[">", ">", "<"]))
-
         lines: List[str] = []
         for i, card in enumerate(cards):
             if i:
@@ -742,27 +866,42 @@ class DecoApp:
 
     # ----------------------------------------------------------- runtime ----
 
-    def _write_runtime(self, depth, gas, plan, bottom_time, segs) -> None:
+    def _write_runtime(self, depth, gas, plan, bottom_time, segs,
+                       scenarios=None) -> None:
         """Compact wetnotes runtime as a framed slate: max depth + each stop with
-        cumulative runtime and gas, plus TTS and the minimum-gas / turn pressure."""
+        cumulative runtime and gas, plus TTS and the minimum-gas / turn pressure.
+        With deco gases, one extra `stop(run)` column per lost-gas scenario."""
         total = b.total_runtime(segs)
         tts = b.time_to_surface(segs)
+        lost = [(label, ss, *self._stops_by_depth(ss))
+                for label, ss in (scenarios or [])[1:]]
 
         rows: List[List[str]] = []
         run = 0.0
+        ok_at: dict = {}
+        ok_gas: dict = {}
         for s in segs:
             run += s.duration
             if s.kind == "bottom":
-                rows.append([f"{s.depth_end:.0f} m", "-", f"{run:.0f}", repr(s.gas)])
+                rows.append([f"{s.depth_end:.0f} m", "-", f"{run:.0f}",
+                             repr(s.gas)] + ["-"] * len(lost))
             elif s.kind == "stop" and s.duration > 0:
-                rows.append([f"{s.depth_start:.0f} m", f"{s.duration:.0f}",
-                             f"{run:.0f}", repr(s.gas)])
-        rows.append(["surf", "-", f"{total:.0f}", ""])
+                dm = int(round(s.depth_start))
+                ok_at[dm] = (s.duration, run)
+                ok_gas[dm] = repr(s.gas)
+        depths_u = sorted(set(ok_at) | {d for _l, _s, at, _t in lost for d in at},
+                          reverse=True)
+        for dm in depths_u:
+            row = ([f"{dm} m", f"{ok_at[dm][0]:.0f}", f"{ok_at[dm][1]:.0f}",
+                    ok_gas[dm]] if dm in ok_at else [f"{dm} m", "-", "-", "-"])
+            row += ["-" if dm not in at else f"{at[dm][0]:.0f}({at[dm][1]:.0f})"
+                    for _l, _s, at, _t in lost]
+            rows.append(row)
+        rows.append(["surf", "-", f"{total:.0f}", ""] +
+                    [f"({t:.0f})" for _l, _s, _at, t in lost])
 
-        sac = float(self.sac.get())
-        divers = 1 if self.solo.get() else 2
-        gp = b.GasPlan(sac=sac, sac_stress=float(self.sac_stress.get()),
-                       divers=divers,
+        sac = self._num(self.sac, 20.0, lo=1.0)
+        gp = b.GasPlan(sac=sac, sac_multiplier=self._num(self.sac_mult, 2.0, lo=1.0),
                        problem_minutes=self._base_cfg.get("problem_minutes", 1.0))
         rock = b.rock_bottom_liters(depth, gp, plan.ascent_rate)
         back_tank = back_pressure = 0.0
@@ -772,21 +911,28 @@ class DecoApp:
                 back_tank, back_pressure = self._row_tank(row), self._row_pressure(row)
         if back_tank > 0:
             rb = rock / back_tank
-            min_gas = (f"MIN GAS {rb:.0f} bar "
-                       f"({'solo' if divers == 1 else '2 divers'})")
+            min_gas = f"MIN GAS {rb:.0f} bar"
             if back_pressure > rb:
                 min_gas += (f" · TURN "
                             f"{back_pressure - (back_pressure - rb) / 2:.0f} bar")
         else:
             min_gas = f"MIN GAS {rock:.0f} L"
 
+        footers = [min_gas]
+        for label, ss, _at, _t in lost:
+            back_l = b.segment_gas_liters([x for x in ss if x.gas == gas], sac)
+            footers.append(f"LOST {label} · TTS {b.time_to_surface(ss):.0f}"
+                           f" · back {back_l:.0f} L")
+
         title = [
             f"RUNTIME   {depth:.0f} m / {bottom_time:.0f} min",
             f"{gas!r} · GF {plan.gf_low*100:.0f}/{plan.gf_high*100:.0f}"
             f" · TTS {tts:.0f} · RT {total:.0f}",
         ]
-        card = format_card(title, rows, headers=["depth", "stop", "run", "gas"],
-                           footer_lines=[min_gas], aligns=[">", ">", ">", "<"])
+        headers = (["depth", "stop", "run", "gas"] +
+                   [f"-{label}" for label, _s, _at, _t in lost])
+        card = format_card(title, rows, headers=headers, footer_lines=footers,
+                           aligns=[">", ">", ">", "<"] + [">"] * len(lost))
 
         self.runtime_text.delete("1.0", tk.END)
         self.runtime_text.insert(tk.END, "\n".join(card))
@@ -828,19 +974,20 @@ class DecoApp:
         was_building, self._building = self._building, True
         try:
             self._base_cfg = dict(cfg)
-            self.depth.set(cfg["depth_m"])
-            self.bottom.set(cfg["bottom_time_min"])
+            self.depth.set(f"{cfg['depth_m']:g}")
+            self.bottom.set(f"{cfg['bottom_time_min']:g}")
             self.gf_lo.set(str(cfg["gf_low"]))
             self.gf_hi.set(str(cfg["gf_high"]))
-            self.solo.set(bool(cfg.get("solo")))
-            self.sac.set(cfg["sac_normal"])
-            self.sac_stress.set(cfg["sac_stress"])
+            self.last_stop6.set(cfg.get("last_stop_m", 3.0) >= 6.0)
+            self.sac.set(f"{cfg['sac_normal']:g}")
+            self.sac_mult.set(f"{cfg.get('sac_multiplier', 2.0):.2f}")
             self.show_rd.set(bool(cfg.get("show_rd", True)))
             for row in list(self.gas_rows):
                 self._remove_gas_row(row)
             for g in cfg["gases"]:
                 self._add_gas_row(g["role"], g["o2"], g.get("he", 0),
                                   g.get("tank_l", 0), g.get("pressure_bar", 232),
+                                  enabled=g.get("enabled", True),
                                   recompute=False)
         finally:
             self._building = was_building
@@ -850,19 +997,20 @@ class DecoApp:
     def _collect_config(self) -> dict:
         cfg = dict(self._base_cfg)               # preserve fields the GUI can't edit
         cfg.update({
-            "depth_m": float(self.depth.get()),
-            "bottom_time_min": float(self.bottom.get()),
+            "depth_m": self._num(self.depth, 45.0, lo=1.0),
+            "bottom_time_min": self._num(self.bottom, 10.0, lo=1.0),
             "gf_low": int(round(self._pct(self.gf_lo, 0.30) * 100)),
             "gf_high": int(round(self._pct(self.gf_hi, 0.70) * 100)),
-            "solo": bool(self.solo.get()),
-            "sac_normal": float(self.sac.get()),
-            "sac_stress": float(self.sac_stress.get()),
+            "last_stop_m": 6.0 if self.last_stop6.get() else 3.0,
+            "sac_normal": self._num(self.sac, 20.0, lo=1.0),
+            "sac_multiplier": round(self._num(self.sac_mult, 2.0, lo=1.0), 2),
             "show_rd": bool(self.show_rd.get()),
             "gases": [{"role": r["role"].get(),
                        "o2": int(float(r["fo2"].get() or 0)),
                        "he": int(float(r["fhe"].get() or 0)),
                        "tank_l": self._row_tank(r),
-                       "pressure_bar": self._row_pressure(r)} for r in self.gas_rows],
+                       "pressure_bar": self._row_pressure(r),
+                       "enabled": bool(r["use"].get())} for r in self.gas_rows],
         })
         return cfg
 

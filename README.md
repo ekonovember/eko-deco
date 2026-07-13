@@ -25,13 +25,17 @@ Erik Baker's gradient factors — a zero-dependency core, plus a CLI and a Tkint
   `P_amb_tol = (P_comp − a·GF) / (GF/b + 1 − GF)`,
   linearly interpolated between GF-Low at the first stop and GF-High at the
   surface.
-- Square-profile planner with automatic first-stop detection, 3 m stops,
-  and best-gas selection (deco gases switched at their MOD at ppO₂ ≤ 1.6).
+- Square-profile planner with automatic first-stop detection, 3 m stops
+  (last stop 3 m or 6 m), and best-gas selection: deco gases switch at their MOD
+  (ppO₂ ≤ 1.6) snapped to a standard stop depth — O₂ at the 6 m stop, EAN50 at 21 m.
 - Multi-gas support: bottom + multiple acceleration/deco gases + travel gases,
   switched automatically by ppO₂ window (MOD ceiling + hypoxia floor). Handles
   hypoxic trimixes (e.g. 10/70) that need a travel gas near the surface.
-- Rock-bottom / minimum-gas planning with two SAC values (normal + distress),
-  N divers and a problem-solving time, plus Time-To-Surface (TTS).
+- Rock-bottom / minimum-gas planning for a single diver: one basic SAC plus an
+  emergency SAC multiplier (e.g. 1.5) and a problem-solving time, plus
+  Time-To-Surface (TTS).
+- Lost-deco-gas contingencies in the GUI: the schedule re-planned without each
+  deco gas (and without all of them), with per-scenario gas usage in litres.
 - Ratio Deco (GUE/UTD) utility with standard gases and a Bühlmann cross-check.
 - Shared JSON config (`dive_plan.json`): the GUI and the CLI read/write the same
   dive, so `cli.py plan --save` shows up in the app on Reload and vice-versa.
@@ -43,18 +47,23 @@ Erik Baker's gradient factors — a zero-dependency core, plus a CLI and a Tkint
 
 Run `python app.py` for the visual planner shown above:
 
-- **Left** — every input: depth, bottom time, gradient factors, an editable gas
-  stack (bottom / travel / deco, each with its own O₂, He, tank and fill), SAC and
-  solo/team, plus **Save / Reload** of the shared `dive_plan.json`.
-- **Centre** — the depth-vs-time profile: the Bühlmann GF ascent with stops and
+- **Left** — every input: depth and bottom time as numeric up/downs on one row,
+  gradient factors and a **Last stop 6 m** switch (Shearwater/MultiDeco style),
+  an editable gas stack (bottom / travel / deco, each with its
+  own O₂, He, tank and fill, and a **use** checkbox to leave a gas out of the
+  plan without deleting it), SAC and the emergency SAC multiplier, plus
+  **Save / Reload** of the shared `dive_plan.json`.
+- **Centre** — results as framed cards (gas, dive summary, the MultiDeco-style
+  stops + lost-deco-gas scenario table, per-scenario gas usage, per-cylinder gas
+  + rock bottom, Ratio-Deco cross-check) and a printable **runtime** wetnotes
+  card — with the contingency columns — exportable to PNG with the
+  `<//> eko-deco` mark.
+- **Right** — the depth-vs-time profile: the Bühlmann GF ascent with stops and
   gas switches, and the Ratio-Deco schedule overlaid for comparison.
-- **Right** — results as framed cards (gas, dive summary, per-cylinder gas + rock
-  bottom, Ratio-Deco cross-check, stops) and a printable **runtime** wetnotes card,
-  exportable to PNG with the `<//> eko-deco` mark.
 
-A **Dark mode** checkbox themes the whole app including the chart; the choice is
-remembered in `ui_settings.json` (per-user, git-ignored), kept separate from the
-dive itself in `dive_plan.json`.
+**Dark mode** lives in the **Settings** menu and themes the whole app including
+the chart; the choice is remembered in `ui_settings.json` (per-user,
+git-ignored), kept separate from the dive itself in `dive_plan.json`.
 
 ## Install
 
@@ -75,10 +84,13 @@ python cli.py plan --depth 30 --time 25 --gas air
 python cli.py plan --depth 45 --time 25 --gas 21/35 \
     --deco-gas 50 --deco-gas 100 --gf-low 0.30 --gf-high 0.70
 
+# Last stop at 6 m instead of 3 m (Shearwater/MultiDeco style)
+python cli.py plan --depth 45 --time 25 --gas 21/35 --deco-gas 50 --last-stop 6
+
 # Hypoxic trimix + travel gas, per-gas tanks, gas planning (TTS + rock bottom)
 python cli.py plan --depth 60 --time 25 --gas 10/70@24 \
     --travel-gas 35/25@11 --deco-gas 50@11 --deco-gas 100@7 \
-    --sac 18 --sac-stress 36
+    --sac 18 --sac-multiplier 1.5
 
 # Save a dive to the shared config, then re-plan it (the GUI reads the same file)
 python cli.py plan --depth 45 --time 10 --gas air@24@232 --deco-gas 50@11@200 --sac 20 --save
@@ -98,9 +110,15 @@ and fill pressure in bar (e.g. `air@24@232` = 24 L twinset filled to 232 bar;
 `50@11` = 11 L stage at the default fill) — used for per-cylinder gas needs and
 rock bottom. Add `--json` to any command for machine-readable output.
 
-There are more knobs than shown above — ascent/descent/stop rates, the ppO₂
-window (`--ppo2-bottom` / `--ppo2-deco` / `--ppo2-min`), team size and problem
-time for rock bottom (`--divers`, `--problem-time`), `ratio --avg-depth` — see
+Deco-gas switches happen at standard stop depths (O₂ at the 6 m stop, EAN50
+at 21 m), the way dive computers plan them, with a small ppO₂ tolerance for
+the rounding.
+
+There are more knobs than shown above — ascent/descent/stop rates, the
+shallowest-stop depth (`--last-stop`), the ppO₂
+window (`--ppo2-bottom` / `--ppo2-deco` / `--ppo2-min`), the emergency SAC
+multiplier and problem time for rock bottom (`--sac-multiplier`,
+`--problem-time`), `ratio --avg-depth` — see
 `python cli.py plan -h` (or `ratio -h`, …) for the full list. Ready-to-run
 command snippets live in [`examples/`](examples/).
 
@@ -116,7 +134,39 @@ python -m unittest discover -s tests -v
 
 Sanity tests cover constant counts, surface saturation, Haldane equivalence,
 NDLs against published Bühlmann values (±5 min), gas-switch and travel-gas
-behaviour, TTS / rock-bottom gas, and the Ratio Deco schedule.
+behaviour, the last-stop option, TTS / rock-bottom gas, and the Ratio Deco
+schedule. Everything needed for those is in the standard library.
+
+## Validation
+
+The planner deliberately follows the **Baker / Shearwater / MultiDeco**
+gradient-factor convention: GF-Low anchored at the rounded first stop, a static
+slope to GF-High at the surface, gas switches at standard stop depths. That
+claim is enforced by tests, not asserted:
+
+| Reference | How | Agreement |
+|---|---|---|
+| [Subsurface](https://github.com/subsurface/subsurface) `deco.cpp` | its **unmodified C++** compiled on the fly into a test oracle and driven over ctypes | tissue loading, M-value ceilings and the GF line to **machine precision**; NDLs exact at GF 100/100 |
+| Erik Baker's `GFDECO` | his **original Fortran** — the published reference for the GF convention — compiled and run | ≤ **1 min** per stop, ≤ 1.3 min TTS |
+| MultiDeco | golden schedules, including every lost-gas column | no-loss plan matches **to the minute** |
+| Shearwater | the worked planner example in the Perdix 2 manual (GF 30/70, its stated rates) | runtime and TTS match **exactly** |
+
+- `tests/test_subsurface_crosscheck.py` — the Subsurface oracle (`tests/subsurface_oracle/`,
+  GPL-2.0, test-only; see the README there for the license boundary). Cross-checks
+  tissue loading (incl. seeded random multi-level profiles), ceilings, the GF
+  interpolation line, NDL sweeps, repetitive dives, and multi-gas schedules to
+  60 m at altitude and in fresh water. Needs `g++`.
+- `tests/test_baker_crosscheck.py` — Baker's `GFDECO` (`tests/baker_oracle/`).
+  Pins the first-stop anchor and the `--last-stop 6` behaviour. Needs `gfortran`.
+- `tests/test_shearwater_golden.py` — golden schedules in
+  `tests/shearwater_golden.json`, with provenance recorded per fixture.
+
+Both oracles build themselves on first run and **skip cleanly** when the
+compiler isn't installed, so the core suite stays dependency-free.
+
+Remaining differences from Subsurface — air at 20.9 % vs 21 % O₂, salinity-based
+depth conversion, a dynamic GF anchor — are **intentional**: they are exactly
+what separates the Subsurface convention from the Shearwater one.
 
 ## AI-agent friendly
 

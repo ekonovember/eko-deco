@@ -263,6 +263,10 @@ class DivePlan:
     descent_rate: float = 18.0   # m/min
     ascent_rate: float = 10.0    # m/min  (used between bottom and stops, and stop-to-stop)
     stop_interval: float = 3.0   # m
+    # Shallowest stop depth. 3.0 = stops all the way to 3 m (default);
+    # 6.0 = the Shearwater/MultiDeco "last stop 6 m" option: any deco shallower
+    # than 6 m is served at 6 m, followed by a direct ascent to the surface.
+    last_stop_depth: float = 3.0
     gf_low: float = 0.30
     gf_high: float = 0.80
     surface_p: float = P_ATM
@@ -275,16 +279,38 @@ class DivePlan:
     ppo2_deco: float = 1.6      # ppO2 ceiling for deco gases on ascent
     ppo2_bottom: float = 1.4    # ppO2 ceiling for the bottom/travel gas going down
     ppo2_min: float = 0.18      # hypoxia floor: a gas is not breathable below this ppO2
+    # Ascent gas switches happen at standard stop depths (MOD rounded to the
+    # nearest stop_interval multiple), the way divers and dive computers plan
+    # them — e.g. O2 at the 6 m stop even though its MOD at ppO2 1.6 is 5.9 m.
+    # Rounding a switch *deeper* than the MOD is only allowed while the ppO2
+    # excess stays within this tolerance (bar); otherwise the switch rounds
+    # down to the next shallower stop.
+    ppo2_switch_tol: float = 0.05
 
     def _usable(self, gas: Gas, depth: float, ppo2_ceiling: float) -> bool:
         pp = gas.ppo2(depth, self.surface_p, self.msw_per_bar)
         return self.ppo2_min - 1e-9 <= pp <= ppo2_ceiling + 1e-9
 
+    def switch_depth(self, gas: Gas) -> float:
+        """Ascent switch depth for `gas`: its MOD at ppo2_deco snapped to the
+        nearest stop-interval multiple (subject to ppo2_switch_tol)."""
+        mod = gas.mod(self.ppo2_deco, self.surface_p, self.msw_per_bar)
+        if mod <= 0:
+            return mod
+        snapped = round(mod / self.stop_interval) * self.stop_interval
+        if (snapped > mod and gas.ppo2(snapped, self.surface_p, self.msw_per_bar)
+                > self.ppo2_deco + self.ppo2_switch_tol + 1e-9):
+            snapped = math.floor(mod / self.stop_interval) * self.stop_interval
+        return snapped
+
     def best_gas(self, depth: float, bottom_gas: Gas) -> Gas:
         """Richest breathable gas for the ASCENT at `depth` (bottom + travel +
-        deco gases), capped at ppo2_deco and floored at ppo2_min."""
+        deco gases): floored at ppo2_min, switched in at switch_depth()."""
         candidates = [bottom_gas, *self.travel_gases, *self.deco_gases]
-        usable = [g for g in candidates if self._usable(g, depth, self.ppo2_deco)]
+        usable = [g for g in candidates
+                  if depth <= self.switch_depth(g) + 1e-9
+                  and g.ppo2(depth, self.surface_p, self.msw_per_bar)
+                  >= self.ppo2_min - 1e-9]
         if not usable:
             return bottom_gas
         return max(usable, key=lambda g: g.fO2)
@@ -309,14 +335,17 @@ def _round_up_to_stop(depth: float, interval: float) -> float:
 
 
 def _gas_switch_depths(plan: DivePlan, bottom_gas: Gas) -> List[float]:
-    """Depths (msw) where the breathable-gas choice can change: each gas MOD (at
-    both ppO2 ceilings) and each hypoxic mix's minimum breathable depth."""
+    """Depths (msw) where the breathable-gas choice can change: each gas's
+    (stop-rounded) ascent switch depth, its raw MOD at the descent ppO2
+    ceiling, and each hypoxic mix's minimum breathable depth."""
     depths = set()
     for g in (bottom_gas, *plan.travel_gases, *plan.deco_gases):
-        for ceiling_ppo2 in (plan.ppo2_bottom, plan.ppo2_deco):
-            mod = g.mod(ceiling_ppo2, plan.surface_p, plan.msw_per_bar)
-            if mod > 0:
-                depths.add(round(mod, 6))
+        mod_descent = g.mod(plan.ppo2_bottom, plan.surface_p, plan.msw_per_bar)
+        if mod_descent > 0:
+            depths.add(round(mod_descent, 6))
+        switch = plan.switch_depth(g)
+        if switch > 0:
+            depths.add(round(switch, 6))
         dmin = g.min_depth(plan.ppo2_min, plan.surface_p, plan.msw_per_bar)
         if dmin > 0:
             depths.add(round(dmin, 6))
@@ -383,6 +412,8 @@ def plan_dive(bottom_depth: float, bottom_time: float, bottom_gas: Gas,
     # ---- find first stop using GF-Low ----
     ceil_low = ceiling_depth(tissues, plan.gf_low, plan.surface_p, plan.msw_per_bar)
     first_stop_depth = _round_up_to_stop(ceil_low, plan.stop_interval)
+    if first_stop_depth > 0:
+        first_stop_depth = max(first_stop_depth, plan.last_stop_depth)
     if first_stop_depth <= 0:
         # No deco: ascend to the surface, switching to a breathable gas if the
         # bottom mix is hypoxic near the surface.
@@ -400,6 +431,10 @@ def plan_dive(bottom_depth: float, bottom_time: float, bottom_gas: Gas,
     current_depth = first_stop_depth
     while current_depth > 0:
         next_depth = max(0.0, current_depth - plan.stop_interval)
+        if next_depth < plan.last_stop_depth:
+            # below the last-stop depth there are no further stops
+            next_depth = (0.0 if current_depth <= plan.last_stop_depth + 1e-9
+                          else plan.last_stop_depth)
         p_next = depth_to_p_amb(next_depth, plan.surface_p, plan.msw_per_bar)
         gf_at_next = gf_at(p_next, plan.gf_low, plan.gf_high,
                            p_first_stop, plan.surface_p)
@@ -462,15 +497,13 @@ def time_to_surface(segments: Iterable[DiveSegment]) -> float:
 class GasPlan:
     """Consumption inputs. SAC = surface air consumption in litres/min at 1 bar."""
     sac: float                            # normal / working SAC
-    sac_stress: float                     # distress / emergency SAC
-    divers: int = 2                       # divers sharing gas in the emergency
+    sac_multiplier: float = 2.0           # emergency SAC = sac * sac_multiplier
     problem_minutes: float = 1.0          # time solving the problem at max depth
     tank_liters: Optional[float] = None   # total cylinder volume, for bar output
 
 
 def segment_gas_liters(segments: Iterable[DiveSegment], sac: float,
                        surface_p: float = P_ATM, msw_per_bar: float = MSW_PER_BAR,
-                       divers: int = 1,
                        kinds: Optional[Tuple[str, ...]] = None) -> float:
     """Litres breathed across `segments` at `sac`, using each segment's average
     depth. `kinds` optionally restricts which segment kinds are counted."""
@@ -480,25 +513,27 @@ def segment_gas_liters(segments: Iterable[DiveSegment], sac: float,
             continue
         avg_depth = (s.depth_start + s.depth_end) / 2.0
         ata = depth_to_p_amb(avg_depth, surface_p, msw_per_bar)
-        total += sac * ata * s.duration * divers
+        total += sac * ata * s.duration
     return total
 
 
 def rock_bottom_liters(bottom_depth: float, gas_plan: GasPlan,
                        ascent_rate: float = 10.0, surface_p: float = P_ATM,
                        msw_per_bar: float = MSW_PER_BAR) -> float:
-    """Minimum gas ("rock bottom") in litres for `gas_plan.divers` divers to leave
-    the worst point (max depth) and reach the surface in an emergency, breathing at
-    the stressed SAC: time solving the problem at depth plus a **direct** ascent to
-    the surface at `ascent_rate` (average ambient pressure = the mid-depth value).
+    """Minimum gas ("rock bottom") in litres for a single diver to leave the worst
+    point (max depth) and reach the surface in an emergency, breathing at the
+    emergency SAC (`sac * sac_multiplier`): time solving the problem at depth plus
+    a **direct** ascent to the surface at `ascent_rate` (average ambient pressure
+    = the mid-depth value).
 
     This is the standard minimum-gas reserve. It deliberately does not bill the full
-    decompression schedule to the back gas — in a lost/shared-gas scenario the team
+    decompression schedule to the back gas — in a lost-gas scenario the diver
     ascends and switches onto the deco gas — so the reserve stays realistic (a
     full-deco figure would be many hundreds of bar on a deep dive)."""
+    sac_emergency = gas_plan.sac * gas_plan.sac_multiplier
     p_max = depth_to_p_amb(bottom_depth, surface_p, msw_per_bar)
     p_avg = surface_p + (bottom_depth / 2.0) / msw_per_bar
     ascent_min = bottom_depth / ascent_rate if ascent_rate > 0 else 0.0
-    solve = gas_plan.sac_stress * p_max * gas_plan.problem_minutes * gas_plan.divers
-    ascent = gas_plan.sac_stress * p_avg * ascent_min * gas_plan.divers
+    solve = sac_emergency * p_max * gas_plan.problem_minutes
+    ascent = sac_emergency * p_avg * ascent_min
     return solve + ascent

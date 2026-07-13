@@ -1,0 +1,18 @@
+Unmodified files from the Subsurface dive log (https://github.com/subsurface/subsurface),
+branch master, pinned at commit:
+
+    8906b46cabbff93ecafd9f25a4565a1321383fac  (core/deco.cpp last touched 2026-02-05)
+
+Files (all from core/):
+    deco.cpp deco.h units.h gas.h divemode.h interpolate.h
+
+License: GPL-2.0 (see SPDX headers). These files are vendored here ONLY to be
+compiled into a test oracle (libsubsurface_deco.so) that eko-deco's output is
+compared against. Do NOT copy code from here into the eko-deco repo itself —
+eko-deco is MIT-licensed and must stay clean-room. Comparing numerical output
+is fine; copying GPL code is not.
+
+Re-fetch / bump:
+    for f in deco.cpp deco.h units.h gas.h divemode.h interpolate.h; do
+        curl -sL https://raw.githubusercontent.com/subsurface/subsurface/<SHA>/core/$f -o $f
+    done

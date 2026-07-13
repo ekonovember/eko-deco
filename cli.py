@@ -52,6 +52,7 @@ def _build_plan(args) -> b.DivePlan:
         descent_rate=args.descent_rate,
         ascent_rate=args.ascent_rate,
         stop_interval=args.stop_interval,
+        last_stop_depth=args.last_stop,
         gf_low=args.gf_low,
         gf_high=args.gf_high,
         travel_gases=tuple(parse_gas_spec(g)[0] for g in (args.travel_gas or [])),
@@ -76,8 +77,7 @@ def _args_gas_context(args):
         gases.append(("Deco", g, float(t or 0), pr if pr is not None else 232.0))
     if args.sac is None:
         return None, gases
-    sac_stress = args.sac_stress if args.sac_stress is not None else args.sac * 2.0
-    gp = b.GasPlan(sac=args.sac, sac_stress=sac_stress, divers=args.divers,
+    gp = b.GasPlan(sac=args.sac, sac_multiplier=args.sac_multiplier,
                    problem_minutes=args.problem_time)
     return gp, gases
 
@@ -86,17 +86,15 @@ def _config_from_args(args) -> dict:
     """Serialise the CLI dive into a dive_config dict (for --save)."""
     _gp, gases = _args_gas_context(args)
     sac = args.sac if args.sac is not None else 20.0
-    sac_stress = (args.sac_stress if args.sac_stress is not None
-                  else (args.sac * 2.0 if args.sac else 40.0))
     return {
         "depth_m": args.depth, "bottom_time_min": args.time,
         "gf_low": round(args.gf_low * 100), "gf_high": round(args.gf_high * 100),
-        "solo": args.divers == 1,
-        "sac_normal": sac, "sac_stress": sac_stress,
+        "sac_normal": sac, "sac_multiplier": args.sac_multiplier,
         "problem_minutes": args.problem_time,
         "ascent_rate": args.ascent_rate,
         "descent_rate": args.descent_rate,
         "stop_interval": args.stop_interval,
+        "last_stop_m": args.last_stop,
         "ppo2_bottom": args.ppo2_bottom,
         "ppo2_deco": args.ppo2_deco,
         "ppo2_min": args.ppo2_min,
@@ -116,8 +114,7 @@ def _percylinder_gas(segs, depth, bottom_gas, gp, gases, ascent_rate=10.0):
     role_by = {repr(g): role for (role, g, _t, _p) in gases}
     back_tank, back_pressure = next(((tk, pr) for (_r, g, tk, pr) in gases
                                      if g == bottom_gas), (0.0, 0.0))
-    team = "solo" if gp.divers == 1 else f"{gp.divers} divers"
-    lines = [f"Gas  SAC {gp.sac:g}/{gp.sac_stress:g} L/min, {team}:"]
+    lines = [f"Gas  SAC {gp.sac:g} L/min, emergency ×{gp.sac_multiplier:g}:"]
     cylinders, seen = [], []
     for s in segs:
         if repr(s.gas) in seen:
@@ -143,8 +140,9 @@ def _percylinder_gas(segs, depth, bottom_gas, gp, gases, ascent_rate=10.0):
                 lines.append(f"  {role} {s.gas!r}: {used:.0f} bar / {tk:.0f} L")
         cylinders.append(entry)
     rock = b.rock_bottom_liters(depth, gp, ascent_rate)
-    data = {"sac_normal_l_min": gp.sac, "sac_stress_l_min": gp.sac_stress,
-            "divers": gp.divers, "cylinders": cylinders, "rock_bottom_l": round(rock, 1)}
+    data = {"sac_normal_l_min": gp.sac, "sac_multiplier": gp.sac_multiplier,
+            "sac_emergency_l_min": gp.sac * gp.sac_multiplier,
+            "cylinders": cylinders, "rock_bottom_l": round(rock, 1)}
     if back_tank > 0:
         rock_bar = rock / back_tank
         data["rock_bottom_bar"] = round(rock_bar, 1)
@@ -331,6 +329,8 @@ def main(argv: List[str] | None = None) -> int:
     common.add_argument("--descent-rate", type=float, default=18.0, help="m/min")
     common.add_argument("--ascent-rate", type=float, default=10.0, help="m/min")
     common.add_argument("--stop-interval", type=float, default=3.0, help="m")
+    common.add_argument("--last-stop", type=float, default=3.0,
+                        help="shallowest stop depth in m (6 = Shearwater-style last stop at 6 m)")
     common.add_argument("--travel-gas", action="append",
                         help="Descent/travel gas for a hypoxic bottom mix. Repeatable.")
     common.add_argument("--deco-gas", action="append",
@@ -355,10 +355,9 @@ def main(argv: List[str] | None = None) -> int:
                     help="bottom gas, optional @tank e.g. air@24, 21/35@24")
     sp.add_argument("--sac", type=float,
                     help="Normal surface air consumption (L/min); enables gas planning.")
-    sp.add_argument("--sac-stress", type=float,
-                    help="Distress SAC (L/min) for rock bottom; default = 2x --sac.")
-    sp.add_argument("--divers", type=int, default=2,
-                    help="Divers sharing gas in the emergency (1 = solo). Default 2.")
+    sp.add_argument("--sac-multiplier", type=float, default=2.0,
+                    help="Emergency SAC multiplier for rock bottom (e.g. 1.5); "
+                         "emergency SAC = --sac x this. Default 2.0.")
     sp.add_argument("--problem-time", type=float, default=1.0,
                     help="Minutes solving the problem at max depth (rock bottom).")
     sp.add_argument("--tank-size", type=float,
