@@ -1,6 +1,21 @@
 {
-  "depth_m": 36.0,
-  "bottom_time_min": 20.0,
+  "levels": [
+    {
+      "depth_m": 25.0,
+      "runtime_min": 17.0,
+      "gas": null
+    },
+    {
+      "depth_m": 36.0,
+      "runtime_min": 40.0,
+      "gas": null
+    },
+    {
+      "depth_m": 20.0,
+      "runtime_min": 44.0,
+      "gas": null
+    }
+  ],
   "gf_low": 30,
   "gf_high": 70,
   "sac_normal": 20.0,
@@ -9,7 +24,7 @@
   "ascent_rate": 10.0,
   "descent_rate": 18.0,
   "stop_interval": 3.0,
-  "last_stop_m": 3.0,
+  "last_stop_m": 6.0,
   "ppo2_bottom": 1.4,
   "ppo2_deco": 1.6,
   "ppo2_min": 0.18,
@@ -17,7 +32,7 @@
   "gases": [
     {
       "role": "Bottom",
-      "o2": 21,
+      "o2": 28,
       "he": 0,
       "tank_l": 24.0,
       "pressure_bar": 220.0,

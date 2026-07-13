@@ -346,6 +346,87 @@ class TestSchedules(unittest.TestCase):
                 self.assertLessEqual(abs(eko_stops[0][0] - srf_stops[0][0]), 3.0)
 
 
+class TestMultilevel(unittest.TestCase):
+    """Multi-level profiles against the native Subsurface model. The schedule
+    loop is ours on both sides, so this pins the *tissue* consequences of the
+    level-by-level profile (Baker's oracle pins the planner convention)."""
+
+    # name, eko levels, oracle levels [(depth, runtime, gas|None)], gf
+    CASES = [
+        ("45->30->18 air +EAN50",
+         [b.Level(45, 25), b.Level(30, 40), b.Level(18, 55)],
+         [(45, 25, None), (30, 40, None), (18, 55, None)], (30, 80)),
+        ("60->40->20 trimix +EAN50+O2",
+         [b.Level(60, 20), b.Level(40, 35), b.Level(20, 50)],
+         [(60, 20, None), (40, 35, None), (20, 50, None)], (30, 85)),
+        ("second level deeper: 30 -> 45",
+         [b.Level(30, 15), b.Level(45, 30)],
+         [(30, 15, None), (45, 30, None)], (30, 80)),
+    ]
+
+    def test_multilevel_schedules(self):
+        for name, levels, srf_levels, gf in self.CASES:
+            with self.subTest(name):
+                trimix = "trimix" in name
+                ge = b.Gas(0.18, 0.45) if trimix else EKO_AIR
+                gs = Gas(180, 450) if trimix else SRF_AIR
+                dge = [b.Gas(0.50), b.Gas(1.00)] if trimix else [b.Gas(0.50)]
+                dgs = [Gas(500), Gas(1000)] if trimix else [Gas(500)]
+
+                plan = eko_plan(gf, dge)
+                segs, _ = b.plan_multilevel(levels, ge, plan,
+                                            start_tissues=surface_tissues())
+                eko_stops = [(s.depth_start, s.duration) for s in segs
+                             if s.kind == "stop"]
+                eko_tts = b.time_to_surface(segs)
+
+                d = SubsurfaceDeco(gf_low=gf[0], gf_high=gf[1])
+                stops, srf_tts = d.plan_levels(srf_levels, gs, deco_gases=dgs)
+                srf_stops = [(s.depth_m, s.minutes) for s in stops]
+
+                detail = (f"\n  eko:        {eko_stops} TTS {eko_tts:.1f}"
+                          f"\n  subsurface: {srf_stops} TTS {srf_tts:.1f}")
+                self.assertLessEqual(abs(eko_tts - srf_tts), 4.0,
+                                     msg="TTS" + detail)
+                e, s = dict(eko_stops), dict(srf_stops)
+                for stop in sorted(set(e) | set(s), reverse=True):
+                    self.assertLessEqual(
+                        abs(e.get(stop, 0.0) - s.get(stop, 0.0)), 2.0,
+                        msg=f"stop {stop} m" + detail)
+
+    def test_tissue_state_after_the_levels(self):
+        """The whole point of multi-level: the tissue loading left behind by a
+        level-by-level bottom phase must match the reference model. Both engines
+        are driven through the same profile with the deco ascent left off, so
+        only the ramp discretization separates them (observed ≤ 2e-3 bar)."""
+        levels = [b.Level(45, 25), b.Level(30, 40), b.Level(18, 55)]
+        surf, mpb = surface_bar(), msw_per_bar()
+
+        eko = surface_tissues()
+        oracle = SubsurfaceDeco(gf_low=30, gf_high=80)
+        oracle.clear()
+        run = depth = 0.0
+        for lv in levels:
+            rate = 18.0 if lv.depth > depth else 10.0
+            travel = abs(lv.depth - depth) / rate
+            b.update_tissues(eko, EKO_AIR, b.depth_to_p_amb(depth, surf, mpb),
+                             b.depth_to_p_amb(lv.depth, surf, mpb), travel)
+            oracle.add_ramp(depth, lv.depth, rate, SRF_AIR)
+
+            flat = lv.runtime - (run + travel)
+            p = b.depth_to_p_amb(lv.depth, surf, mpb)
+            b.update_tissues(eko, EKO_AIR, p, p, flat)
+            oracle.add_flat(lv.depth, SRF_AIR, int(round(flat * 60)))
+            run, depth = lv.runtime, lv.depth
+
+        n2, he = oracle.tissues()
+        for i in range(16):
+            self.assertAlmostEqual(eko.pN2[i], n2[i], delta=5e-3,
+                                   msg=f"N2 compartment {i} after the levels")
+            self.assertAlmostEqual(eko.pHe[i], he[i], delta=5e-3,
+                                   msg=f"He compartment {i} after the levels")
+
+
 class TestRepetitiveDive(unittest.TestCase):
     """Two dives with a 45 min surface interval; the second carries residual
     loading into deco. Compares the second schedule and the final tissue

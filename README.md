@@ -25,9 +25,13 @@ Erik Baker's gradient factors — a zero-dependency core, plus a CLI and a Tkint
   `P_amb_tol = (P_comp − a·GF) / (GF/b + 1 − GF)`,
   linearly interpolated between GF-Low at the first stop and GF-High at the
   surface.
-- Square-profile planner with automatic first-stop detection, 3 m stops
-  (last stop 3 m or 6 m), and best-gas selection: deco gases switch at their MOD
-  (ppO₂ ≤ 1.6) snapped to a standard stop depth — O₂ at the 6 m stop, EAN50 at 21 m.
+- **Multi-level planning**: a dive is a list of levels (depth + runtime, each
+  with an optional gas — otherwise the planner breathes the gas relevant at that
+  depth), not just one square bottom. A level shallower than the ceiling is
+  flagged rather than silently planned.
+- Automatic first-stop detection, 3 m stops (last stop 3 m or 6 m), and best-gas
+  selection: deco gases switch at their MOD (ppO₂ ≤ 1.6) snapped to a standard
+  stop depth — O₂ at the 6 m stop, EAN50 at 21 m.
 - Multi-gas support: bottom + multiple acceleration/deco gases + travel gases,
   switched automatically by ppO₂ window (MOD ceiling + hypoxia floor). Handles
   hypoxic trimixes (e.g. 10/70) that need a travel gas near the surface.
@@ -35,7 +39,9 @@ Erik Baker's gradient factors — a zero-dependency core, plus a CLI and a Tkint
   emergency SAC multiplier (e.g. 1.5) and a problem-solving time, plus
   Time-To-Surface (TTS).
 - Lost-deco-gas contingencies in the GUI: the schedule re-planned without each
-  deco gas (and without all of them), with per-scenario gas usage in litres.
+  deco gas (and without all of them), with per-scenario gas usage showing what
+  the dive **needs against what you actually carry** (tank size × fill pressure),
+  bar remaining, and a `SHORT!` flag when a contingency outruns a cylinder.
 - Ratio Deco (GUE/UTD) utility with standard gases and a Bühlmann cross-check.
 - Shared JSON config (`dive_plan.json`): the GUI and the CLI read/write the same
   dive, so `cli.py plan --save` shows up in the app on Reload and vice-versa.
@@ -47,15 +53,18 @@ Erik Baker's gradient factors — a zero-dependency core, plus a CLI and a Tkint
 
 Run `python app.py` for the visual planner shown above:
 
-- **Left** — every input: depth and bottom time as numeric up/downs on one row,
-  gradient factors and a **Last stop 6 m** switch (Shearwater/MultiDeco style),
-  an editable gas stack (bottom / travel / deco, each with its
-  own O₂, He, tank and fill, and a **use** checkbox to leave a gas out of the
-  plan without deleting it), SAC and the emergency SAC multiplier, plus
-  **Save / Reload** of the shared `dive_plan.json`.
+- **Left** — every input: gradient factors and a **Last stop 6 m** switch
+  (Shearwater/MultiDeco style); an editable **Levels** list — add a level per
+  row (depth, runtime, and a gas picked from the gases below — or `auto`, which
+  breathes whatever is relevant at that depth) to plan a multi-level dive; an
+  editable gas stack (bottom / travel / deco, each with its own O₂, He, tank and
+  fill, and a **use** checkbox to leave a gas out of the plan without deleting
+  it); SAC and the emergency SAC multiplier; plus **Save / Reload** of the
+  shared `dive_plan.json`.
 - **Centre** — results as framed cards (gas, dive summary, the MultiDeco-style
-  stops + lost-deco-gas scenario table, per-scenario gas usage, per-cylinder gas
-  + rock bottom, Ratio-Deco cross-check) and a printable **runtime** wetnotes
+  stops + lost-deco-gas scenario table, per-scenario gas usage (need / have per
+  cylinder), per-cylinder gas + rock bottom, Ratio-Deco cross-check) and a
+  printable **runtime** wetnotes
   card — with the contingency columns — exportable to PNG with the
   `<//> eko-deco` mark.
 - **Right** — the depth-vs-time profile: the Bühlmann GF ascent with stops and
@@ -83,6 +92,13 @@ python cli.py plan --depth 30 --time 25 --gas air
 # Tech with deco gases
 python cli.py plan --depth 45 --time 25 --gas 21/35 \
     --deco-gas 50 --deco-gas 100 --gf-low 0.30 --gf-high 0.70
+
+# Multi-level: RUNTIME is cumulative (minutes since the surface, at the END of the level)
+python cli.py plan --level 45:25 --level 30:40 --level 18:55 \
+    --gas 21/35 --deco-gas 50 --deco-gas 100
+
+# ...with a gas forced on a level (deep bottom mix, then a shallower leg)
+python cli.py plan --level 120:20:10/70 --level 45:40 --gas 10/70 --travel-gas 35/25
 
 # Last stop at 6 m instead of 3 m (Shearwater/MultiDeco style)
 python cli.py plan --depth 45 --time 25 --gas 21/35 --deco-gas 50 --last-stop 6
@@ -113,6 +129,12 @@ rock bottom. Add `--json` to any command for machine-readable output.
 Deco-gas switches happen at standard stop depths (O₂ at the 6 m stop, EAN50
 at 21 m), the way dive computers plan them, with a small ppO₂ tolerance for
 the rounding.
+
+A dive is one or more **levels**. `--depth/--time` is the square-profile
+shorthand for a single level; `--level DEPTH:RUNTIME[:GAS]` (repeatable) plans a
+multi-level dive. **Runtime is cumulative** — minutes since leaving the surface,
+at the *end* of that level, descent included — which is how MultiDeco, Baker's
+GFDECO and Subsurface all take a profile.
 
 There are more knobs than shown above — ascent/descent/stop rates, the
 shallowest-stop depth (`--last-stop`), the ppO₂
@@ -147,7 +169,7 @@ claim is enforced by tests, not asserted:
 | Reference | How | Agreement |
 |---|---|---|
 | [Subsurface](https://github.com/subsurface/subsurface) `deco.cpp` | its **unmodified C++** compiled on the fly into a test oracle and driven over ctypes | tissue loading, M-value ceilings and the GF line to **machine precision**; NDLs exact at GF 100/100 |
-| Erik Baker's `GFDECO` | his **original Fortran** — the published reference for the GF convention — compiled and run | ≤ **1 min** per stop, ≤ 1.3 min TTS |
+| Erik Baker's `GFDECO` | his **original Fortran** — the published reference for the GF convention — compiled and run | ≤ **1 min** per stop, ≤ 1.3 min TTS — **square *and* multi-level** |
 | MultiDeco | golden schedules, including every lost-gas column | no-loss plan matches **to the minute** |
 | Shearwater | the worked planner example in the Perdix 2 manual (GF 30/70, its stated rates) | runtime and TTS match **exactly** |
 

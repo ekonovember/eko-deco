@@ -246,6 +246,10 @@ class DiveSegment:
     duration: float
     gas: Gas
     gf_used: Optional[float] = None  # for stops / ceiling at end
+    # Set on a level that sits shallower than the decompression ceiling at that
+    # point (only reachable on a multi-level profile): the ceiling depth in msw.
+    # The schedule is still computed — the profile is the diver's to fix.
+    ceiling_m: Optional[float] = None
 
     def as_dict(self) -> dict:
         return {
@@ -255,7 +259,26 @@ class DiveSegment:
             "duration_min": round(self.duration, 2),
             "gas": repr(self.gas),
             "gf_used": None if self.gf_used is None else round(self.gf_used, 3),
+            "ceiling_m": None if self.ceiling_m is None else round(self.ceiling_m, 2),
         }
+
+
+@dataclass(frozen=True)
+class Level:
+    """One leg of a multi-level bottom phase.
+
+    depth    msw
+    runtime  minutes since leaving the surface, at the END of this level
+             (descent included — the same meaning `bottom_time` has always had,
+             and what MultiDeco / Baker's GFDECO / Subsurface take as input)
+    gas      breathe this mix for the level and the travel leg into it;
+             None ("auto") = the gas that is relevant at that depth: the bottom
+             mix while it is breathable, a travel mix where it is not
+             (`DivePlan.descent_gas`)
+    """
+    depth: float
+    runtime: float
+    gas: Optional[Gas] = None
 
 
 @dataclass
@@ -354,10 +377,14 @@ def _gas_switch_depths(plan: DivePlan, bottom_gas: Gas) -> List[float]:
 
 def _move(tissues: Tissues, segs: List[DiveSegment], plan: DivePlan,
           bottom_gas: Gas, from_depth: float, to_depth: float, gas_for,
-          kind: str, p_first_stop: float) -> None:
+          kind: str, p_first_stop: Optional[float]) -> None:
     """Change depth continuously from `from_depth` to `to_depth`, splitting into
     sub-segments at gas-switch depths and loading tissues with the gas chosen
-    (by `gas_for`) for each sub-segment."""
+    (by `gas_for`) for each sub-segment.
+
+    `p_first_stop` anchors the gradient-factor line for the deco ascent; pass
+    None for legs that are not part of it (travel between levels), so they are
+    not annotated with a GF they never used."""
     if abs(to_depth - from_depth) < 1e-9:
         return
     descending = to_depth > from_depth
@@ -379,7 +406,7 @@ def _move(tissues: Tissues, segs: List[DiveSegment], plan: DivePlan,
         t = abs(c - a) / rate
         update_tissues(tissues, gas, p_a, p_c, t)
         gf = (gf_at(p_c, plan.gf_low, plan.gf_high, p_first_stop, plan.surface_p)
-              if kind == "ascent" else None)
+              if kind == "ascent" and p_first_stop is not None else None)
         segs.append(DiveSegment(kind, a, c, t, gas, gf_used=gf))
 
 
@@ -391,23 +418,88 @@ def plan_dive(bottom_depth: float, bottom_time: float, bottom_gas: Gas,
 
     `bottom_time` is the total runtime to leaving the bottom (descent + flat).
     Returns the segment list and the final tissue state.
+
+    A square dive is a one-level dive: this is `plan_multilevel` with a single
+    `Level`.
     """
+    return plan_multilevel([Level(bottom_depth, bottom_time)], bottom_gas,
+                           plan, start_tissues)
+
+
+def plan_multilevel(levels: Sequence[Level], bottom_gas: Gas,
+                    plan: DivePlan = DivePlan(),
+                    start_tissues: Optional[Tissues] = None
+                    ) -> Tuple[List[DiveSegment], Tissues]:
+    """Plan a multi-level dive: a sequence of levels, then the deco ascent.
+
+    Each `Level.runtime` is the runtime (minutes since leaving the surface) at
+    the END of that level, so the levels are cumulative and must increase. The
+    diver travels between levels at the plan's descent/ascent rate; the travel
+    time is part of the runtime, exactly as on the initial descent.
+
+    Gas during the bottom phase is the level's gas when it names one, otherwise
+    the bottom gas (with travel mixes substituted where the bottom mix is not
+    breathable) — deco gases are only switched to on the final ascent.
+
+    A level shallower than the decompression ceiling is *not* an error: the
+    schedule is still computed and the offending level's `DiveSegment.ceiling_m`
+    records the ceiling it broke (Baker's GFDECO warns about the same thing).
+
+    Returns the segment list and the final tissue state.
+    """
+    if not levels:
+        raise ValueError("a dive needs at least one level")
+    for i, (prev, cur) in enumerate(zip(levels, levels[1:]), start=2):
+        if cur.runtime <= prev.runtime:
+            raise ValueError(
+                f"level {i} runtime ({cur.runtime:g} min) must be later than "
+                f"level {i - 1}'s ({prev.runtime:g} min) — runtimes are "
+                f"cumulative, i.e. minutes since leaving the surface")
+
     tissues = (start_tissues.copy() if start_tissues
                else Tissues.at_surface(plan.surface_p, AIR))
     segs: List[DiveSegment] = []
     descent_gas_for = lambda d: plan.descent_gas(d, bottom_gas)
     ascent_gas_for = lambda d: plan.best_gas(d, bottom_gas)
 
-    # ---- descent (switches travel -> bottom gas as it becomes breathable) ----
-    _move(tissues, segs, plan, bottom_gas, 0.0, bottom_depth,
-          descent_gas_for, "descent", plan.surface_p)
-    t_desc = bottom_depth / plan.descent_rate
+    # ---- levels: travel to each in turn, then hold it until its runtime ------
+    run = 0.0
+    depth = 0.0
+    for i, level in enumerate(levels, start=1):
+        going_down = level.depth > depth
+        # Bottom-phase gas rule: the level's own mix if it names one, else the
+        # bottom gas (descent_gas swaps in a travel mix where it is hypoxic).
+        gas_for = ((lambda d, g=level.gas: g) if level.gas is not None
+                   else descent_gas_for)
+        _move(tissues, segs, plan, bottom_gas, depth, level.depth, gas_for,
+              "descent" if going_down else "ascent", None)
+        run += abs(level.depth - depth) / (plan.descent_rate if going_down
+                                           else plan.ascent_rate)
+        depth = level.depth
 
-    # ---- bottom ----
-    p_bot = depth_to_p_amb(bottom_depth, plan.surface_p, plan.msw_per_bar)
-    t_flat = max(0.0, bottom_time - t_desc)
-    update_tissues(tissues, bottom_gas, p_bot, p_bot, t_flat)
-    segs.append(DiveSegment("bottom", bottom_depth, bottom_depth, t_flat, bottom_gas))
+        # Shallower than the ceiling? Worst right on arrival, before off-gassing.
+        ceil = ceiling_depth(tissues, plan.gf_low, plan.surface_p, plan.msw_per_bar)
+        violated = ceil if ceil > depth + 1e-6 else None
+
+        t_flat = level.runtime - run
+        if t_flat < -1e-9:
+            raise ValueError(
+                f"level {i} runtime ({level.runtime:g} min) is before the diver "
+                f"even reaches {level.depth:g} m (arrives at {run:.1f} min)")
+        t_flat = max(0.0, t_flat)
+        # Auto: the gas that is actually relevant at this depth — the bottom mix
+        # while it is breathable, a travel mix where it is not (deep enough to
+        # blow the ppO2 ceiling, or too shallow for a hypoxic mix). Same rule as
+        # the travel legs; on a normal dive it simply is the bottom gas.
+        gas_here = (level.gas if level.gas is not None
+                    else plan.descent_gas(depth, bottom_gas))
+        p_level = depth_to_p_amb(depth, plan.surface_p, plan.msw_per_bar)
+        update_tissues(tissues, gas_here, p_level, p_level, t_flat)
+        segs.append(DiveSegment("bottom", depth, depth, t_flat, gas_here,
+                                ceiling_m=violated))
+        run = level.runtime
+
+    bottom_depth = depth
 
     # ---- find first stop using GF-Low ----
     ceil_low = ceiling_depth(tissues, plan.gf_low, plan.surface_p, plan.msw_per_bar)
@@ -484,9 +576,47 @@ def total_runtime(segments: Iterable[DiveSegment]) -> float:
     return sum(s.duration for s in segments)
 
 
+def max_depth(levels: Sequence[Level]) -> float:
+    """Deepest level (msw) — the depth rock-bottom gas is reserved for."""
+    return max(l.depth for l in levels) if levels else 0.0
+
+
+def _bottom_phase_end(segments: Sequence[DiveSegment]) -> int:
+    """Index just past the last level. Everything before it is the bottom phase
+    (descent + levels + the travel legs between them); everything after it is
+    the decompression ascent. On a multi-level dive the legs *between* levels
+    are ascents too, so a plain kind filter would mistake them for deco."""
+    last = -1
+    for i, s in enumerate(segments):
+        if s.kind == "bottom":
+            last = i
+    return last + 1
+
+
+def average_depth(segments: Iterable[DiveSegment]) -> float:
+    """Time-weighted mean depth of the bottom phase. Ratio Deco is defined on
+    the average depth, which on a square profile is just the max depth."""
+    segs = list(segments)
+    total_t = weighted = 0.0
+    for s in segs[:_bottom_phase_end(segs)]:
+        weighted += (s.depth_start + s.depth_end) / 2.0 * s.duration
+        total_t += s.duration
+    return weighted / total_t if total_t > 0 else 0.0
+
+
+def ceiling_violations(segments: Iterable[DiveSegment]) -> List[DiveSegment]:
+    """Levels that sat shallower than the decompression ceiling."""
+    return [s for s in segments if s.ceiling_m is not None]
+
+
 def time_to_surface(segments: Iterable[DiveSegment]) -> float:
-    """TTS — minutes from leaving the bottom to surfacing (all ascent + stop time)."""
-    return sum(s.duration for s in segments if s.kind in ("ascent", "stop"))
+    """TTS — minutes from leaving the bottom to surfacing (ascent + stop time).
+
+    Only the final ascent counts: travel between levels is bottom time, not TTS.
+    """
+    segs = list(segments)
+    return sum(s.duration for s in segs[_bottom_phase_end(segs):]
+               if s.kind in ("ascent", "stop"))
 
 
 # -----------------------------------------------------------------------------

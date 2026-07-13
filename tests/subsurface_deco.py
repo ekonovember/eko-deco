@@ -246,16 +246,36 @@ class SubsurfaceDeco:
              ascent_rate: float = 10.0, stop_interval: float = 3.0,
              from_current: bool = False,
              max_minutes: float = 24 * 60) -> Tuple[List[Stop], float]:
-        """Square-profile schedule. bottom_time includes the descent (same
-        semantics as eko-deco plan_dive). from_current=True continues from the
-        present tissue state (repetitive dive) instead of a fresh surface
-        saturation. Returns (stops, time-to-surface)."""
+        """Square-profile schedule — a one-level dive."""
+        return self.plan_levels([(bottom_depth, bottom_time, None)], bottom_gas,
+                                deco_gases, descent_rate, ascent_rate,
+                                stop_interval, from_current, max_minutes)
+
+    def plan_levels(self, levels: Sequence[Tuple[float, float, Optional[Gas]]],
+                    bottom_gas: Gas, deco_gases: Sequence[Gas] = (),
+                    descent_rate: float = 18.0, ascent_rate: float = 10.0,
+                    stop_interval: float = 3.0, from_current: bool = False,
+                    max_minutes: float = 24 * 60) -> Tuple[List[Stop], float]:
+        """Multi-level schedule. `levels` is [(depth, runtime, gas|None)] where
+        runtime is the run time at the END of the level (descent included) and
+        gas None = the bottom gas (the oracle's profiles never need the
+        travel-mix substitution) — matching eko-deco's `Level`. from_current=True continues from the present tissue state
+        (repetitive dive). Returns (stops, time-to-surface: the final ascent
+        only, travel between levels is bottom time)."""
         gases = [bottom_gas, *deco_gases]
         if not from_current:
             self.clear()
-        t_desc = self.add_ramp(0.0, bottom_depth, descent_rate, bottom_gas)
-        flat_s = int(round(max(0.0, bottom_time - t_desc) * 60.0))
-        self.add_flat(bottom_depth, bottom_gas, flat_s)
+
+        run = 0.0
+        depth = 0.0
+        for level_depth, runtime, level_gas in levels:
+            gas = level_gas or bottom_gas
+            rate = descent_rate if level_depth > depth else ascent_rate
+            run += self.add_ramp(depth, level_depth, rate, gas)
+            self.add_flat(level_depth, gas, int(round(max(0.0, runtime - run) * 60.0)))
+            run = runtime
+            depth = level_depth
+        bottom_depth = depth
 
         stops: List[Stop] = []
         tts = 0.0

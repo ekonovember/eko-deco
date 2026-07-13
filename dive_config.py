@@ -8,7 +8,10 @@ an agent.
 Schema::
 
     {
-      "depth_m": 45, "bottom_time_min": 10,
+      "levels": [
+        {"depth_m": 45, "runtime_min": 25, "gas": null},
+        {"depth_m": 30, "runtime_min": 40, "gas": {"o2": 32, "he": 0}}
+      ],
       "gf_low": 30, "gf_high": 70,
       "sac_normal": 20, "sac_multiplier": 2.0, "problem_minutes": 1,
       "ascent_rate": 10, "descent_rate": 18, "stop_interval": 3, "last_stop_m": 3,
@@ -23,6 +26,15 @@ Schema::
 
 Roles: ``Bottom`` (back gas), ``Travel`` (descent gas for hypoxic mixes), ``Deco``.
 ``enabled: false`` keeps a gas in the list but leaves it out of the plan.
+
+``levels`` is the dive profile, one entry per level. ``runtime_min`` is the
+runtime at the **end** of that level — cumulative minutes since leaving the
+surface, descent included — so the values must increase down the list. A level's
+``gas`` forces a mix for that level; ``null`` ("auto") lets the planner use the
+gas that is relevant at that depth — the bottom mix while it is breathable, a
+travel mix where it is not. A
+square profile is simply a single level. Configs written before multi-level
+support (``depth_m`` + ``bottom_time_min``) are migrated to one level on load.
 """
 
 from __future__ import annotations
@@ -39,8 +51,7 @@ DEFAULT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dive_pl
 
 def default_config() -> dict:
     return {
-        "depth_m": 45.0,
-        "bottom_time_min": 10.0,
+        "levels": [{"depth_m": 45.0, "runtime_min": 10.0, "gas": None}],
         "gf_low": 30,
         "gf_high": 70,
         "sac_normal": 20.0,
@@ -78,7 +89,7 @@ def save(cfg: dict, path: str = DEFAULT_PATH) -> str:
     return path
 
 
-LEGACY_KEYS = ("solo", "sac_stress")
+LEGACY_KEYS = ("solo", "sac_stress", "depth_m", "bottom_time_min")
 
 
 def _merged(cfg: dict) -> dict:
@@ -90,10 +101,33 @@ def _merged(cfg: dict) -> dict:
     if "sac_multiplier" not in cfg and "sac_stress" in cfg:
         sac = float(cfg.get("sac_normal", base["sac_normal"])) or 1.0
         base["sac_multiplier"] = round(float(cfg["sac_stress"]) / sac, 2)
+    # Legacy configs were square-profile only: one depth + one bottom time.
+    # That is a single level, and bottom_time_min already meant "runtime at the
+    # end of the bottom", so it carries over unchanged.
+    if "levels" not in cfg and "depth_m" in cfg:
+        base["levels"] = [_merge_level({
+            "depth_m": cfg["depth_m"],
+            "runtime_min": cfg.get("bottom_time_min",
+                                   default_config()["levels"][0]["runtime_min"]),
+        })]
+    elif cfg.get("levels"):
+        base["levels"] = [_merge_level(l) for l in cfg["levels"]]
+    # A dive always has at least one level: never let an empty list through
+    # (it would leave the planner with no profile at all).
+    if not base.get("levels"):
+        base["levels"] = default_config()["levels"]
     gases = cfg.get("gases")
     if gases:
         base["gases"] = [_merge_gas(g) for g in gases]
     return base
+
+
+def _merge_level(l: dict) -> dict:
+    gas = l.get("gas")
+    return {"depth_m": float(l.get("depth_m", 30.0)),
+            "runtime_min": float(l.get("runtime_min", 20.0)),
+            "gas": ({"o2": int(gas["o2"]), "he": int(gas.get("he", 0))}
+                    if gas else None)}
 
 
 def _merge_gas(g: dict) -> dict:
@@ -107,6 +141,14 @@ def _merge_gas(g: dict) -> dict:
 
 def gas_of(g: dict) -> b.Gas:
     return b.Gas(g["o2"] / 100.0, g.get("he", 0) / 100.0)
+
+
+def levels_of(cfg: dict) -> List[b.Level]:
+    """The dive profile as ``buhlmann.Level`` objects (runtime is cumulative)."""
+    cfg = _merged(cfg)
+    return [b.Level(l["depth_m"], l["runtime_min"],
+                    gas_of(l["gas"]) if l.get("gas") else None)
+            for l in cfg["levels"]]
 
 
 def to_buhlmann(cfg: dict) -> Tuple[b.Gas, b.DivePlan, b.GasPlan, List[tuple]]:

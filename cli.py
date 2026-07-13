@@ -47,6 +47,31 @@ def parse_gas_spec(spec: str):
     return gas, tank, pressure
 
 
+def parse_level(spec: str) -> b.Level:
+    """Parse a level as 'DEPTH:RUNTIME[:GAS]', e.g. '45:25' or '120:20:10/70'.
+
+    RUNTIME is the runtime in minutes at the END of the level (cumulative,
+    descent included). GAS forces a mix for the level; omit it to breathe the
+    bottom gas."""
+    parts = spec.split(":")
+    if len(parts) not in (2, 3):
+        raise ValueError(f"level '{spec}': expected DEPTH:RUNTIME[:GAS], "
+                         "e.g. 45:25 or 120:20:10/70")
+    try:
+        depth, runtime = float(parts[0]), float(parts[1])
+    except ValueError:
+        raise ValueError(f"level '{spec}': depth and runtime must be numbers")
+    gas = parse_gas(parts[2]) if len(parts) == 3 and parts[2].strip() else None
+    return b.Level(depth, runtime, gas)
+
+
+def _args_levels(args) -> List[b.Level]:
+    """Levels from --level (repeatable), or the --depth/--time shorthand."""
+    if args.level:
+        return [parse_level(spec) for spec in args.level]
+    return [b.Level(args.depth, args.time)]
+
+
 def _build_plan(args) -> b.DivePlan:
     return b.DivePlan(
         descent_rate=args.descent_rate,
@@ -87,7 +112,11 @@ def _config_from_args(args) -> dict:
     _gp, gases = _args_gas_context(args)
     sac = args.sac if args.sac is not None else 20.0
     return {
-        "depth_m": args.depth, "bottom_time_min": args.time,
+        "levels": [{"depth_m": l.depth, "runtime_min": l.runtime,
+                    "gas": (None if l.gas is None
+                            else {"o2": round(l.gas.fO2 * 100),
+                                  "he": round(l.gas.fHe * 100)})}
+                   for l in _args_levels(args)],
         "gf_low": round(args.gf_low * 100), "gf_high": round(args.gf_high * 100),
         "sac_normal": sac, "sac_multiplier": args.sac_multiplier,
         "problem_minutes": args.problem_time,
@@ -169,20 +198,31 @@ def cmd_plan(args) -> int:
                   file=sys.stderr)
         cfg = dc.load(load_path)
         bottom, plan, gp, gas_rows = dc.to_buhlmann(cfg)
-        depth, time = cfg["depth_m"], cfg["bottom_time_min"]
+        levels = dc.levels_of(cfg)
         gf_low, gf_high = cfg["gf_low"] / 100.0, cfg["gf_high"] / 100.0
     else:
-        if args.depth is None or args.time is None:
-            print("plan: --depth and --time are required "
-                  "(or pass a config file / --load).", file=sys.stderr)
+        if not args.level and (args.depth is None or args.time is None):
+            print("plan: --depth and --time (or --level DEPTH:RUNTIME) are "
+                  "required (or pass a config file / --load).", file=sys.stderr)
             return 2
         bottom = parse_gas_spec(args.gas)[0]
         plan = _build_plan(args)
-        depth, time = args.depth, args.time
+        try:
+            levels = _args_levels(args)
+        except ValueError as e:
+            print(f"plan: {e}", file=sys.stderr)
+            return 2
         gf_low, gf_high = args.gf_low, args.gf_high
         gp, gas_rows = _args_gas_context(args)
 
-    segs, tissues = b.plan_dive(depth, time, bottom, plan)
+    try:
+        segs, tissues = b.plan_multilevel(levels, bottom, plan)
+    except ValueError as e:
+        print(f"plan: {e}", file=sys.stderr)
+        return 2
+    depth = b.max_depth(levels)
+    avg_depth = b.average_depth(segs)
+    violations = b.ceiling_violations(segs)
     model_label = f"Bühlmann GF {int(gf_low * 100)}/{int(gf_high * 100)}"
     surface_ceiling = b.ceiling_depth(tissues, gf_high)
     tts = b.time_to_surface(segs)
@@ -195,13 +235,20 @@ def cmd_plan(args) -> int:
     if args.json:
         out = {
             "model": model_label,
-            "input": {"depth_m": depth, "bottom_time_min": time, "gas": repr(bottom),
-                       "travel_gases": [repr(g) for g in plan.travel_gases],
-                       "deco_gases": [repr(g) for g in plan.deco_gases]},
+            "input": {"levels": [{"depth_m": l.depth, "runtime_min": l.runtime,
+                                  "gas": None if l.gas is None else repr(l.gas)}
+                                 for l in levels],
+                      "max_depth_m": round(depth, 2),
+                      "avg_depth_m": round(avg_depth, 2),
+                      "gas": repr(bottom),
+                      "travel_gases": [repr(g) for g in plan.travel_gases],
+                      "deco_gases": [repr(g) for g in plan.deco_gases]},
             "segments": [s.as_dict() for s in segs],
             "total_runtime_min": round(b.total_runtime(segs), 2),
             "tts_min": round(tts, 2),
             "final_ceiling_m": round(surface_ceiling, 2),
+            "warnings": [f"level at {s.depth_start:g} m is above the "
+                         f"{s.ceiling_m:.1f} m ceiling" for s in violations],
         }
         if gas_data is not None:
             out["gas"] = gas_data
@@ -210,8 +257,14 @@ def cmd_plan(args) -> int:
         print(json.dumps(out, indent=2))
         return 0
 
-    print(f"\nDive plan  {model_label}  "
-          f"bottom {depth:g} m for {time:g} min on {bottom!r}")
+    if len(levels) == 1:
+        profile = f"bottom {depth:g} m for {levels[0].runtime:g} min"
+    else:
+        profile = " → ".join(f"{l.depth:g} m @ {l.runtime:g} min" for l in levels)
+        profile = f"{len(levels)} levels: {profile}"
+    print(f"\nDive plan  {model_label}  {profile} on {bottom!r}")
+    if len(levels) > 1:
+        print(f"Max depth {depth:g} m · average depth {avg_depth:.1f} m")
     if plan.travel_gases:
         print(f"Travel gases: {', '.join(repr(g) for g in plan.travel_gases)}")
     if plan.deco_gases:
@@ -227,6 +280,9 @@ def cmd_plan(args) -> int:
     print(f"Total runtime: {b.total_runtime(segs):.1f} min    "
           f"Time to surface (TTS): {tts:.1f} min")
     print(f"Surface ceiling at GF-High: {surface_ceiling:.2f} m")
+    for s in violations:
+        print(f"⚠  level at {s.depth_start:g} m is ABOVE the decompression "
+              f"ceiling ({s.ceiling_m:.1f} m) — the profile itself violates deco")
     for line in gas_lines:
         print(line)
     if saved_to:
@@ -349,8 +405,15 @@ def main(argv: List[str] | None = None) -> int:
     sp.add_argument("config", nargs="?",
                     help="dive config JSON to load (same as --load), "
                          "e.g. `python cli.py plan dive_plan.json`.")
-    sp.add_argument("--depth", type=float, help="bottom depth (m)")
-    sp.add_argument("--time", type=float, help="bottom time (min)")
+    sp.add_argument("--depth", type=float, help="bottom depth (m); square dive")
+    sp.add_argument("--time", type=float,
+                    help="bottom time (min); runtime at the end of the bottom")
+    sp.add_argument("--level", action="append",
+                    help="multi-level dive: DEPTH:RUNTIME[:GAS], e.g. 45:25 or "
+                         "120:20:10/70. RUNTIME is cumulative (minutes since the "
+                         "surface, at the END of the level). GAS is optional — "
+                         "without it the planner uses the gas relevant at that "
+                         "depth. Repeatable; replaces --depth/--time.")
     sp.add_argument("--gas", default="air",
                     help="bottom gas, optional @tank e.g. air@24, 21/35@24")
     sp.add_argument("--sac", type=float,

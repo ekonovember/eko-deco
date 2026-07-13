@@ -55,19 +55,63 @@ def plan(bottom_depth: float, bottom_time: float, gases: Sequence[BakerGas],
          ascent_rate: float = 10.0, step_size: float = 3.0,
          last_stop_step: Optional[float] = None,
          min_stop_time: float = 1.0) -> BakerResult:
-    """Run GFDECO for a square profile. gases[0] is the bottom gas; further
-    gases switch in at their switch_depth. last_stop_step, if given, changes
-    the step size at that depth (e.g. 6.0 -> last stop at 6 m)."""
+    """Run GFDECO for a square profile — a one-level dive."""
+    return plan_levels([(bottom_depth, bottom_time, 1)], gases, gf_low, gf_high,
+                       descent_rate, ascent_rate, step_size, last_stop_step,
+                       min_stop_time)
+
+
+def plan_levels(levels: Sequence[Tuple[float, float, int]],
+                gases: Sequence[BakerGas],
+                gf_low: float, gf_high: float, descent_rate: float = 18.0,
+                ascent_rate: float = 10.0, step_size: float = 3.0,
+                last_stop_step: Optional[float] = None,
+                min_stop_time: float = 1.0) -> BakerResult:
+    """Run GFDECO for a multi-level profile.
+
+    `levels` is [(depth, runtime, mix_number)], where runtime is the run time at
+    the END of the level (GFDECO's `Run_Time_End_of_Segment`) and mix_number is
+    a 1-based index into `gases` — exactly the semantics of eko-deco's `Level`.
+
+    GFDECO takes this natively (gfdeco.f: profile code 1 = ascent/descent,
+    code 2 = constant depth, 99 = decompress), so no reinterpretation is needed:
+    each level becomes a travel leg plus a constant-depth segment.
+
+    gases[0] is the bottom gas; further gases switch in on the deco ascent at
+    their switch_depth. last_stop_step, if given, changes the step size at that
+    depth (e.g. 6.0 -> last stop at 6 m).
+    """
     ensure_built()
     lines = ["eko-deco cross-check profile", str(len(gases))]
     for g in gases:
         lines.append(f"{g.fo2:.3f},{g.fhe:.3f},{g.fn2:.3f}")
-    lines += ["1", f"0,{bottom_depth:g},{descent_rate:g},1",
-              "2", f"{bottom_depth:g},{bottom_time:g},1",
-              "99"]
-    changes = [(bottom_depth, 1, step_size)]
+
+    depth = 0.0
+    for level_depth, runtime, mix in levels:
+        rate = descent_rate if level_depth > depth else -ascent_rate
+        if abs(level_depth - depth) > 1e-9:
+            lines += ["1", f"{depth:g},{level_depth:g},{rate:g},{mix}"]
+        lines += ["2", f"{level_depth:g},{runtime:g},{mix}"]
+        depth = level_depth
+    lines.append("99")
+
+    bottom_depth = depth                       # the deco ascent starts here
+
+    # GFDECO takes the ascent's starting depth from the FIRST change entry, so
+    # every entry must be at or above the depth the diver is actually at. A deco
+    # gas whose switch depth is deeper than the bottom (a shallow last level) is
+    # therefore breathable from the moment the ascent begins — which is exactly
+    # what eko-deco's best_gas does — so it becomes the starting mix rather than
+    # a change at a depth that was never visited.
+    start_mix = levels[-1][2]
+    start_fo2 = gases[start_mix - 1].fo2
     for i, g in enumerate(gases[1:], start=2):
-        changes.append((g.switch_depth, i, step_size))
+        if g.switch_depth >= bottom_depth - 1e-9 and g.fo2 > start_fo2:
+            start_mix, start_fo2 = i, g.fo2
+    changes = [(bottom_depth, start_mix, step_size)]
+    for i, g in enumerate(gases[1:], start=2):
+        if g.switch_depth < bottom_depth - 1e-9:
+            changes.append((g.switch_depth, i, step_size))
     changes.sort(key=lambda c: -c[0])
     if last_stop_step is not None:
         # keep the mix already in effect at that depth (shallowest change
@@ -101,7 +145,7 @@ def plan(bottom_depth: float, bottom_time: float, gases: Sequence[BakerGas],
                        timeout=60)
         with open(os.path.join(tmp, "GFDECO.OUT")) as f:
             out = f.read()
-    return _parse(out, bottom_time)
+    return _parse(out, levels[-1][1])   # TTS is measured from leaving the bottom
 
 
 # constant-depth deco stop rows end with: <stop depth> <stop time> <run time>

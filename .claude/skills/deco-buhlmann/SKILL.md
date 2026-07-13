@@ -13,20 +13,22 @@ never present results as safe for real dives.** Run commands from the repo root.
 ## When to use
 
 - "Plan a dive to X m for Y min on gas Z"
+- "Multi-level dive: X m for Y min, then Z m until runtime W"
 - "What's the NDL at X m on air / EAN32?"
 - "Show the tissue loading after this profile"
 - "How does GF low/high change the schedule?"
 - Trimix, nitrox, multi-gas deco plans
 - "Ratio Deco to 51 m for 25 min" (GUE standard gases)
 - "Rock bottom / minimum gas for this dive" (SAC + emergency multiplier, single diver) and TTS
+- "Do I have enough gas?" — per-cylinder need vs carried (tank size x fill pressure)
 - Hypoxic trimix that needs a travel gas
 
 ## Files
 
-- `buhlmann.py` — library: `Gas`, `Tissues`, `plan_dive` (multi-gas/travel), `ndl`, `ceiling`, `time_to_surface`, `GasPlan`/`rock_bottom_liters`
+- `buhlmann.py` — library: `Gas`, `Tissues`, `Level`/`plan_multilevel` (multi-level; `plan_dive` = one level), `ndl`, `ceiling`, `time_to_surface`, `max_depth`/`average_depth`, `GasPlan`/`rock_bottom_liters`
 - `cli.py` — `python cli.py {plan|ndl|tissues|ratio} …` (`--json` for machine output)
 - `ratio_deco.py` — Ratio Deco (GUE/UTD) with standard gases (used by `ratio`)
-- `dive_config.py` / `dive_plan.json` — shared JSON dive config; `plan --save` writes it, the GUI reads it
+- `dive_config.py` / `dive_plan.json` — shared JSON dive config (`levels` + gases + GF); `plan --save` writes it, the GUI reads it
 - `tests/` — `python -m unittest discover -s tests`; includes cross-checks against
   native Subsurface `deco.cpp` and Erik Baker's `GFDECO` Fortran, plus golden
   schedules from MultiDeco / the Shearwater manual (need g++ / gfortran, else skip)
@@ -44,6 +46,8 @@ python cli.py plan --depth 45 --time 10 --gas air@24 --deco-gas 50@11 --sac 20 -
 python cli.py plan dive_plan.json                                                        # replan the saved dive
 python cli.py ratio --depth 51 --time 25
 python cli.py plan --depth 45 --time 25 --gas 21/35 --deco-gas 50 --last-stop 6   # Shearwater-style last stop
+python cli.py plan --level 45:25 --level 30:40 --level 18:55 --gas 21/35 --deco-gas 50   # multi-level
+python cli.py plan --level 120:20:10/70 --level 45:40 --gas 10/70 --travel-gas 35/25     # gas per level
 ```
 
 Gas syntax: `air`, `o2`, `ean32` / `nx32` / `32`, trimix `21/35` (fO2/fHe %).
@@ -56,9 +60,13 @@ the 6 m stop, EAN50 at 21 m). On Windows set `PYTHONUTF8=1` for clean output.
 
 ```python
 import buhlmann as b
-segs, tissues = b.plan_dive(40, 20, b.AIR,
-    b.DivePlan(gf_low=0.40, gf_high=0.85, deco_gases=(b.EAN50,),
-               last_stop_depth=3.0))   # 6.0 = last stop at 6 m
+plan = b.DivePlan(gf_low=0.40, gf_high=0.85, deco_gases=(b.EAN50,),
+                  last_stop_depth=3.0)          # 6.0 = last stop at 6 m
+# multi-level: runtime is cumulative (minutes since the surface, END of level)
+segs, tissues = b.plan_multilevel(
+    [b.Level(40, 20), b.Level(20, 35)], b.AIR, plan)
+# square profile = a single level
+segs, tissues = b.plan_dive(40, 20, b.AIR, plan)
 for s in segs:
     print(s.as_dict())
 print("NDL 30m air:", b.ndl(30, b.AIR))

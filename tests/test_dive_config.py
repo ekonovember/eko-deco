@@ -14,14 +14,15 @@ import dive_config as dc
 class TestDiveConfig(unittest.TestCase):
     def test_default_has_required_keys(self):
         cfg = dc.default_config()
-        for k in ("depth_m", "bottom_time_min", "gf_low", "gf_high",
+        for k in ("levels", "gf_low", "gf_high",
                   "sac_normal", "sac_multiplier", "gases"):
             self.assertIn(k, cfg)
         self.assertTrue(any(g["role"] == "Bottom" for g in cfg["gases"]))
+        self.assertTrue(cfg["levels"])
 
     def test_save_load_roundtrip(self):
         cfg = dc.default_config()
-        cfg["depth_m"] = 51
+        cfg["levels"] = [{"depth_m": 51, "runtime_min": 25, "gas": None}]
         cfg["gases"] = [
             {"role": "Bottom", "o2": 21, "he": 35, "tank_l": 24},
             {"role": "Travel", "o2": 35, "he": 25, "tank_l": 11},
@@ -31,7 +32,7 @@ class TestDiveConfig(unittest.TestCase):
             path = os.path.join(d, "cfg.json")
             dc.save(cfg, path)
             back = dc.load(path)
-        self.assertEqual(back["depth_m"], 51)
+        self.assertEqual(back["levels"][0]["depth_m"], 51)
         self.assertEqual(len(back["gases"]), 3)
         self.assertEqual(back["gases"][1]["role"], "Travel")
         self.assertEqual(back["gases"][0]["pressure_bar"], 232)   # default applied
@@ -62,7 +63,46 @@ class TestDiveConfig(unittest.TestCase):
 
     def test_load_missing_returns_default(self):
         missing = os.path.join(tempfile.gettempdir(), "no_such_dive_xyz.json")
-        self.assertEqual(dc.load(missing)["depth_m"], dc.default_config()["depth_m"])
+        self.assertEqual(dc.load(missing)["levels"],
+                         dc.default_config()["levels"])
+
+    def test_levels_round_trip_with_per_level_gas(self):
+        cfg = dc.default_config()
+        cfg["levels"] = [
+            {"depth_m": 120, "runtime_min": 20, "gas": {"o2": 10, "he": 70}},
+            {"depth_m": 45, "runtime_min": 40, "gas": None},
+        ]
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "c.json")
+            dc.save(cfg, path)
+            back = dc.load(path)
+        levels = dc.levels_of(back)
+        self.assertEqual(len(levels), 2)
+        self.assertAlmostEqual(levels[0].depth, 120)
+        self.assertAlmostEqual(levels[0].runtime, 20)
+        self.assertAlmostEqual(levels[0].gas.fHe, 0.70)
+        self.assertIsNone(levels[1].gas)          # None = "auto"
+
+    def test_empty_levels_never_leaves_the_planner_without_a_dive(self):
+        # A config can arrive with no levels (an empty list written by a GUI
+        # mid-edit, or a hand-edited file); it must fall back to a real dive
+        # rather than persist a profile with nothing in it.
+        for cfg in ({"levels": []}, {}):
+            merged = dc._merged(cfg)
+            self.assertTrue(merged["levels"])
+            self.assertTrue(dc.levels_of(merged))
+
+    def test_legacy_square_config_migrates_to_one_level(self):
+        # Pre-multilevel configs: a single depth + bottom time, where the time
+        # already meant "runtime at the end of the bottom" — so it carries over.
+        cfg = dc._merged({"depth_m": 40, "bottom_time_min": 22})
+        self.assertEqual(cfg["levels"],
+                         [{"depth_m": 40.0, "runtime_min": 22.0, "gas": None}])
+        self.assertNotIn("depth_m", cfg)
+        self.assertNotIn("bottom_time_min", cfg)
+        level = dc.levels_of(cfg)[0]
+        self.assertAlmostEqual(level.depth, 40)
+        self.assertAlmostEqual(level.runtime, 22)
 
     def test_to_buhlmann_maps_roles(self):
         cfg = {

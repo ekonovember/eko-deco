@@ -100,6 +100,24 @@ class TestCLI(unittest.TestCase):
         self.assertAlmostEqual(g.fHe, 0.35)
         self.assertAlmostEqual(g.fN2, 0.44)
 
+    def test_parse_level(self):
+        from cli import parse_level
+        lv = parse_level("45:25")
+        self.assertAlmostEqual(lv.depth, 45)
+        self.assertAlmostEqual(lv.runtime, 25)
+        self.assertIsNone(lv.gas)                 # no gas = "auto"
+        lv = parse_level("120:20:10/70")
+        self.assertAlmostEqual(lv.depth, 120)
+        self.assertAlmostEqual(lv.runtime, 20)
+        self.assertAlmostEqual(lv.gas.fHe, 0.70)
+        self.assertAlmostEqual(parse_level("18:55:ean50").gas.fO2, 0.50)
+
+    def test_parse_level_rejects_junk(self):
+        from cli import parse_level
+        for spec in ("45", "45:25:50:9", "deep:25", "45:soon"):
+            with self.assertRaises(ValueError, msg=spec):
+                parse_level(spec)
+
 
 class TestMultiGasTravel(unittest.TestCase):
     HYPOXIC = b.Gas(0.10, 0.70)   # 10/70 hypoxic trimix
@@ -229,6 +247,145 @@ class TestTTSandRockBottom(unittest.TestCase):
         ata = b.depth_to_p_amb(20)
         self.assertAlmostEqual(b.segment_gas_liters([seg], 15),
                                15 * ata * 10.0, places=6)
+
+
+class TestMultilevel(unittest.TestCase):
+    """Multi-level profiles. `Level.runtime` is the runtime at the END of the
+    level (cumulative, descent included) — the same meaning bottom_time has
+    always had, which is what lets a single level reproduce a square dive."""
+
+    PLAN = b.DivePlan(gf_low=0.30, gf_high=0.80, deco_gases=(b.EAN50, b.O2))
+
+    def stops(self, segs):
+        return [(s.depth_start, s.duration) for s in segs if s.kind == "stop"]
+
+    def test_single_level_is_exactly_plan_dive(self):
+        """The regression guard: plan_dive is plan_multilevel with one level, so
+        a square dive must come out bit-for-bit identical."""
+        square, t1 = b.plan_dive(45, 25, b.AIR, self.PLAN)
+        one_level, t2 = b.plan_multilevel([b.Level(45, 25)], b.AIR, self.PLAN)
+        self.assertEqual([s.as_dict() for s in square],
+                         [s.as_dict() for s in one_level])
+        self.assertEqual(t1.pN2, t2.pN2)
+        self.assertEqual(t1.pHe, t2.pHe)
+
+    def test_runtime_is_cumulative_and_includes_travel(self):
+        levels = [b.Level(45, 25), b.Level(30, 40), b.Level(18, 55)]
+        segs, _ = b.plan_multilevel(levels, b.AIR, self.PLAN)
+        bottoms = [s for s in segs if s.kind == "bottom"]
+        self.assertEqual([s.depth_start for s in bottoms], [45, 30, 18])
+        # runtime at the end of the last level == its declared runtime
+        bottom_end = 0.0
+        for s in segs:
+            bottom_end += s.duration
+            if s is bottoms[-1]:
+                break
+        self.assertAlmostEqual(bottom_end, 55.0, places=6)
+        # descent (2.5 min) is inside level 1's 25 min, not added to it
+        self.assertAlmostEqual(bottoms[0].duration, 25.0 - 45 / 18.0, places=6)
+
+    def test_going_shallow_shortens_the_deco(self):
+        deep, _ = b.plan_multilevel([b.Level(45, 55)], b.AIR, self.PLAN)
+        multi, _ = b.plan_multilevel([b.Level(45, 25), b.Level(18, 55)],
+                                     b.AIR, self.PLAN)
+        self.assertLess(b.time_to_surface(multi), b.time_to_surface(deep))
+
+    def test_tts_excludes_travel_between_levels(self):
+        """Travel between levels is bottom time, not time-to-surface — it is an
+        ascent segment, so a naive kind filter would wrongly count it."""
+        levels = [b.Level(45, 25), b.Level(30, 40), b.Level(18, 55)]
+        segs, _ = b.plan_multilevel(levels, b.AIR, self.PLAN)
+        deco_only = sum(s.duration for s in segs
+                        if s.kind in ("ascent", "stop")
+                        and s.depth_start <= 18 + 1e-9)
+        self.assertAlmostEqual(b.time_to_surface(segs), deco_only, places=6)
+
+    def test_per_level_gas_is_breathed(self):
+        levels = [b.Level(45, 25, b.Gas(0.21, 0.35)), b.Level(21, 40, b.EAN50)]
+        segs, _ = b.plan_multilevel(levels, b.Gas(0.21, 0.35), self.PLAN)
+        bottoms = [s for s in segs if s.kind == "bottom"]
+        self.assertAlmostEqual(bottoms[0].gas.fHe, 0.35)
+        self.assertAlmostEqual(bottoms[1].gas.fO2, 0.50)
+
+    def test_auto_level_breathes_the_bottom_gas_when_it_is_breathable(self):
+        segs, _ = b.plan_multilevel([b.Level(40, 20), b.Level(20, 35)],
+                                    b.EAN32, self.PLAN)
+        for s in (s for s in segs if s.kind == "bottom"):
+            self.assertAlmostEqual(s.gas.fO2, 0.32)
+
+    def test_auto_level_picks_the_gas_relevant_at_that_depth(self):
+        """'auto' is not 'the bottom gas' — it is the gas that is actually
+        breathable there. A hypoxic bottom mix cannot be breathed on a shallow
+        level, so the carried travel mix is used instead."""
+        hypoxic, travel = b.Gas(0.10, 0.70), b.Gas(0.35, 0.25)
+        plan = b.DivePlan(gf_low=0.30, gf_high=0.80,
+                          travel_gases=(travel,), deco_gases=(b.EAN50,))
+        segs, _ = b.plan_multilevel([b.Level(60, 20), b.Level(6, 40)],
+                                    hypoxic, plan)
+        levels = [s for s in segs if s.kind == "bottom"]
+        self.assertAlmostEqual(levels[0].gas.fHe, 0.70)   # deep: the bottom mix
+        self.assertAlmostEqual(levels[1].gas.fO2, 0.35)   # 6 m: 10/70 is hypoxic
+        # and nothing is ever breathed outside the ppO2 window
+        for s in segs:
+            shallow = min(s.depth_start, s.depth_end)
+            self.assertGreaterEqual(s.gas.ppo2(shallow), plan.ppo2_min - 1e-6,
+                                    f"{s.gas!r} hypoxic at {shallow:.1f} m")
+
+    def test_level_gas_is_billed_to_its_own_cylinder(self):
+        """Gas planning is segment-driven, so a level's gas has to show up in
+        that gas's consumption — not the bottom gas's."""
+        levels = [b.Level(40, 20), b.Level(21, 40, b.EAN50)]
+        segs, _ = b.plan_multilevel(levels, b.AIR, self.PLAN)
+        air = b.segment_gas_liters([s for s in segs if s.gas == b.AIR], 20)
+        ean50 = b.segment_gas_liters([s for s in segs if s.gas == b.EAN50], 20)
+
+        auto, _ = b.plan_multilevel([b.Level(40, 20), b.Level(21, 40)],
+                                    b.AIR, self.PLAN)
+        air_auto = b.segment_gas_liters([s for s in auto if s.gas == b.AIR], 20)
+        ean50_auto = b.segment_gas_liters([s for s in auto if s.gas == b.EAN50], 20)
+
+        # forcing the level onto EAN50 moves that level's litres off the back gas
+        self.assertLess(air, air_auto)
+        self.assertGreater(ean50, ean50_auto)
+
+    def test_level_above_the_ceiling_is_flagged_but_still_planned(self):
+        # 45 m for 30 min then straight to 6 m: the 6 m level is well above the
+        # ceiling. The schedule is still produced; the level carries the ceiling.
+        segs, _ = b.plan_multilevel([b.Level(45, 30), b.Level(6, 35)],
+                                    b.AIR, self.PLAN)
+        bad = b.ceiling_violations(segs)
+        self.assertEqual(len(bad), 1)
+        self.assertEqual(bad[0].depth_start, 6)
+        self.assertGreater(bad[0].ceiling_m, 6)
+        self.assertTrue(self.stops(segs))          # still planned
+
+    def test_legal_profile_has_no_ceiling_violation(self):
+        segs, _ = b.plan_multilevel([b.Level(45, 25), b.Level(30, 40)],
+                                    b.AIR, self.PLAN)
+        self.assertEqual(b.ceiling_violations(segs), [])
+
+    def test_max_and_average_depth(self):
+        levels = [b.Level(45, 25), b.Level(18, 55)]
+        segs, _ = b.plan_multilevel(levels, b.AIR, self.PLAN)
+        self.assertEqual(b.max_depth(levels), 45)
+        avg = b.average_depth(segs)
+        self.assertLess(avg, 45)
+        self.assertGreater(avg, 18)
+        # a square dive's average depth is (nearly) its max depth
+        square, _ = b.plan_multilevel([b.Level(45, 25)], b.AIR, self.PLAN)
+        self.assertAlmostEqual(b.average_depth(square), 45, delta=3)
+
+    def test_rejects_non_increasing_runtime(self):
+        with self.assertRaises(ValueError):
+            b.plan_multilevel([b.Level(45, 25), b.Level(30, 20)], b.AIR, self.PLAN)
+
+    def test_rejects_runtime_before_arrival(self):
+        with self.assertRaises(ValueError):    # 45 m takes 2.5 min to reach
+            b.plan_multilevel([b.Level(45, 1)], b.AIR, self.PLAN)
+
+    def test_rejects_empty_profile(self):
+        with self.assertRaises(ValueError):
+            b.plan_multilevel([], b.AIR, self.PLAN)
 
 
 class TestLastStopDepth(unittest.TestCase):

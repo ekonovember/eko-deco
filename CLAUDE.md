@@ -25,12 +25,12 @@ A small, dependency-free Python library (+ CLI and optional GUI) that computes:
 
 | File | Role | Deps |
 |------|------|------|
-| `buhlmann.py` | Core model: `Gas`/`Tissues`, Schreiner, `ceiling`, gradient factors, multi-gas/travel `plan_dive`, `ndl`, `time_to_surface`, `GasPlan`/`rock_bottom_liters`. **Keep dependency-free.** | stdlib only |
+| `buhlmann.py` | Core model: `Gas`/`Tissues`, Schreiner, `ceiling`, gradient factors, `Level`/`plan_multilevel` (multi-level; `plan_dive` = one level), `ndl`, `time_to_surface`, `max_depth`/`average_depth`/`ceiling_violations`, `GasPlan`/`rock_bottom_liters`. **Keep dependency-free.** | stdlib only |
 | `cli.py` | CLI front end: `plan`, `ndl`, `tissues`, `ratio` (+ `--json`); `plan --load/--save` a config; `mix@tank@bar` gas suffix; per-cylinder gas. | buhlmann, dive_config, ratio_deco |
 | `ratio_deco.py` | Ratio Deco (GUE/UTD) with standard gases: `standard_bottom_gas`, `ratio_deco`. Educational. | buhlmann |
 | `dive_config.py` | Shared JSON dive config (`load`/`save`/`to_buhlmann`) read by the GUI and written by `plan --save`. | buhlmann |
-| `dive_plan.json` | The full dive: depth, time, GF, gas stack (per-gas tank + fill pressure + `enabled` toggle), SAC + emergency SAC multiplier, problem time, ascent/descent/stop rates + ppO2 window, RD toggle. Agent-editable. | — |
-| `app.py` | Tkinter + matplotlib GUI: left settings (depth/time + SAC/multiplier as spinbox rows, editable gas list w/ tank+bar, GF row + a 'Last stop 6 m' switch), middle results (stops + lost-deco-gas scenario table, per-scenario gas usage, gas plan) + a printable **Runtime** wetnotes card with contingency columns (PNG export), right profile + Ratio-Deco overlay. Dark mode in the **Settings** menu. Loads/saves `dive_plan.json`; dark mode persisted to `ui_settings.json` (per-user, git-ignored — never mix UI prefs into the dive config). | matplotlib, tkinter, dive_config |
+| `dive_plan.json` | The full dive: `levels` (depth + cumulative runtime + optional gas), GF, gas stack (per-gas tank + fill pressure + `enabled` toggle), SAC + emergency SAC multiplier, problem time, ascent/descent/stop rates + ppO2 window, RD toggle. Agent-editable. | — |
+| `app.py` | Tkinter + matplotlib GUI: left settings (GF row + 'Last stop 6 m' switch on top, then an editable **Levels** list (depth/runtime/gas, + Add level) and the editable gas list w/ tank+bar, then SAC/multiplier), middle results (stops + lost-deco-gas scenario table, per-scenario gas usage as **need / have** — litres required vs tank×bar carried, with bar left and SHORT!, gas plan) + a printable **Runtime** wetnotes card with contingency columns (PNG export), right profile + Ratio-Deco overlay. Dark mode in the **Settings** menu. Loads/saves `dive_plan.json`; dark mode persisted to `ui_settings.json` (per-user, git-ignored — never mix UI prefs into the dive config). | matplotlib, tkinter, dive_config |
 | `tests/` | `unittest` suites: `test_buhlmann.py`, `test_ratio_deco.py`, `test_dive_config.py`, `test_subsurface_crosscheck.py`, `test_baker_crosscheck.py`, `test_shearwater_golden.py`. | stdlib |
 | `tests/subsurface_oracle/` | **GPL-2.0, test-only.** Unmodified Subsurface `core/deco.cpp` (pinned commit in `upstream/UPSTREAM.txt`) + stub headers; `build.sh` compiles `libsubsurface_deco.so`. Never import at runtime, never copy code out of it (license boundary — see its README). | g++ |
 | `tests/subsurface_deco.py` | ctypes wrapper around the oracle `.so` (auto-builds it); `SubsurfaceDeco.plan()` is a small planner-style schedule loop of ours, the model calls are native Subsurface code. | stdlib + oracle |
@@ -64,6 +64,9 @@ python cli.py tissues --depth 40 --time 20 --gas ean32 --json
 python cli.py ratio --depth 51 --time 25
 # GUI (needs matplotlib; tkinter ships with CPython on Windows)
 python app.py
+# Multi-level dive (RUNTIME is cumulative: minutes since the surface, at the END of the level)
+python cli.py plan --level 45:25 --level 30:40 --level 18:55 --gas 21/35 --deco-gas 50 --deco-gas 100
+python cli.py plan --level 120:20:10/70 --level 45:40 --gas 10/70 --travel-gas 35/25   # gas per level
 # Shearwater/MultiDeco-style last stop at 6 m
 python cli.py plan --depth 45 --time 25 --gas 21/35 --deco-gas 50 --deco-gas 100 --last-stop 6
 # Tests (cross-checks need g++ / gfortran; those modules skip without them)
@@ -82,9 +85,9 @@ gas* — problem time plus a direct ascent to the surface at the emergency SAC
 (SAC × multiplier) — **not** the whole deco billed to back gas (that would be
 hundreds of bar deep). The GUI also re-plans lost-deco-gas contingencies: one
 schedule per lost deco gas plus an all-lost worst case (any N of deco gases),
-with per-scenario litres usage. The full dive (depth,
-time, GF, gas stack, SAC, multiplier, problem time, ascent/descent/stop rates + ppO2
-window, RD toggle) lives in `dive_plan.json`, shared by the CLI (`plan dive_plan.json`
+with per-scenario usage as need vs carried (tank × fill pressure). The full dive
+(`levels`, GF, last stop, gas stack, SAC, multiplier, problem time,
+ascent/descent/stop rates + ppO2 window, RD toggle) lives in `dive_plan.json`, shared by the CLI (`plan dive_plan.json`
 / `--load` / `--save`) and the GUI (Save / Reload). Save / `--save` captures **every**
 value for an exact round-trip; the GUI preserves fields it has no control for.
 
@@ -95,6 +98,11 @@ value for an exact round-trip; the GUI preserves fields it has no control for.
 - Python style: `from __future__ import annotations`, full type hints, frozen/plain
   `@dataclass`, module docstrings. Match the existing terse style.
 - Units: depth = msw, pressure = bar absolute, time = minutes, gas fractions 0..1.
+- A dive is a list of `Level(depth, runtime, gas=None)`. **`runtime` is cumulative**
+  — minutes since the surface at the END of the level, descent included (what
+  `bottom_time` always meant, and what MultiDeco/GFDECO/Subsurface take). `plan_dive`
+  is `plan_multilevel` with one level; keep it that way so square dives can't drift.
+  Travel between levels is bottom time, not TTS (`_bottom_phase_end`).
 - Defaults (see `DivePlan`): GF 30/80, descent 18 m/min, ascent 10 m/min, 3 m stops,
   last stop 3 m (`last_stop_depth`, 6 = Shearwater style), deco ppO₂ 1.6,
   P_atm 1.01325 bar, 10 msw/bar, P_H₂O 0.0627 bar. Ascent gas switches snap
@@ -110,6 +118,11 @@ value for an exact round-trip; the GUI preserves fields it has no control for.
   if it fails after a model change, the change is almost certainly wrong (or
   deliberately diverges from Subsurface: then update the test *and* document
   why).
+- **Persistence:** the GUI saves what the user *typed*, not what currently plans.
+  `_row_levels()` keeps every level row (a field blanked mid-edit must not delete
+  the level); `_levels()` filters to plannable rows and is only for computing.
+  `dive_config._merged()` guarantees at least one level — never persist an empty
+  profile. Both are regression-tested; don't collapse the two accessors back.
 - **License boundary:** `tests/subsurface_oracle/` is GPL-2.0. Compare outputs
   freely; never copy code, constants-with-structure, or comments from there
   into MIT-licensed files. Fix model bugs clean-room from Bühlmann/Baker's
