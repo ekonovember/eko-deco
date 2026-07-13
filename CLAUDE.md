@@ -69,7 +69,10 @@ python cli.py plan --level 45:25 --level 30:40 --level 18:55 --gas 21/35 --deco-
 python cli.py plan --level 120:20:10/70 --level 45:40 --gas 10/70 --travel-gas 35/25   # gas per level
 # Shearwater/MultiDeco-style last stop at 6 m
 python cli.py plan --depth 45 --time 25 --gas 21/35 --deco-gas 50 --deco-gas 100 --last-stop 6
-# Tests (cross-checks need g++ / gfortran; those modules skip without them)
+# Tests: 104 total = 80 core (stdlib only, run anywhere) + 24 cross-checks.
+# The cross-checks COMPILE the reference implementations (g++ for Subsurface's
+# deco.cpp, gfortran for Baker's GFDECO) and skip when those are absent — so
+# "Ran 80 tests" on a machine without them is expected, not a data problem.
 python -m unittest discover -s tests -v
 # Individual oracles: native Subsurface deco.cpp / Baker's GFDECO Fortran
 python -m unittest tests.test_subsurface_crosscheck -v

@@ -154,10 +154,22 @@ command snippets live in [`examples/`](examples/).
 python -m unittest discover -s tests -v
 ```
 
-Sanity tests cover constant counts, surface saturation, Haldane equivalence,
-NDLs against published Bühlmann values (±5 min), gas-switch and travel-gas
-behaviour, the last-stop option, TTS / rock-bottom gas, and the Ratio Deco
-schedule. Everything needed for those is in the standard library.
+The suite has two tiers:
+
+- **80 core tests** — constant counts, surface saturation, Haldane equivalence,
+  NDLs against published Bühlmann values (±5 min), multi-level profiles,
+  gas-switch and travel-gas behaviour, the last-stop option, TTS / rock-bottom
+  gas, config round-trips and the Ratio Deco schedule. Pure standard library:
+  these run everywhere, including a bare Windows Python.
+- **24 cross-check tests** — these compile the reference implementations
+  (Subsurface's `deco.cpp` with **g++**, Baker's `GFDECO` with **gfortran**) and
+  run eko-deco against them. Without those compilers the two modules skip
+  themselves and you see `Ran 80 tests` — that is a *missing compiler*, not
+  missing data; the skip message says so and tells you what to install. On
+  Windows, install MSYS2/MinGW-w64 (or just run the suite under WSL) to get all
+  104.
+
+The oracles are compiled on demand from Python, so no `make` step is needed.
 
 ## Validation
 

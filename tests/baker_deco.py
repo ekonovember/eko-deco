@@ -13,19 +13,36 @@ from __future__ import annotations
 
 import os
 import re
+import shutil
 import subprocess
 import tempfile
 from dataclasses import dataclass
 from typing import List, Optional, Sequence, Tuple
 
 _DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "baker_oracle")
-_BIN = os.path.join(_DIR, "gfdeco")
+# build.sh is a convenience for humans; the build below is driven from Python so
+# it works on Windows too (where a .sh script would not run at all).
+_BIN = os.path.join(_DIR, "gfdeco.exe" if os.name == "nt" else "gfdeco")
 
 
 def ensure_built() -> str:
-    if not os.path.exists(_BIN):
-        subprocess.run([os.path.join(_DIR, "build.sh")], check=True,
-                       capture_output=True)
+    if os.path.exists(_BIN):
+        return _BIN
+    fc = os.environ.get("FC") or shutil.which("gfortran")
+    if fc is None:
+        raise RuntimeError(
+            "no Fortran compiler on PATH (looked for gfortran, and $FC). This "
+            "test compiles Erik Baker's original GFDECO to check the planner "
+            "against it — it is a missing compiler, not missing data. Install "
+            "one (Debian/Ubuntu: apt install gfortran · macOS: brew install "
+            "gcc · Windows: MSYS2/MinGW-w64, or run the suite under WSL) and "
+            "these tests will run. Everything else in the suite works without it.")
+    proc = subprocess.run([fc, "-std=legacy", "-O2", "-o", _BIN,
+                           os.path.join(_DIR, "gfdeco.f")],
+                          capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise RuntimeError("compiling the Baker GFDECO oracle failed:\n"
+                           + (proc.stderr or proc.stdout)[-2000:])
     return _BIN
 
 

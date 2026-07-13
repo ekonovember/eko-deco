@@ -21,22 +21,50 @@ from __future__ import annotations
 import ctypes
 import math
 import os
+import shutil
 import subprocess
 from dataclasses import dataclass
 from typing import List, Optional, Sequence, Tuple
 
 _DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "subsurface_oracle")
-_LIB_PATH = os.path.join(_DIR, "libsubsurface_deco.so")
+# Windows loads a .dll, everything else a .so. build.sh is a convenience for
+# humans; the build below is driven from Python so it works on Windows too.
+_LIB_PATH = os.path.join(_DIR, "libsubsurface_deco."
+                               + ("dll" if os.name == "nt" else "so"))
 
 SEAWATER_SALINITY = 10300
 FRESHWATER_SALINITY = 10000
 SURFACE_MBAR = 1013  # Subsurface 1_atm
 
 
+def _compile() -> None:
+    """Compile Subsurface's deco.cpp + our shim into the oracle library."""
+    cxx = os.environ.get("CXX") or shutil.which("g++") or shutil.which("clang++")
+    if cxx is None:
+        raise RuntimeError(
+            "no C++ compiler on PATH (looked for g++ / clang++, and $CXX). "
+            "This test compiles Subsurface's own deco.cpp to check the model "
+            "against it — it is a missing compiler, not missing data. Install "
+            "one (Debian/Ubuntu: apt install g++ · macOS: xcode-select --install "
+            "· Windows: MSYS2/MinGW-w64, or run the suite under WSL) and these "
+            "tests will run. Everything else in the suite works without it.")
+    cmd = [cxx, "-std=c++20", "-O2", "-shared"]
+    if os.name != "nt":
+        cmd.append("-fPIC")                       # ignored / invalid on Windows
+    cmd += ["-I", os.path.join(_DIR, "stubs"),
+            "-I", os.path.join(_DIR, "upstream"),
+            os.path.join(_DIR, "upstream", "deco.cpp"),
+            os.path.join(_DIR, "stubs", "shim.cpp"),
+            "-o", _LIB_PATH]
+    proc = subprocess.run(cmd, capture_output=True, text=True)
+    if proc.returncode != 0:
+        raise RuntimeError("compiling the Subsurface oracle failed:\n"
+                           + (proc.stderr or proc.stdout)[-2000:])
+
+
 def _load_lib() -> ctypes.CDLL:
     if not os.path.exists(_LIB_PATH):
-        subprocess.run([os.path.join(_DIR, "build.sh")], check=True,
-                       capture_output=True)
+        _compile()
     lib = ctypes.CDLL(_LIB_PATH)
     D, I, S, P = ctypes.c_double, ctypes.c_int, ctypes.c_short, ctypes.c_void_p
     DA = ctypes.POINTER(ctypes.c_double)
