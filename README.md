@@ -2,19 +2,20 @@
 
 <img src="pictures/logo.png" alt="eko-deco logo" width="380">
 
-# Bühlmann ZHL-16C + gradient factors + ratio deco + rock bottom
+# Bühlmann ZHL-16C + gradient factors + rock bottom
 
 A small Python implementation of the Bühlmann ZHL-16C decompression model with
 Erik Baker's gradient factors — a zero-dependency core, plus a CLI and a Tkinter GUI.
 
-**⚠️ Educational only — not validated for planning real dives.**
+<img src="pictures/app_ui.png" alt="eko-deco GUI — Results tab" width="900">
 
-<img src="pictures/app_ui.png" alt="eko-deco GUI" width="900">
+<img src="pictures/app_profile.png" alt="eko-deco GUI — Profile tab with the deco ceiling" width="900">
 
 </div>
 
-> Dive inputs on the left, the depth/time profile with a Ratio-Deco overlay in the
-> centre, and framed results + a printable wetnotes runtime on the right.
+> Dive inputs on the left; the rest of the window is tabbed — **Results** (framed
+> cards + a printable wetnotes runtime) and **Profile** (the depth/time chart
+> with the deco ceiling overlaid).
 
 ## What it does
 
@@ -44,7 +45,9 @@ Erik Baker's gradient factors — a zero-dependency core, plus a CLI and a Tkint
   × fill pressure), the emergency-SAC need (SAC × multiplier) in parentheses, bar
   remaining, and a `SHORT!` flag when a contingency outruns a cylinder — plus a
   second `SHORT!` inside the parens when even the emergency need is exceeded.
-- Ratio Deco (GUE/UTD) utility with standard gases and a Bühlmann cross-check.
+- A deco-ceiling curve on the profile chart (Subsurface-style): the
+  GF-interpolated ceiling, anchored on the planned first stop, drawn as a dashed
+  line with a translucent curtain from the surface.
 - Shared JSON config (`dive_plan.json`): the GUI and the CLI read/write the same
   dive, so `cli.py plan --save` shows up in the app on Reload and vice-versa.
 - Printable **runtime** (wetnotes card) in the GUI — depth / stop / runtime / gas
@@ -63,18 +66,26 @@ Run `python app.py` for the visual planner shown above:
   fill, and a **use** checkbox to leave a gas out of the plan without deleting
   it); SAC and the emergency SAC multiplier; plus **Save / Reload** of the
   shared `dive_plan.json`.
-- **Centre** — results as framed cards (gas, dive summary, the MultiDeco-style
-  stops + lost-deco-gas scenario table, per-scenario gas usage (have / need per
-  cylinder, emergency need in parens), per-cylinder gas + rock bottom, Ratio-Deco cross-check) and a
-  printable **runtime** wetnotes
-  card — with the contingency columns — exportable to PNG with the
-  `<//> eko-deco` mark.
-- **Right** — the depth-vs-time profile: the Bühlmann GF ascent with stops and
-  gas switches, and the Ratio-Deco schedule overlaid for comparison.
+- **Results tab** — results as framed cards (gas, dive summary, the
+  MultiDeco-style stops + lost-deco-gas scenario table, per-scenario gas usage
+  (have / need per cylinder, emergency need in parens), per-cylinder gas + rock
+  bottom) and a printable **runtime** wetnotes card — with the contingency
+  columns — exportable to PNG with the `<//> eko-deco` mark.
+- **Profile tab** — the depth-vs-time chart: the Bühlmann GF ascent with stops
+  and gas switches, plus the decompression ceiling (dashed, with a translucent
+  curtain from the surface) so you can see how close the schedule runs to it.
 
 **Dark mode** lives in the **Settings** menu and themes the whole app including
 the chart; the choice is remembered in `ui_settings.json` (per-user,
 git-ignored), kept separate from the dive itself in `dive_plan.json`.
+
+**Taskbar icon:** the app sets its `<//>` tile as the window icon everywhere.
+GNOME docks additionally need a launcher to show it — register one (per-user,
+no root) with:
+
+```bash
+python app.py --install-launcher   # Linux; then log out/in once
+```
 
 ## Install
 
@@ -114,9 +125,6 @@ python cli.py plan --depth 60 --time 25 --gas 10/70@24 \
 python cli.py plan --depth 45 --time 10 --gas air@24@232 --deco-gas 50@11@200 --sac 20 --save
 python cli.py plan dive_plan.json     # positional config (or --load)
 
-# Ratio Deco with GUE standard gases (+ Bühlmann cross-check)
-python cli.py ratio --depth 51 --time 25
-
 # NDL & tissue report
 python cli.py ndl     --depth 30 --gas air
 python cli.py tissues --depth 40 --time 20 --gas ean32 --json
@@ -142,8 +150,8 @@ There are more knobs than shown above — ascent/descent/stop rates, the
 shallowest-stop depth (`--last-stop`), the ppO₂
 window (`--ppo2-bottom` / `--ppo2-deco` / `--ppo2-min`), the emergency SAC
 multiplier and problem time for rock bottom (`--sac-multiplier`,
-`--problem-time`), `ratio --avg-depth` — see
-`python cli.py plan -h` (or `ratio -h`, …) for the full list. Ready-to-run
+`--problem-time`) — see
+`python cli.py plan -h` (or `ndl -h`, …) for the full list. Ready-to-run
 command snippets live in [`examples/`](examples/).
 
 > **Windows note:** the source is UTF-8 (`Bühlmann`, `₂`); the default cp1252
@@ -158,18 +166,18 @@ python -m unittest discover -s tests -v
 
 The suite has two tiers:
 
-- **80 core tests** — constant counts, surface saturation, Haldane equivalence,
+- **69 core tests** — constant counts, surface saturation, Haldane equivalence,
   NDLs against published Bühlmann values (±5 min), multi-level profiles,
   gas-switch and travel-gas behaviour, the last-stop option, TTS / rock-bottom
-  gas, config round-trips and the Ratio Deco schedule. Pure standard library:
+  gas, the ceiling profile and config round-trips. Pure standard library:
   these run everywhere, including a bare Windows Python.
-- **24 cross-check tests** — these compile the reference implementations
+- **26 cross-check tests** — these compile the reference implementations
   (Subsurface's `deco.cpp` with **g++**, Baker's `GFDECO` with **gfortran**) and
   run eko-deco against them. Without those compilers the two modules skip
-  themselves and you see `Ran 80 tests` — that is a *missing compiler*, not
+  themselves and you see `Ran 69 tests` — that is a *missing compiler*, not
   missing data; the skip message says so and tells you what to install. On
   Windows, install MSYS2/MinGW-w64 (or just run the suite under WSL) to get all
-  104.
+  95.
 
 The oracles are compiled on demand from Python, so no `make` step is needed.
 
@@ -214,7 +222,7 @@ project:
   also read by Copilot CLI; `AGENTS.md` points here for other tools.
 - `.claude/skills/deco-buhlmann/` — an Agent Skill for dive-planning math.
 - `.claude/commands/` — slash commands: `/plan-dive`, `/ndl`, `/tissues`,
-  `/ratio`, `/run-tests`.
+  `/run-tests`.
 - `.claude/agents/dive-planner.md` — a dive-planning subagent.
 - `dive_plan.json` is agent-editable: ask the agent to change the dive and
   hit **Reload** in the GUI.

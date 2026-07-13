@@ -15,7 +15,6 @@ ZHL-16C + Erik Baker gradient factors) in this repository.
    - schedule → `plan --depth --time --gas [--deco-gas … --gf-low --gf-high]`
    - NDL → `ndl --depth --gas [--gf-high]`
    - tissue loading → `tissues --depth --time --gas`
-   - ratio deco → `ratio --depth --time` (GUE standard gases, educational)
    - add `--json` when you need to parse the result.
 2. Gas syntax: `air`, `o2`, `ean32` / `32`, trimix `21/35` (fO₂/fHe %).
 3. On Windows, set `PYTHONUTF8=1` for clean output.
@@ -27,5 +26,5 @@ ZHL-16C + Erik Baker gradient factors) in this repository.
 - **Educational only.** Always state the result is not validated for real dives.
 - Don't invent numbers — run the model. If inputs are ambiguous (missing gas,
   time, or GF), ask one concise clarifying question.
-- Keep `buhlmann.py` / `cli.py` / `ratio_deco.py` dependency-free if you edit them,
+- Keep `buhlmann.py` / `cli.py` dependency-free if you edit them,
   and run `python -m unittest tests.test_buhlmann -v` after any model change.

@@ -18,16 +18,14 @@ never present results as safe for real dives.** Run commands from the repo root.
 - "Show the tissue loading after this profile"
 - "How does GF low/high change the schedule?"
 - Trimix, nitrox, multi-gas deco plans
-- "Ratio Deco to 51 m for 25 min" (GUE standard gases)
 - "Rock bottom / minimum gas for this dive" (SAC + emergency multiplier, single diver) and TTS
 - "Do I have enough gas?" — per-cylinder need vs carried (tank size x fill pressure)
 - Hypoxic trimix that needs a travel gas
 
 ## Files
 
-- `buhlmann.py` — library: `Gas`, `Tissues`, `Level`/`plan_multilevel` (multi-level; `plan_dive` = one level), `ndl`, `ceiling`, `time_to_surface`, `max_depth`/`average_depth`, `GasPlan`/`rock_bottom_liters`
-- `cli.py` — `python cli.py {plan|ndl|tissues|ratio} …` (`--json` for machine output)
-- `ratio_deco.py` — Ratio Deco (GUE/UTD) with standard gases (used by `ratio`)
+- `buhlmann.py` — library: `Gas`, `Tissues`, `Level`/`plan_multilevel` (multi-level; `plan_dive` = one level), `ndl`, `ceiling`, `ceiling_profile`, `time_to_surface`, `max_depth`/`average_depth`, `GasPlan`/`rock_bottom_liters`
+- `cli.py` — `python cli.py {plan|ndl|tissues} …` (`--json` for machine output)
 - `dive_config.py` / `dive_plan.json` — shared JSON dive config (`levels` + gases + GF); `plan --save` writes it, the GUI reads it
 - `tests/` — `python -m unittest discover -s tests`; includes cross-checks against
   native Subsurface `deco.cpp` and Erik Baker's `GFDECO` Fortran, plus golden
@@ -44,7 +42,6 @@ python cli.py tissues --depth 40 --time 20 --gas ean32 --json
 python cli.py plan --depth 60 --time 25 --gas 10/70 --travel-gas 35/25 --deco-gas 50 --deco-gas 100 --sac 18 --sac-multiplier 1.5 --tank-size 24
 python cli.py plan --depth 45 --time 10 --gas air@24 --deco-gas 50@11 --sac 20 --save   # write dive_plan.json
 python cli.py plan dive_plan.json                                                        # replan the saved dive
-python cli.py ratio --depth 51 --time 25
 python cli.py plan --depth 45 --time 25 --gas 21/35 --deco-gas 50 --last-stop 6   # Shearwater-style last stop
 python cli.py plan --level 45:25 --level 30:40 --level 18:55 --gas 21/35 --deco-gas 50   # multi-level
 python cli.py plan --level 120:20:10/70 --level 45:40 --gas 10/70 --travel-gas 35/25     # gas per level

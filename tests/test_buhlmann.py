@@ -445,5 +445,52 @@ class TestLastStopDepth(unittest.TestCase):
         self.assertEqual(b.DivePlan().last_stop_depth, 3.0)
 
 
+class TestCeilingProfile(unittest.TestCase):
+    PLAN = b.DivePlan(gf_low=0.30, gf_high=0.80,
+                      deco_gases=(b.Gas(0.50), b.Gas(1.0)))
+
+    def test_deco_free_dive_is_flat_zero(self):
+        # 12 m / 10 min air never has a ceiling, even at GF-Low
+        segs, _ = b.plan_dive(12, 10, b.AIR)
+        for _t, c in b.ceiling_profile(segs, b.DivePlan()):
+            self.assertEqual(c, 0.0)
+
+    def test_time_axis_spans_the_dive(self):
+        segs, _ = b.plan_dive(45, 25, b.AIR, self.PLAN)
+        prof = b.ceiling_profile(segs, self.PLAN)
+        times = [t for t, _c in prof]
+        self.assertEqual(times[0], 0.0)
+        self.assertEqual(times, sorted(times))
+        self.assertAlmostEqual(times[-1], b.total_runtime(segs), places=6)
+
+    def test_deco_dive_has_a_ceiling_and_clears_it(self):
+        segs, _ = b.plan_dive(45, 25, b.AIR, self.PLAN)
+        prof = b.ceiling_profile(segs, self.PLAN)
+        self.assertGreater(max(c for _t, c in prof), 0.0)
+        self.assertLessEqual(prof[-1][1], 0.01)   # surfaces clean at GF-High
+
+    def test_anchor_matches_the_planned_first_stop(self):
+        # the ceiling on leaving the bottom, rounded up like the planner does,
+        # is the first stop — and no sample is ever deeper than that stop
+        segs, _ = b.plan_dive(45, 25, b.AIR, self.PLAN)
+        prof = b.ceiling_profile(segs, self.PLAN)
+        first_stop = max(s.depth_start for s in segs if s.kind == "stop")
+        bottom_t = sum(s.duration for s in segs[:b._bottom_phase_end(segs)])
+        c_bottom = max(c for t, c in prof if t <= bottom_t + 1e-9)
+        rounded = max(b._round_up_to_stop(c_bottom, self.PLAN.stop_interval),
+                      self.PLAN.last_stop_depth)
+        self.assertEqual(rounded, first_stop)
+        self.assertLessEqual(max(c for _t, c in prof), first_stop + 1e-6)
+
+    def test_trimix_multi_gas_smoke(self):
+        plan = b.DivePlan(gf_low=0.30, gf_high=0.80,
+                          travel_gases=(b.Gas(0.35, 0.25),),
+                          deco_gases=(b.Gas(0.50), b.Gas(1.0)))
+        segs, _ = b.plan_dive(60, 25, b.Gas(0.10, 0.70), plan)
+        prof = b.ceiling_profile(segs, plan)
+        self.assertTrue(all(math.isfinite(c) and 0.0 <= c <= 60.0
+                            for _t, c in prof))
+
+
 if __name__ == "__main__":
     unittest.main()

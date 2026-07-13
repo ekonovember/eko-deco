@@ -31,7 +31,6 @@
   "ppo2_bottom": 1.4,
   "ppo2_deco": 1.6,
   "ppo2_min": 0.18,
-  "show_rd": false,
   "gases": [
     {
       "role": "Bottom",

@@ -607,8 +607,8 @@ def _bottom_phase_end(segments: Sequence[DiveSegment]) -> int:
 
 
 def average_depth(segments: Iterable[DiveSegment]) -> float:
-    """Time-weighted mean depth of the bottom phase. Ratio Deco is defined on
-    the average depth, which on a square profile is just the max depth."""
+    """Time-weighted mean depth of the bottom phase (on a square profile just
+    the max depth)."""
     segs = list(segments)
     total_t = weighted = 0.0
     for s in segs[:_bottom_phase_end(segs)]:
@@ -620,6 +620,56 @@ def average_depth(segments: Iterable[DiveSegment]) -> float:
 def ceiling_violations(segments: Iterable[DiveSegment]) -> List[DiveSegment]:
     """Levels that sat shallower than the decompression ceiling."""
     return [s for s in segments if s.ceiling_m is not None]
+
+
+def ceiling_profile(segments: Sequence[DiveSegment], plan: DivePlan = DivePlan(),
+                    start_tissues: Optional[Tissues] = None,
+                    step: float = 0.5) -> List[Tuple[float, float]]:
+    """(runtime_min, ceiling_m) samples along a planned dive, for plotting.
+
+    Re-walks `segments` with the same tissue math as the planner (Schreiner is
+    exact on constant-rate legs, so subdividing only adds sampling density) and
+    uses its GF convention: GF-Low through the bottom phase, then interpolated
+    towards GF-High at the surface, anchored on the first stop derived exactly
+    as plan_multilevel derives it — so the curve agrees with the schedule it is
+    drawn under. On a no-deco dive the anchor is the surface, gf_at returns
+    GF-High everywhere, and the ceiling stays at 0."""
+    segs = list(segments)
+    tissues = (start_tissues.copy() if start_tissues
+               else Tissues.at_surface(plan.surface_p, AIR))
+    bottom_end = _bottom_phase_end(segs)
+    p_first_stop: Optional[float] = None       # unknown until the deco ascent
+    out = [(0.0, ceiling_depth(tissues, plan.gf_low,
+                               plan.surface_p, plan.msw_per_bar))]
+    run = 0.0
+    for i, s in enumerate(segs):
+        if i == bottom_end:
+            first = _round_up_to_stop(
+                ceiling_depth(tissues, plan.gf_low,
+                              plan.surface_p, plan.msw_per_bar),
+                plan.stop_interval)
+            if first > 0:
+                first = max(first, plan.last_stop_depth)
+            p_first_stop = (depth_to_p_amb(first, plan.surface_p,
+                                           plan.msw_per_bar)
+                            if first > 0 else plan.surface_p)
+        if s.duration <= 0:
+            continue
+        p_a = depth_to_p_amb(s.depth_start, plan.surface_p, plan.msw_per_bar)
+        p_b = depth_to_p_amb(s.depth_end, plan.surface_p, plan.msw_per_bar)
+        n = max(1, math.ceil(s.duration / step - 1e-9))
+        for k in range(1, n + 1):
+            p0 = p_a + (p_b - p_a) * (k - 1) / n
+            p1 = p_a + (p_b - p_a) * k / n
+            update_tissues(tissues, s.gas, p0, p1, s.duration / n)
+            gf = (plan.gf_low if p_first_stop is None
+                  else gf_at(p1, plan.gf_low, plan.gf_high,
+                             p_first_stop, plan.surface_p))
+            out.append((run + s.duration * k / n,
+                        ceiling_depth(tissues, gf,
+                                      plan.surface_p, plan.msw_per_bar)))
+        run += s.duration
+    return out
 
 
 def time_to_surface(segments: Iterable[DiveSegment]) -> float:

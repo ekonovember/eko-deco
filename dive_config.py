@@ -15,7 +15,7 @@ Schema::
       "gf_low": 30, "gf_high": 70,
       "sac_normal": 20, "sac_multiplier": 2.0, "problem_minutes": 1,
       "ascent_rate": 10, "descent_rate": 18, "stop_interval": 3, "last_stop_m": 3,
-      "ppo2_bottom": 1.4, "ppo2_deco": 1.6, "ppo2_min": 0.18, "show_rd": true,
+      "ppo2_bottom": 1.4, "ppo2_deco": 1.6, "ppo2_min": 0.18,
       "gases": [
         {"role": "Bottom", "o2": 21, "he": 0, "tank_l": 24, "pressure_bar": 232,
          "enabled": true},
@@ -64,7 +64,6 @@ def default_config() -> dict:
         "ppo2_bottom": 1.4,
         "ppo2_deco": 1.6,
         "ppo2_min": 0.18,
-        "show_rd": True,
         "gases": [
             {"role": "Bottom", "o2": 21, "he": 0, "tank_l": 24, "pressure_bar": 232},
             {"role": "Deco", "o2": 50, "he": 0, "tank_l": 11, "pressure_bar": 200},
@@ -89,7 +88,7 @@ def save(cfg: dict, path: str = DEFAULT_PATH) -> str:
     return path
 
 
-LEGACY_KEYS = ("solo", "sac_stress", "depth_m", "bottom_time_min")
+LEGACY_KEYS = ("solo", "sac_stress", "depth_m", "bottom_time_min", "show_rd")
 
 
 def _merged(cfg: dict) -> dict:

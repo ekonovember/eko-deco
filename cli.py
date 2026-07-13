@@ -7,7 +7,6 @@ Examples
     python cli.py plan --depth 60 --time 25 --gas 10/70 --travel-gas 35/25 --deco-gas 50 --sac 18
     python cli.py ndl --depth 30 --gas air
     python cli.py tissues --depth 30 --time 25 --gas air
-    python cli.py ratio --depth 51 --time 25
 """
 
 from __future__ import annotations
@@ -20,7 +19,6 @@ from typing import List
 
 import buhlmann as b
 import dive_config as dc
-import ratio_deco as r
 
 
 def parse_gas(spec: str) -> b.Gas:
@@ -341,50 +339,6 @@ def cmd_tissues(args) -> int:
     return 0
 
 
-def _ratio_cross_check(args) -> dict:
-    """Bühlmann schedule using the same GUE standard gases, for comparison."""
-    bottom, travel, deco = r.standard_dive_gases(args.depth)
-    plan = b.DivePlan(gf_low=args.gf_low, gf_high=args.gf_high,
-                      travel_gases=travel, deco_gases=deco)
-    segs, _ = b.plan_dive(args.depth, args.time, bottom, plan)
-    return {
-        "gf_low": args.gf_low, "gf_high": args.gf_high,
-        "deco_stop_min": round(sum(s.duration for s in segs if s.kind == "stop"), 1),
-        "tts_min": round(b.time_to_surface(segs), 1),
-    }
-
-
-def cmd_ratio(args) -> int:
-    res = r.ratio_deco(args.depth, args.time, avg_depth_m=args.avg_depth)
-    cross = _ratio_cross_check(args)
-
-    if args.json:
-        out = res.as_dict()
-        out["buhlmann_cross_check"] = cross
-        print(json.dumps(out, indent=2))
-        return 0
-
-    print(f"\nRatio Deco (educational)  max {res.max_depth_m:.0f} m, "
-          f"avg {res.avg_depth_m:.0f} m, bottom {res.bottom_time_min:.0f} min")
-    deco_txt = f" | deco {', '.join(res.deco_gases)}" if res.deco_gases else ""
-    print(f"  Standard gas: bottom {res.bottom_gas}{deco_txt}")
-    print(f"  Ratio {res.ratio:.2f} (1:1@46 m, 2:1@67 m)  ->  "
-          f"total deco {res.total_deco_min:.0f} min")
-    if res.min_deco:
-        print("  Minimum deco (no mandatory stops) - ascend slowly + safety stop.")
-    else:
-        print(f"  First stop: {res.first_stop_m:.0f} m (80% of max ambient pressure)")
-        print(f"  {'stop':>7}{'min':>7}   gas")
-        for s in res.stops:
-            print(f"  {s.depth_m:>5.0f} m{s.minutes:>6.1f}   {s.gas}")
-        print(f"  Scheduled deco (sum of stops): {res.scheduled_deco_min:.0f} min")
-    print(f"  Bühlmann GF {int(args.gf_low*100)}/{int(args.gf_high*100)} cross-check: "
-          f"deco {cross['deco_stop_min']:.0f} min, TTS {cross['tts_min']:.0f} min")
-    print("  NOTE: coarse mental-math estimate - verify against the model, a "
-          "computer, and your training.")
-    return 0
-
-
 def main(argv: List[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="deco",
         description="Bühlmann ZHL-16C + Gradient Factor dive planner (educational).")
@@ -452,15 +406,6 @@ def main(argv: List[str] | None = None) -> int:
     st.add_argument("--time", type=float, required=True)
     st.add_argument("--gas", default="air")
     st.set_defaults(func=cmd_tissues)
-
-    sr = sub.add_parser("ratio", parents=[common],
-                        help="Ratio Deco schedule with GUE standard gases "
-                             "(educational).")
-    sr.add_argument("--depth", type=float, required=True, help="max depth (m)")
-    sr.add_argument("--time", type=float, required=True, help="bottom time (min)")
-    sr.add_argument("--avg-depth", type=float, default=None,
-                    help="average depth (m); defaults to max depth (square dive).")
-    sr.set_defaults(func=cmd_ratio)
 
     args = p.parse_args(argv)
     return args.func(args)

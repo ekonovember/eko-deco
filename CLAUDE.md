@@ -25,19 +25,19 @@ A small, dependency-free Python library (+ CLI and optional GUI) that computes:
 
 | File | Role | Deps |
 |------|------|------|
-| `buhlmann.py` | Core model: `Gas`/`Tissues`, Schreiner, `ceiling`, gradient factors, `Level`/`plan_multilevel` (multi-level; `plan_dive` = one level), `ndl`, `time_to_surface`, `max_depth`/`average_depth`/`ceiling_violations`, `GasPlan`/`rock_bottom_liters`. **Keep dependency-free.** | stdlib only |
-| `cli.py` | CLI front end: `plan`, `ndl`, `tissues`, `ratio` (+ `--json`); `plan --load/--save` a config; `mix@tank@bar` gas suffix; per-cylinder gas. | buhlmann, dive_config, ratio_deco |
-| `ratio_deco.py` | Ratio Deco (GUE/UTD) with standard gases: `standard_bottom_gas`, `ratio_deco`. Educational. | buhlmann |
+| `buhlmann.py` | Core model: `Gas`/`Tissues`, Schreiner, `ceiling`, gradient factors, `Level`/`plan_multilevel` (multi-level; `plan_dive` = one level), `ndl`, `time_to_surface`, `max_depth`/`average_depth`/`ceiling_violations`, `ceiling_profile` (time-series of the GF ceiling for plotting), `GasPlan`/`rock_bottom_liters`. **Keep dependency-free.** | stdlib only |
+| `cli.py` | CLI front end: `plan`, `ndl`, `tissues` (+ `--json`); `plan --load/--save` a config; `mix@tank@bar` gas suffix; per-cylinder gas. | buhlmann, dive_config |
 | `dive_config.py` | Shared JSON dive config (`load`/`save`/`to_buhlmann`) read by the GUI and written by `plan --save`. | buhlmann |
-| `dive_plan.json` | The full dive: `levels` (depth + cumulative runtime + optional gas), GF, gas stack (per-gas tank + fill pressure + `enabled` toggle), SAC + emergency SAC multiplier, problem time, ascent/descent/stop rates + ppO2 window, RD toggle. Agent-editable. | — |
-| `app.py` | Tkinter + matplotlib GUI: left settings (GF row + 'Last stop 6 m' switch on top, then an editable **Levels** list (depth/runtime/gas, + Add level) and the editable gas list w/ tank+bar, then SAC/multiplier), middle results (stops + lost-deco-gas scenario table, per-scenario gas usage as **have / need (emergency)** — tank×bar carried vs litres required at the normal SAC, with the emergency-SAC need (SAC × multiplier) in parentheses; `SHORT!` flags a shortfall at the normal SAC and a second `SHORT!` inside the emergency parens when even that is exceeded — plus bar left at both the normal and emergency SAC, and the gas plan whose columns are **need / have / (emrg)**) + a printable **Runtime** wetnotes card with contingency columns (PNG export), right profile + Ratio-Deco overlay. Dark mode in the **Settings** menu. Loads/saves `dive_plan.json`; dark mode persisted to `ui_settings.json` (per-user, git-ignored — never mix UI prefs into the dive config). | matplotlib, tkinter, dive_config |
-| `tests/` | `unittest` suites: `test_buhlmann.py`, `test_ratio_deco.py`, `test_dive_config.py`, `test_subsurface_crosscheck.py`, `test_baker_crosscheck.py`, `test_shearwater_golden.py`. | stdlib |
+| `dive_plan.json` | The full dive: `levels` (depth + cumulative runtime + optional gas), GF, gas stack (per-gas tank + fill pressure + `enabled` toggle), SAC + emergency SAC multiplier, problem time, ascent/descent/stop rates + ppO2 window. Agent-editable. | — |
+| `app.py` | Tkinter + matplotlib GUI: left settings (GF row + 'Last stop 6 m' switch on top, then an editable **Levels** list (depth/runtime/gas, + Add level) and the editable gas list w/ tank+bar, then SAC/multiplier); the rest is a two-tab notebook — **Results** (stops + lost-deco-gas scenario table, per-scenario gas usage as **have / need (emergency)** — tank×bar carried vs litres required at the normal SAC, with the emergency-SAC need (SAC × multiplier) in parentheses; `SHORT!` flags a shortfall at the normal SAC and a second `SHORT!` inside the emergency parens when even that is exceeded — plus bar left at both the normal and emergency SAC, and the gas plan whose columns are **need / have / (emrg)**) + a printable **Runtime** wetnotes card with contingency columns (PNG export), and **Profile** (the depth/time chart with the deco ceiling overlaid via `buhlmann.ceiling_profile`). Dark mode in the **Settings** menu. Loads/saves `dive_plan.json`; dark mode persisted to `ui_settings.json` (per-user, git-ignored — never mix UI prefs into the dive config). `--install-launcher` registers a per-user Linux `.desktop` + icon so GNOME docks show the `<//>` tile (window icon alone is ignored there; keep iconphoto images ≤128 px — Tk 8.6 silently writes an empty `_NET_WM_ICON` above that). | matplotlib, tkinter, dive_config |
+| `tests/` | `unittest` suites: `test_buhlmann.py`, `test_dive_config.py`, `test_subsurface_crosscheck.py`, `test_baker_crosscheck.py`, `test_shearwater_golden.py`. | stdlib |
 | `tests/subsurface_oracle/` | **GPL-2.0, test-only.** Unmodified Subsurface `core/deco.cpp` (pinned commit in `upstream/UPSTREAM.txt`) + stub headers; `build.sh` compiles `libsubsurface_deco.so`. Never import at runtime, never copy code out of it (license boundary — see its README). | g++ |
 | `tests/subsurface_deco.py` | ctypes wrapper around the oracle `.so` (auto-builds it); `SubsurfaceDeco.plan()` is a small planner-style schedule loop of ours, the model calls are native Subsurface code. | stdlib + oracle |
 | `tests/baker_oracle/` | Erik Baker's original `gfdeco.f` ("distribute freely — credit the author"), the reference for the Shearwater/MultiDeco GF convention. ZH-L16B + WV 0.0567 bar + surface 1.000 bar — the test patches eko-deco to match. `build.sh` compiles the `gfdeco` binary. | gfortran |
 | `tests/baker_deco.py` | Runner for the GFDECO binary: writes `GFDECO.IN`/`.SET` in a temp dir, parses the schedule from `GFDECO.OUT`. | stdlib + oracle |
 | `tests/shearwater_golden.json` | Golden schedules from real planners: 4 MultiDeco schedules (transcribed from `multideco_screenshots/`, incl. the lost-gas scenario columns; settings inferred — see `_multideco_provenance` in the file) + Shearwater Cloud templates to fill. Unfilled entries show up as skipped tests. | — |
 | `examples/*.json` | Ready-to-run command snippets. | — |
+| `pictures/` | Branding + README screenshots: `logo.png`, `icon.png`/`icon.ico` (window/taskbar icon), `social_preview.png` (upload manually under GitHub Settings → Social preview — no API for it), `gen_assets.py` regenerates them (dev-only: matplotlib + Pillow). | — |
 
 Data flow: a `Gas` + depth/time goes into `plan_dive`, which steps the 16
 compartments with the **Schreiner equation**; `ceiling` + gradient-factor
@@ -60,8 +60,6 @@ python cli.py plan dive_plan.json  # (or --load) replan the saved dive; the GUI 
 python cli.py ndl --depth 30 --gas air
 # Tissue-loading report (machine-readable)
 python cli.py tissues --depth 40 --time 20 --gas ean32 --json
-# Ratio Deco (GUE standard gases) + Bühlmann cross-check
-python cli.py ratio --depth 51 --time 25
 # GUI (needs matplotlib; tkinter ships with CPython on Windows)
 python app.py
 # Multi-level dive (RUNTIME is cumulative: minutes since the surface, at the END of the level)
@@ -69,10 +67,10 @@ python cli.py plan --level 45:25 --level 30:40 --level 18:55 --gas 21/35 --deco-
 python cli.py plan --level 120:20:10/70 --level 45:40 --gas 10/70 --travel-gas 35/25   # gas per level
 # Shearwater/MultiDeco-style last stop at 6 m
 python cli.py plan --depth 45 --time 25 --gas 21/35 --deco-gas 50 --deco-gas 100 --last-stop 6
-# Tests: 104 total = 80 core (stdlib only, run anywhere) + 24 cross-checks.
+# Tests: 95 total = 69 core (stdlib only, run anywhere) + 26 cross-checks.
 # The cross-checks COMPILE the reference implementations (g++ for Subsurface's
 # deco.cpp, gfortran for Baker's GFDECO) and skip when those are absent — so
-# "Ran 80 tests" on a machine without them is expected, not a data problem.
+# "Ran 69 tests" on a machine without them is expected, not a data problem.
 python -m unittest discover -s tests -v
 # Individual oracles: native Subsurface deco.cpp / Baker's GFDECO Fortran
 python -m unittest tests.test_subsurface_crosscheck -v
@@ -92,13 +90,13 @@ with per-scenario usage as have / need (emergency) — carried (tank × fill pre
 vs need at the normal SAC, with the emergency-SAC need in parentheses; SHORT!
 flags a normal-SAC shortfall and a second SHORT! inside the parens an emergency one. The full dive
 (`levels`, GF, last stop, gas stack, SAC, multiplier, problem time,
-ascent/descent/stop rates + ppO2 window, RD toggle) lives in `dive_plan.json`, shared by the CLI (`plan dive_plan.json`
+ascent/descent/stop rates + ppO2 window) lives in `dive_plan.json`, shared by the CLI (`plan dive_plan.json`
 / `--load` / `--save`) and the GUI (Save / Reload). Save / `--save` captures **every**
 value for an exact round-trip; the GUI preserves fields it has no control for.
 
 ## Conventions
 
-- **Zero runtime deps in `buhlmann.py`, `cli.py`, `ratio_deco.py`.** Only `app.py`
+- **Zero runtime deps in `buhlmann.py` and `cli.py`.** Only `app.py`
   may import matplotlib/tkinter. Do not add dependencies to the core.
 - Python style: `from __future__ import annotations`, full type hints, frozen/plain
   `@dataclass`, module docstrings. Match the existing terse style.
@@ -157,6 +155,6 @@ run `chcp 65001`) before the CLI.
 - `AGENTS.md` — pointer here, for other AGENTS.md-aware tools.
 - `.github/copilot-instructions.md` + `.github/instructions/*.instructions.md` — Copilot-native instruction files.
 - `.claude/skills/deco-buhlmann/` — Agent Skill, auto-discovered by Claude **and** Copilot CLI.
-- `.claude/commands/*.md` — Claude slash commands: `/plan-dive`, `/ndl`, `/tissues`, `/ratio`, `/run-tests`.
+- `.claude/commands/*.md` — Claude slash commands: `/plan-dive`, `/ndl`, `/tissues`, `/run-tests`.
 - `.claude/agents/dive-planner.md` — dive-planning subagent.
 - `.claude/settings.json` — pre-approves running Python + the test suite.

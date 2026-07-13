@@ -2,9 +2,10 @@
 
 Left panel: dive settings (depth, bottom time, gradient factors, a fully editable
 gas list where every mix — bottom / travel / deco — has its own O2, He and tank,
-plus SAC and an emergency SAC multiplier; single diver). Middle: the depth-vs-time
-profile with a Ratio-Deco overlay. Right: the results panel (schedule, TTS,
-per-cylinder gas + rock bottom, lost-deco-gas scenarios) and a wetnotes card.
+plus SAC and an emergency SAC multiplier; single diver). The rest of the window
+is a two-tab notebook: **Results** (schedule, TTS, per-cylinder gas + rock
+bottom, lost-deco-gas scenarios, wetnotes card) and **Profile** (the
+depth-vs-time chart with the deco-ceiling overlay).
 
 The dive is loaded from and saved to ``dive_plan.json`` (see ``dive_config.py``),
 the same file the console planner reads/writes — so ``cli.py plan --save`` shows
@@ -18,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 from dataclasses import replace
 import tkinter as tk
 from tkinter import ttk
@@ -30,7 +32,6 @@ from matplotlib.figure import Figure
 
 import buhlmann as b
 import dive_config as dc
-import ratio_deco as rd
 
 # The GUI ascends at a fixed rate; keep it in step with the CLI DivePlan default
 # (10 m/min) so the same inputs give the same schedule in both.
@@ -40,6 +41,9 @@ ASCENT_RATE = 10.0
 APP_NAME = "eko-deco"
 LOGO_MARK = "<//>"
 LOGO_COLOR = "#0a84ff"
+_PICTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pictures")
+ICON_PNG = os.path.join(_PICTURES, "icon.png")
+ICON_ICO = os.path.join(_PICTURES, "icon.ico")
 
 # UI preferences (dark mode, …) live in their own file so they never mix with
 # the dive itself: dive_plan.json stays shareable between CLI/GUI and machines.
@@ -49,10 +53,12 @@ UI_SETTINGS_PATH = os.path.join(
 # Widget + chart palettes for the clam ttk theme.
 LIGHT = {"bg": "#dcdad5", "fg": "#000000", "field": "#ffffff",
          "trough": "#c8c6c1", "border": "#9e9a91", "active": "#eeebe7",
-         "chart_bg": "#ffffff", "chart_fg": "#000000", "grid": "#b0b0b0"}
+         "chart_bg": "#ffffff", "chart_fg": "#000000", "grid": "#b0b0b0",
+         "ceiling": "#c0392b"}
 DARK = {"bg": "#2b2b2b", "fg": "#e6e6e6", "field": "#3c3f41",
         "trough": "#1f1f1f", "border": "#555555", "active": "#3a3d3f",
-        "chart_bg": "#1e1e1e", "chart_fg": "#d0d0d0", "grid": "#666666"}
+        "chart_bg": "#1e1e1e", "chart_fg": "#d0d0d0", "grid": "#666666",
+        "ceiling": "#ff6b5e"}
 
 
 def load_ui_settings() -> dict:
@@ -79,34 +85,6 @@ def build_profile_points(segs) -> Tuple[List[float], List[float]]:
         run += s.duration
         t.append(run)
         d.append(s.depth_end)
-    return t, d
-
-
-def build_ratio_profile(segs, rd_result, ascent_rate: float
-                        ) -> Tuple[List[float], List[float]]:
-    """Depth-vs-time polyline for the Ratio Deco schedule: it shares the Bühlmann
-    descent + bottom, then follows the RD stops."""
-    t, d, run, bottom_depth = [0.0], [0.0], 0.0, 0.0
-    for s in segs:
-        run += s.duration
-        t.append(run)
-        d.append(s.depth_end)
-        if s.kind == "bottom":
-            bottom_depth = s.depth_end
-            break
-    cur = bottom_depth
-    if not rd_result.min_deco and rd_result.stops:
-        for stop in rd_result.stops:
-            run += abs(cur - stop.depth_m) / ascent_rate
-            t.append(run)
-            d.append(stop.depth_m)
-            run += stop.minutes
-            t.append(run)
-            d.append(stop.depth_m)
-            cur = stop.depth_m
-    run += cur / ascent_rate
-    t.append(run)
-    d.append(0.0)
     return t, d
 
 
@@ -183,14 +161,13 @@ _BOX_TO_ASCII = str.maketrans({
 class DecoApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
-        root.title(f"{APP_NAME} — Bühlmann ZHL-16C + gradient factors + ratio deco "
+        root.title(f"{APP_NAME} — Bühlmann ZHL-16C + gradient factors "
                    "+ rock bottom")
         root.geometry("1500x900")
         self._set_window_icon()
 
         self._building = True
         self._base_cfg = dc.default_config()
-        self._ascent = ASCENT_RATE
         self._ui_settings = load_ui_settings()
         self._build_layout()
         self._apply_theme()
@@ -201,25 +178,24 @@ class DecoApp:
     # ---------------------------------------------------------------- UI ----
 
     def _set_window_icon(self) -> None:
-        """Render the <//> logo mark to a PNG and use it as the window icon."""
+        """Use the <//> tile (pictures/icon.png) as the window + taskbar icon."""
         try:
-            import base64
-            import io
-
-            from matplotlib.backends.backend_agg import FigureCanvasAgg
-            from matplotlib.figure import Figure
-
-            fig = Figure(figsize=(1, 1), dpi=64)
-            FigureCanvasAgg(fig)
-            fig.patch.set_alpha(0.0)
-            fig.text(0.5, 0.5, LOGO_MARK, ha="center", va="center",
-                     fontsize=26, fontweight="bold", color=LOGO_COLOR,
-                     family="monospace")
-            buf = io.BytesIO()
-            fig.savefig(buf, format="png", transparent=True)
-            self._icon = tk.PhotoImage(
-                data=base64.b64encode(buf.getvalue()).decode("ascii"))
-            self.root.iconphoto(True, self._icon)
+            if sys.platform == "win32":
+                # The taskbar groups Tk windows under python.exe and shows ITS
+                # icon unless the process claims its own AppUserModelID; the
+                # .ico also gives Windows pre-rendered small sizes.
+                import ctypes
+                ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
+                    "eko.deco")
+                self.root.iconbitmap(default=ICON_ICO)
+            master = tk.PhotoImage(file=ICON_PNG)
+            # Several sizes so the taskbar picks the closest instead of scaling
+            # one down to a mush at 32 px. Keep every image ≤128 px: Tk 8.6's
+            # X11 backend silently writes an EMPTY _NET_WM_ICON when the total
+            # icon data gets bigger (a 256 px image already trips it) — that is
+            # precisely "no icon in the taskbar" with no error anywhere.
+            self._icons = tuple(master.subsample(k) for k in (4, 8, 16))
+            self.root.iconphoto(True, *self._icons)
         except Exception:
             # A missing icon must never stop the app from opening.
             pass
@@ -231,19 +207,22 @@ class DecoApp:
         left = ttk.LabelFrame(main, text="Dive", padding=8)
         left.pack(side=tk.LEFT, fill=tk.Y)
 
-        # The output panel is the main information area (MultiDeco-style): it
-        # sits inboard next to the settings and takes the spare width; the
-        # profile chart keeps a fixed, smaller footprint on the right.
-        mid = ttk.Frame(main)
-        mid.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(6, 0))
-        results = ttk.LabelFrame(mid, text="Results", padding=6)
-        runtime_frame = ttk.LabelFrame(mid, text="Runtime — wetnotes (printable)",
+        # Everything but the settings lives in a notebook so the chart has its
+        # own tab instead of a permanent slice of the window: tab 1 is the
+        # output panel (MultiDeco-style results + wetnotes), tab 2 the profile.
+        self.notebook = ttk.Notebook(main)
+        self.notebook.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(6, 0))
+        results_tab = ttk.Frame(self.notebook, padding=4)
+        profile_tab = ttk.Frame(self.notebook, padding=4)
+        self.notebook.add(results_tab, text="Results")
+        self.notebook.add(profile_tab, text="Profile")
+
+        results = ttk.LabelFrame(results_tab, text="Results", padding=6)
+        runtime_frame = ttk.LabelFrame(results_tab,
+                                       text="Runtime — wetnotes (printable)",
                                        padding=6)
         runtime_frame.pack(side=tk.BOTTOM, fill=tk.X, pady=(6, 0))
         results.pack(side=tk.TOP, fill=tk.BOTH, expand=True)
-
-        center = ttk.Frame(main)
-        center.pack(side=tk.RIGHT, fill=tk.Y, padx=(6, 0))
 
         # --- model settings first: they apply to the whole dive ---
         self._add_gf_row(left)
@@ -289,9 +268,6 @@ class DecoApp:
                                   fmt="%.1f")
         self.sac_mult = self._add_spin(sacrow, "Emergency ×", 1.0, 9.0, 0.05, 2.0,
                                        fmt="%.2f")
-
-        self.show_rd = self._add_checkbox(
-            self._packed(ttk.Frame(left)), "Ratio Deco vs Bühlmann panel", True)
 
         # --- Settings menu: dark mode (ui_settings.json, not the dive plan) ---
         self.dark = tk.BooleanVar(value=bool(self._ui_settings.get("dark_mode")))
@@ -347,11 +323,15 @@ class DecoApp:
         self.runtime_status = ttk.Label(rt_btns, text="")
         self.runtime_status.pack(side=tk.LEFT, padx=4)
 
-        # --- chart ---
+        # --- chart (Profile tab) ---
         self.fig = Figure(figsize=(5.4, 5.2), dpi=100)
         self.ax = self.fig.add_subplot(111)
-        self.canvas = FigureCanvasTkAgg(self.fig, master=center)
+        self.canvas = FigureCanvasTkAgg(self.fig, master=profile_tab)
         self.canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        # A TkAgg canvas drawn while its tab is unmapped can come up blank on
+        # first reveal; repaint whenever the tab changes.
+        self.notebook.bind("<<NotebookTabChanged>>",
+                           lambda _e: self.canvas.draw_idle())
 
     # ------------------------------------------------------------- theme ----
 
@@ -372,6 +352,14 @@ class DecoApp:
                       foreground=[("readonly", p["fg"])])
         style.map("TButton", background=[("active", p["active"])])
         style.map("TCheckbutton", background=[("active", p["bg"])])
+        # Notebook tabs need explicit state maps under clam or the selected tab
+        # keeps the theme's light default.
+        style.configure("TNotebook", background=p["bg"], bordercolor=p["border"])
+        style.configure("TNotebook.Tab", background=p["trough"],
+                        foreground=p["fg"], padding=(10, 4))
+        style.map("TNotebook.Tab",
+                  background=[("selected", p["bg"]), ("active", p["active"])],
+                  foreground=[("selected", p["fg"])])
         # A scrollbar with nothing to scroll (e.g. the runtime card when it
         # fits) is in the "disabled" state; clam paints that thumb with its
         # light default, so map every state back onto the palette.
@@ -394,10 +382,6 @@ class DecoApp:
         if not self._building:
             self.recompute()               # restyle the chart with the new palette
 
-    def _packed(self, frame) -> ttk.Frame:
-        frame.pack(fill=tk.X, pady=(8, 0))
-        return frame
-
     def _add_spin(self, row, label, lo, hi, increment, init,
                   width: int = 5, fmt: Optional[str] = None) -> tk.StringVar:
         """Labelled numeric up/down packed onto `row` (several fit one line)."""
@@ -419,13 +403,6 @@ class DecoApp:
         except (ValueError, tk.TclError):
             return default
         return v if lo is None else max(lo, v)
-
-    def _add_checkbox(self, parent, label, init=False) -> tk.BooleanVar:
-        var = tk.BooleanVar(value=init)
-        var.trace_add("write", lambda *_: None if self._building else self.recompute())
-        ttk.Checkbutton(parent, text=label, variable=var).pack(
-            side=tk.LEFT, anchor="w", padx=(0, 8))
-        return var
 
     def _add_gf_row(self, parent) -> None:
         row = ttk.Frame(parent)
@@ -674,15 +651,11 @@ class DecoApp:
             self._error(f"Plan error: {e}")
             return
 
-        # Ratio Deco is defined on the average depth — on a multi-level profile
-        # that is genuinely shallower than the max depth.
-        rd_result = rd.ratio_deco(depth, bottom_time,
-                                  avg_depth_m=b.average_depth(segs))
         scenarios = self._lost_gas_scenarios(levels, gas, plan, segs)
-        self._ascent = plan.ascent_rate
-        self._draw(segs, depth, bottom_time, rd_result)
+        self._draw(segs, depth, bottom_time, b.ceiling_profile(segs, plan),
+                   levels)
         self._write_readout(depth, gas, plan, bottom_time, segs, tissues,
-                            rd_result, scenarios, levels)
+                            scenarios, levels)
         self._write_runtime(depth, gas, plan, bottom_time, segs, scenarios,
                             levels)
 
@@ -741,13 +714,30 @@ class DecoApp:
     # -------------------------------------------------------------- draw ----
 
     def _draw(self, segs, bottom_depth: float, bottom_time: float,
-              rd_result=None) -> None:
+              ceil_pts=None, levels=None) -> None:
         t, d = build_profile_points(segs)
+        p = self._pal
         self.ax.clear()
 
         self.ax.plot(t, d, color="#1f77b4", linewidth=2, label="Bühlmann GF")
         self.ax.fill_between(t, d, max(d) * 1.05 + 1, color="#1f77b4", alpha=0.10)
         x_max = max(t)
+
+        # Deco ceiling, planner-style: a dashed line with a translucent curtain
+        # hanging from the surface (the y-axis is inverted below). NaN-mask the
+        # deco-free stretches so no line hugs depth 0 between them.
+        if ceil_pts and any(c > 0.05 for _, c in ceil_pts):
+            ct = [q[0] for q in ceil_pts]
+            cd = [q[1] for q in ceil_pts]
+            self.ax.plot(ct, [c if c > 0.05 else float("nan") for c in cd],
+                         color=p["ceiling"], linewidth=1.4, linestyle="--",
+                         label="ceiling")
+            self.ax.fill_between(ct, 0.0, cd, where=[c > 0.05 for c in cd],
+                                 color=p["ceiling"], alpha=0.12, linewidth=0)
+            leg = self.ax.legend(loc="lower right", fontsize=8,
+                                 facecolor=p["chart_bg"], edgecolor=p["grid"])
+            for text in leg.get_texts():
+                text.set_color(p["chart_fg"])
 
         run_t, prev = 0.0, None
         for s in segs:
@@ -768,17 +758,6 @@ class DecoApp:
             prev = s.gas
             run_t += s.duration
 
-        p = self._pal
-        if rd_result is not None and self.show_rd.get():
-            t2, d2 = build_ratio_profile(segs, rd_result, self._ascent)
-            self.ax.plot(t2, d2, color="#ff7f0e", linewidth=1.6, linestyle="--",
-                         label="Ratio Deco (std gas)")
-            x_max = max(x_max, max(t2))
-            leg = self.ax.legend(loc="lower right", fontsize=8,
-                                 facecolor=p["chart_bg"], edgecolor=p["grid"])
-            for text in leg.get_texts():
-                text.set_color(p["chart_fg"])
-
         self.fig.patch.set_facecolor(p["chart_bg"])
         self.ax.set_facecolor(p["chart_bg"])
         self.ax.tick_params(colors=p["chart_fg"])
@@ -786,8 +765,14 @@ class DecoApp:
             spine.set_color(p["chart_fg"])
         self.ax.set_xlabel("Runtime (min)", color=p["chart_fg"])
         self.ax.set_ylabel("Depth (m)", color=p["chart_fg"])
+        # On a multi-level dive "bottom X m for Y min" misdescribes the profile;
+        # spell the levels out (same depth@runtime shorthand as the wetnotes).
+        if levels and len(levels) > 1:
+            what = " → ".join(f"{l.depth:.0f}m@{l.runtime:.0f}" for l in levels)
+        else:
+            what = f"bottom {bottom_depth:.0f} m for {bottom_time:.0f} min"
         self.ax.set_title(
-            f"Profile  —  bottom {bottom_depth:.0f} m for {bottom_time:.0f} min "
+            f"Profile  —  {what} "
             f"(total {sum(s.duration for s in segs):.0f} min)",
             color=p["chart_fg"])
         self.ax.invert_yaxis()
@@ -800,8 +785,7 @@ class DecoApp:
     # ----------------------------------------------------------- readout ----
 
     def _write_readout(self, depth, gas, plan, bottom_time,
-                       segs, tissues, rd_result=None, scenarios=None,
-                       levels=None) -> None:
+                       segs, tissues, scenarios=None, levels=None) -> None:
         ceil_now = b.ceiling_depth(tissues, plan.gf_high)
         total = b.total_runtime(segs)
         tts = b.time_to_surface(segs)
@@ -922,10 +906,10 @@ class DecoApp:
                                     footer_lines=[rb_line],
                                     aligns=["<", "<", ">", ">", ">"])
 
-        # --- stops + gas usage, formatted exactly like MultiDeco's output
-        # pane: an unframed "-- lost gas -->" table with one column per
-        # scenario (cells "stop (runtime)", bare depths, the bottom row
-        # first) and per-scenario "Gas usage" blocks in "ltr" lines. ---
+        # --- stops + gas usage, MultiDeco-style lost-gas scenarios, framed
+        # like every other results card: the stops table with one column per
+        # scenario (cells "stop (runtime)", the bottom row first), then a
+        # per-scenario gas-usage card in litres. ---
         stop_cards: List[List[str]] = []
         if scenarios and len(scenarios) > 1:
             per = [(label, *self._stops_by_depth(ss)) for label, ss in scenarios]
@@ -936,59 +920,56 @@ class DecoApp:
                 if s.kind == "bottom":
                     break
             labels = ["All" if l == "all" else l for l, _at, _t in per]
-            body = [[f"({run_bottom:.0f})"] * len(per)]
-            body += [["" if dm not in at
-                      else f"{at[dm][0]:.0f} ({at[dm][1]:.0f})"
-                      for _l, at, _t in per]
+            body = [[f"{depth:.0f} m"] + [f"({run_bottom:.0f})"] * len(per)]
+            body += [[f"{dm} m"] + ["" if dm not in at
+                                    else f"{at[dm][0]:.0f} ({at[dm][1]:.0f})"
+                                    for _l, at, _t in per]
                      for dm in depths_u]
-            widths = [max(len(labels[i]), max(len(r[i]) for r in body))
-                      for i in range(len(per))]
-
-            def trow(depth_cell, cells) -> str:
-                return (f"{depth_cell:>4}" + "".join(
-                    f"   {cells[i]:>{widths[i]}}"
-                    for i in range(len(per)))).rstrip()
-
-            table_w = 4 + sum(w + 3 for w in widths)
-            table = [f"{'-- lost gas -->':^{table_w}}".rstrip(), ""]
-            table.append(trow("", labels))
-            for dm, cells in zip([int(round(depth))] + depths_u, body):
-                table.append(trow(dm, cells))
-            stop_cards.append(table)
+            # One column per scenario: OK = the normal dive, then each lost
+            # deco mix (keep the title short — format_card widens the last
+            # column to fit long title lines, which skews a 2-scenario table).
+            stop_cards.append(format_card(
+                ["STOPS · min (runtime)"], body,
+                headers=["depth", *labels],
+                aligns=[">"] * (len(per) + 1)))
 
             # Per scenario: what the dive NEEDS against what is actually in the
             # cylinders (tank litres x fill pressure), so "SHORT!" is backed by
             # the numbers it was judged on.
-            usage = ["Gas usage   have / need (emergency)"]
+            usage_rows: List[List[str]] = []
             for label, ss in scenarios:
-                usage.append("")
-                usage.append("No failures - normal dive - OK" if label == "OK"
-                             else f"Loss or lack of deco mix: "
-                                  f"{'All' if label == 'all' else label}")
+                if usage_rows:
+                    usage_rows.append([""] * 6)   # blank row between scenarios
+                scen = ("OK" if label == "OK"
+                        else "All" if label == "all" else label)
                 tot_need = tot_emrg = tot_have = 0.0
-                rows = self._liters_by_gas(ss, sac)
-                w = max([len(k) for k, _l in rows] + [5])
-                for key, liters in rows:
-                    liters_e = liters * sac_mult      # same volume at emergency SAC
+                for i, (key, liters) in enumerate(self._liters_by_gas(ss, sac)):
+                    liters_e = liters * sac_mult  # same volume at emergency SAC
                     tk_l, pr = tanks.get(key, 0.0), press.get(key, 0.0)
                     have = tk_l * pr
                     tot_need += liters
                     tot_emrg += liters_e
                     tot_have += have
                     if have <= 0:
-                        usage.append(f"        ? / {liters:6.0f} ltr (emrg"
-                                     f" {liters_e:.0f})  {key:<{w}}  (set tank)")
+                        usage_rows.append([scen if i == 0 else "", key,
+                                           "set tank", f"{liters:.0f}",
+                                           f"({liters_e:.0f})", ""])
                         continue
                     short = " SHORT!" if have < liters else ""
                     short_e = " SHORT!" if have < liters_e else ""
-                    usage.append(f"   {have:6.0f} / {liters:6.0f}{short} ltr (emrg"
-                                 f" {liters_e:.0f}{short_e})  {key:<{w}}"
-                                 f"  ({tk_l:.0f} L x {pr:.0f} bar,"
-                                 f" {max(have - liters, 0) / tk_l:.0f} bar left /"
-                                 f" {max(have - liters_e, 0) / tk_l:.0f} emrg)")
-                usage.append(f"   {tot_have:6.0f} / {tot_need:6.0f} ltr (emrg"
-                             f" {tot_emrg:.0f})  {'TOTAL':<{w}}")
-            stop_cards.append(usage)
+                    usage_rows.append(
+                        [scen if i == 0 else "", key, f"{have:.0f}",
+                         f"{liters:.0f}{short}", f"({liters_e:.0f}{short_e})",
+                         f"{max(have - liters, 0) / tk_l:.0f} / "
+                         f"{max(have - liters_e, 0) / tk_l:.0f}"])
+                usage_rows.append(["", "TOTAL", f"{tot_have:.0f}",
+                                   f"{tot_need:.0f}", f"({tot_emrg:.0f})", ""])
+            stop_cards.append(format_card(
+                ["GAS USAGE · litres have / need (emergency)",
+                 "bar left at the normal / emergency SAC"], usage_rows,
+                headers=["scenario", "gas", "have", "need", "(emrg)",
+                         "bar left"],
+                aligns=["<", "<", ">", ">", ">", ">"]))
         elif not stops:
             stop_cards.append(format_card(["BÜHLMANN STOPS"],
                                           [["—", "no mandatory stops"]],
@@ -1002,29 +983,6 @@ class DecoApp:
 
         cards[1:1] = stop_cards               # right under the header line
         cards.append(gas_plan_card)
-
-        # --- Ratio Deco (educational) ---
-        if rd_result is not None and self.show_rd.get():
-            r = rd_result
-            std = r.bottom_gas + (f" + {', '.join(r.deco_gases)}"
-                                  if r.deco_gases else "")
-            rd_rows = [["std gas", std]]
-            if r.min_deco:
-                rd_rows.append(["ratio", f"{r.ratio:.2f} → min deco (no stops)"])
-                rd_rows.append(["deco", f"Bühlmann {deco_total:.0f} · RD 0 min"])
-            else:
-                rd_rows.append(["ratio", f"{r.ratio:.2f}"])
-                rd_rows.append(["first stop", f"{r.first_stop_m:.0f} m"])
-                rd_rows.append(["deco", f"Bühlmann {deco_total:.0f} · "
-                                        f"RD {r.scheduled_deco_min:.0f} min"])
-            cards.append(format_card(["RATIO DECO vs Bühlmann (educational)"],
-                                     rd_rows, aligns=["<", "<"]))
-            if not r.min_deco and r.stops:
-                cards.append(format_card(
-                    ["RATIO DECO stops"],
-                    [[f"{s.depth_m:.0f} m", f"{s.minutes:.1f}", str(s.gas)]
-                     for s in r.stops],
-                    headers=["depth", "min", "gas"], aligns=[">", ">", "<"]))
 
         lines: List[str] = []
         for i, card in enumerate(cards):
@@ -1156,7 +1114,6 @@ class DecoApp:
             self.last_stop6.set(cfg.get("last_stop_m", 3.0) >= 6.0)
             self.sac.set(f"{cfg['sac_normal']:g}")
             self.sac_mult.set(f"{cfg.get('sac_multiplier', 2.0):.2f}")
-            self.show_rd.set(bool(cfg.get("show_rd", True)))
             for row in list(self.gas_rows):
                 self._remove_gas_row(row)
             for g in cfg["gases"]:
@@ -1194,7 +1151,6 @@ class DecoApp:
             "last_stop_m": 6.0 if self.last_stop6.get() else 3.0,
             "sac_normal": self._num(self.sac, 20.0, lo=1.0),
             "sac_multiplier": round(self._num(self.sac_mult, 2.0, lo=1.0), 2),
-            "show_rd": bool(self.show_rd.get()),
             "gases": [{"role": r["role"].get(),
                        "o2": int(float(r["fo2"].get() or 0)),
                        "he": int(float(r["fhe"].get() or 0)),
@@ -1213,8 +1169,51 @@ class DecoApp:
         self.cfg_status.config(text="reloaded")
 
 
+def install_launcher() -> None:
+    """Register a Linux .desktop launcher + icon for the current user.
+
+    GNOME's dock/taskbar ignores the icon a window sets on itself
+    (_NET_WM_ICON) and shows a generic gear unless a .desktop file matches the
+    window's WM_CLASS — so the branded taskbar icon needs this one-time step:
+
+        python app.py --install-launcher
+    """
+    if sys.platform != "linux":
+        print("--install-launcher is for Linux desktops only.")
+        return
+    import shutil
+
+    data = os.path.join(os.path.expanduser("~"), ".local", "share")
+    icon_dir = os.path.join(data, "icons", "hicolor", "512x512", "apps")
+    app_dir = os.path.join(data, "applications")
+    os.makedirs(icon_dir, exist_ok=True)
+    os.makedirs(app_dir, exist_ok=True)
+    shutil.copyfile(ICON_PNG, os.path.join(icon_dir, f"{APP_NAME}.png"))
+    here = os.path.dirname(os.path.abspath(__file__))
+    desktop = os.path.join(app_dir, f"{APP_NAME}.desktop")
+    with open(desktop, "w", encoding="utf-8") as f:
+        f.write(f"""[Desktop Entry]
+Type=Application
+Name={APP_NAME}
+Comment=Bühlmann ZHL-16C dive-deco planner (educational)
+Exec={sys.executable} {os.path.join(here, "app.py")}
+Path={here}
+Icon={APP_NAME}
+Terminal=false
+Categories=Education;Science;
+StartupWMClass={APP_NAME}
+""")
+    print(f"Installed {desktop}\n(re-launch the app to see the icon; "
+          "remove both files to uninstall)")
+
+
 def main() -> None:
-    root = tk.Tk()
+    if "--install-launcher" in sys.argv:
+        install_launcher()
+        return
+    # className → WM_CLASS, which Linux docks/taskbars use to identify the app
+    # (and to match the .desktop file --install-launcher registers).
+    root = tk.Tk(className=APP_NAME)
     try:
         ttk.Style().theme_use("clam")
     except tk.TclError:

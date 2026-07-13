@@ -5,7 +5,7 @@ applyTo: "**/*.py"
 # Python conventions — deco
 
 - Target Python 3.10+ (verified on 3.14).
-- **Keep `buhlmann.py`, `cli.py`, `ratio_deco.py` dependency-free** (stdlib only).
+- **Keep `buhlmann.py`, `cli.py` dependency-free** (stdlib only).
   Only `app.py` may import `matplotlib` / `tkinter`.
 - Use `from __future__ import annotations`, type hints, and `@dataclass`. Match the
   existing concise style; comment only non-obvious math (cite the equation/source).
