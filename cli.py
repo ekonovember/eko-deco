@@ -138,35 +138,45 @@ def _percylinder_gas(segs, depth, bottom_gas, gp, gases, ascent_rate=10.0):
     if gp is None:
         return None, []
     sac = gp.sac
+    sac_e = gp.sac * gp.sac_multiplier
     tank_by = {repr(g): tk for (_r, g, tk, _p) in gases}
     press_by = {repr(g): pr for (_r, g, _t, pr) in gases}
     role_by = {repr(g): role for (role, g, _t, _p) in gases}
     back_tank, back_pressure = next(((tk, pr) for (_r, g, tk, pr) in gases
                                      if g == bottom_gas), (0.0, 0.0))
-    lines = [f"Gas  SAC {gp.sac:g} L/min, emergency ×{gp.sac_multiplier:g}:"]
+    lines = [f"Gas  need vs have (emergency in parens; SAC {gp.sac:g}"
+             f" / {sac_e:g} L/min, ×{gp.sac_multiplier:g}):"]
     cylinders, seen = [], []
     for s in segs:
         if repr(s.gas) in seen:
             continue
         seen.append(repr(s.gas))
         liters = b.segment_gas_liters([x for x in segs if x.gas == s.gas], sac)
+        liters_e = liters * gp.sac_multiplier      # same volume at the emergency SAC
         tk = tank_by.get(repr(s.gas), 0.0)
         pr = press_by.get(repr(s.gas), 0.0)
         role = role_by.get(repr(s.gas), "Bottom" if s.gas == bottom_gas else "stage")
         entry = {"gas": repr(s.gas), "role": role, "liters": round(liters, 1),
+                 "liters_emergency": round(liters_e, 1),
                  "tank_l": tk, "pressure_bar": pr}
         if tk <= 0:
-            lines.append(f"  {role} {s.gas!r}: {liters:.0f} L (no tank set)")
+            lines.append(f"  {role} {s.gas!r}: {liters:.0f} L (emrg"
+                         f" {liters_e:.0f}) (no tank set)")
         else:
-            used = liters / tk
+            used, used_e = liters / tk, liters_e / tk
             entry["bar_used"] = round(used, 1)
+            entry["bar_used_emergency"] = round(used_e, 1)
             if pr > 0:
                 entry["bar_left"] = round(pr - used, 1)
-                short = "  SHORT!" if used > pr + 1e-9 else ""
-                lines.append(f"  {role} {s.gas!r}: {used:.0f}/{pr:.0f} bar "
-                             f"({pr - used:.0f} left) / {tk:.0f} L{short}")
+                entry["bar_left_emergency"] = round(pr - used_e, 1)
+                short = " SHORT!" if used > pr + 1e-9 else ""
+                short_e = " SHORT!" if used_e > pr + 1e-9 else ""
+                lines.append(f"  {role} {s.gas!r}: {used:.0f} bar need vs {pr:.0f}"
+                             f" fill{short} ({pr - used:.0f} left)"
+                             f" (emrg {used_e:.0f}{short_e}) / {tk:.0f} L")
             else:
-                lines.append(f"  {role} {s.gas!r}: {used:.0f} bar / {tk:.0f} L")
+                lines.append(f"  {role} {s.gas!r}: {used:.0f} bar need / {tk:.0f} L"
+                             f" (emrg {used_e:.0f})")
         cylinders.append(entry)
     rock = b.rock_bottom_liters(depth, gp, ascent_rate)
     data = {"sac_normal_l_min": gp.sac, "sac_multiplier": gp.sac_multiplier,

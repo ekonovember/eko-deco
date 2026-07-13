@@ -169,6 +169,17 @@ def format_card(title_lines: List[str], rows: List[List[str]],
     return out
 
 
+# matplotlib renders the Unicode box-drawing glyphs (U+2500 family) from a
+# proportional fallback font even under family="monospace", which ragged-aligns
+# any framed card in a PNG export (the on-screen Tk Text widget is fine). Fold
+# them to ASCII so every cell stays exactly one fixed-width character wide.
+_BOX_TO_ASCII = str.maketrans({
+    **{c: "-" for c in "─"},
+    **{c: "|" for c in "│"},
+    **{c: "+" for c in "┌┐└┘├┤┬┴┼"},
+})
+
+
 class DecoApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
@@ -274,7 +285,8 @@ class DecoApp:
         gp.pack(fill=tk.X, pady=(8, 0))
         sacrow = ttk.Frame(gp)
         sacrow.pack(fill=tk.X, pady=2)
-        self.sac = self._add_spin(sacrow, "SAC (L/min)", 1, 99, 1, 20)
+        self.sac = self._add_spin(sacrow, "SAC (L/min)", 1, 99, 0.5, 20,
+                                  fmt="%.1f")
         self.sac_mult = self._add_spin(sacrow, "Emergency ×", 1.0, 9.0, 0.05, 2.0,
                                        fmt="%.2f")
 
@@ -671,7 +683,8 @@ class DecoApp:
         self._draw(segs, depth, bottom_time, rd_result)
         self._write_readout(depth, gas, plan, bottom_time, segs, tissues,
                             rd_result, scenarios, levels)
-        self._write_runtime(depth, gas, plan, bottom_time, segs, scenarios)
+        self._write_runtime(depth, gas, plan, bottom_time, segs, scenarios,
+                            levels)
 
     def _lost_gas_scenarios(self, levels, gas, plan,
                             segs) -> List[Tuple[str, list]]:
@@ -679,16 +692,24 @@ class DecoApp:
         dive ("OK"), then one re-plan per deco gas without it, and — with two or
         more deco gases — an "all" worst case with every deco gas gone. Only
         Deco-role gases can be lost; bottom and travel gases always stay. Works
-        for any number of deco gases (nothing assumes two)."""
+        for any number of deco gases (nothing assumes two).
+
+        A lost gas is stripped from BOTH the deco stack and any level that names
+        it (that level falls back to "auto"), so losing a mix truly removes it —
+        otherwise a level breathing it would keep the "lost" gas on the schedule."""
         scenarios: List[Tuple[str, list]] = [("OK", segs)]
-        losses = [(repr(g), tuple(d for d in plan.deco_gases if d is not g))
-                  for g in plan.deco_gases]
-        if len(plan.deco_gases) > 1:
-            losses.append(("all", ()))
-        for label, remaining in losses:
+        deco = plan.deco_gases
+        losses = [(repr(g), (g,)) for g in deco]        # (label, gases lost)
+        if len(deco) > 1:
+            losses.append(("all", tuple(deco)))
+        for label, lost in losses:
+            remaining = tuple(d for d in deco if d not in lost)
+            lost_levels = [replace(lv, gas=None)
+                           if (lv.gas is not None and lv.gas in lost) else lv
+                           for lv in levels]
             try:
-                lost_segs, _ = b.plan_multilevel(levels, gas,
-                                                 replace(plan, deco_gases=remaining))
+                lost_segs, _ = b.plan_multilevel(
+                    lost_levels, gas, replace(plan, deco_gases=remaining))
             except Exception:  # noqa: BLE001 - a scenario that can't be planned
                 continue       # (e.g. hypoxic gap) just drops its column
             scenarios.append((label, lost_segs))
@@ -864,18 +885,22 @@ class DecoApp:
                 continue
             seen.append(key)
             liters = b.segment_gas_liters([x for x in segs if x.gas == s.gas], sac)
+            liters_e = liters * sac_mult          # same volume at the emergency SAC
             tk_l = tanks.get(key, 0.0)
             pr = press.get(key, 0.0)
             label = roles.get(key, "stage")
             if tk_l <= 0:
                 need, have = f"{liters:.0f} L", "set tank"
+                emrg = f"{liters_e:.0f} L"
             elif pr > 0:
-                used = liters / tk_l
+                used, used_e = liters / tk_l, liters_e / tk_l
                 need = f"{used:.0f} bar" + (" SHORT!" if used > pr + 1e-9 else "")
                 have = f"{pr:.0f} bar"
+                emrg = f"{used_e:.0f} bar" + (" SHORT!" if used_e > pr + 1e-9 else "")
             else:
                 need, have = f"{liters / tk_l:.0f} bar", f"{tk_l:.0f} L"
-            plan_rows.append([label, key, need, have])
+                emrg = f"{liters_e / tk_l:.0f} bar"
+            plan_rows.append([label, key, need, have, emrg])
         rock = b.rock_bottom_liters(depth, gp, plan.ascent_rate)
         if back_tank > 0:
             rock_bar = rock / back_tank
@@ -890,11 +915,12 @@ class DecoApp:
                            f"over {back_pressure:.0f} bar fill!")
         else:
             rb_line = f"rock bottom {rock:.0f} L (set bottom tank)"
-        gp_title = f"GAS PLAN · SAC {sac:.0f} ×{sac_mult:.2f} emergency"
+        gp_title = f"GAS PLAN · SAC {sac:g} ×{sac_mult:.2f} emergency"
         gas_plan_card = format_card([gp_title], plan_rows,
-                                    headers=["role", "gas", "need", "have"],
+                                    headers=["role", "gas", "need", "have",
+                                             "(emrg)"],
                                     footer_lines=[rb_line],
-                                    aligns=["<", "<", ">", ">"])
+                                    aligns=["<", "<", ">", ">", ">"])
 
         # --- stops + gas usage, formatted exactly like MultiDeco's output
         # pane: an unframed "-- lost gas -->" table with one column per
@@ -933,31 +959,35 @@ class DecoApp:
             # Per scenario: what the dive NEEDS against what is actually in the
             # cylinders (tank litres x fill pressure), so "SHORT!" is backed by
             # the numbers it was judged on.
-            usage = ["Gas usage        need / have"]
+            usage = ["Gas usage   have / need (emergency)"]
             for label, ss in scenarios:
                 usage.append("")
                 usage.append("No failures - normal dive - OK" if label == "OK"
                              else f"Loss or lack of deco mix: "
                                   f"{'All' if label == 'all' else label}")
-                tot_need = tot_have = 0.0
+                tot_need = tot_emrg = tot_have = 0.0
                 rows = self._liters_by_gas(ss, sac)
                 w = max([len(k) for k, _l in rows] + [5])
                 for key, liters in rows:
+                    liters_e = liters * sac_mult      # same volume at emergency SAC
                     tk_l, pr = tanks.get(key, 0.0), press.get(key, 0.0)
                     have = tk_l * pr
                     tot_need += liters
+                    tot_emrg += liters_e
                     tot_have += have
                     if have <= 0:
-                        usage.append(f"   {liters:6.0f} /      ? ltr  "
-                                     f"{key:<{w}}  (set tank)")
+                        usage.append(f"        ? / {liters:6.0f} ltr (emrg"
+                                     f" {liters_e:.0f})  {key:<{w}}  (set tank)")
                         continue
-                    short = "  SHORT!" if have < liters else ""
-                    usage.append(f"   {liters:6.0f} / {have:6.0f} ltr  {key:<{w}}"
+                    short = " SHORT!" if have < liters else ""
+                    short_e = " SHORT!" if have < liters_e else ""
+                    usage.append(f"   {have:6.0f} / {liters:6.0f}{short} ltr (emrg"
+                                 f" {liters_e:.0f}{short_e})  {key:<{w}}"
                                  f"  ({tk_l:.0f} L x {pr:.0f} bar,"
-                                 f" {max(have - liters, 0) / tk_l:.0f} bar left)"
-                                 f"{short}")
-                usage.append(f"   {tot_need:6.0f} / {tot_have:6.0f} ltr  "
-                             f"{'TOTAL':<{w}}")
+                                 f" {max(have - liters, 0) / tk_l:.0f} bar left /"
+                                 f" {max(have - liters_e, 0) / tk_l:.0f} emrg)")
+                usage.append(f"   {tot_have:6.0f} / {tot_need:6.0f} ltr (emrg"
+                             f" {tot_emrg:.0f})  {'TOTAL':<{w}}")
             stop_cards.append(usage)
         elif not stops:
             stop_cards.append(format_card(["BÜHLMANN STOPS"],
@@ -1011,39 +1041,15 @@ class DecoApp:
     # ----------------------------------------------------------- runtime ----
 
     def _write_runtime(self, depth, gas, plan, bottom_time, segs,
-                       scenarios=None) -> None:
-        """Compact wetnotes runtime as a framed slate: max depth + each stop with
-        cumulative runtime and gas, plus TTS and the minimum-gas / turn pressure.
-        With deco gases, one extra `stop(run)` column per lost-gas scenario."""
-        total = b.total_runtime(segs)
-        tts = b.time_to_surface(segs)
-        lost = [(label, ss, *self._stops_by_depth(ss))
-                for label, ss in (scenarios or [])[1:]]
+                       scenarios=None, levels=None) -> None:
+        """Wetnotes runtime as one *standalone* framed card per scenario — the
+        main dive, then one per missing-gas contingency — each a full
+        depth/stop/run/gas table with its own TTS / RT and the minimum-gas line.
+        Underwater you just switch to the card for the gas you actually have."""
+        scen = list(scenarios) if scenarios else [("OK", segs)]
 
-        rows: List[List[str]] = []
-        run = 0.0
-        ok_at: dict = {}
-        ok_gas: dict = {}
-        for s in segs:
-            run += s.duration
-            if s.kind == "bottom":
-                rows.append([f"{s.depth_end:.0f} m", "-", f"{run:.0f}",
-                             repr(s.gas)] + ["-"] * len(lost))
-            elif s.kind == "stop" and s.duration > 0:
-                dm = int(round(s.depth_start))
-                ok_at[dm] = (s.duration, run)
-                ok_gas[dm] = repr(s.gas)
-        depths_u = sorted(set(ok_at) | {d for _l, _s, at, _t in lost for d in at},
-                          reverse=True)
-        for dm in depths_u:
-            row = ([f"{dm} m", f"{ok_at[dm][0]:.0f}", f"{ok_at[dm][1]:.0f}",
-                    ok_gas[dm]] if dm in ok_at else [f"{dm} m", "-", "-", "-"])
-            row += ["-" if dm not in at else f"{at[dm][0]:.0f}({at[dm][1]:.0f})"
-                    for _l, _s, at, _t in lost]
-            rows.append(row)
-        rows.append(["surf", "-", f"{total:.0f}", ""] +
-                    [f"({t:.0f})" for _l, _s, _at, t in lost])
-
+        # Minimum ("rock bottom") gas / turn pressure — the same reserve on every
+        # card, driven by the back gas cylinder.
         sac = self._num(self.sac, 20.0, lo=1.0)
         gp = b.GasPlan(sac=sac, sac_multiplier=self._num(self.sac_mult, 2.0, lo=1.0),
                        problem_minutes=self._base_cfg.get("problem_minutes", 1.0))
@@ -1062,29 +1068,55 @@ class DecoApp:
         else:
             min_gas = f"MIN GAS {rock:.0f} L"
 
-        footers = [min_gas]
-        for label, ss, _at, _t in lost:
-            back_l = b.segment_gas_liters([x for x in ss if x.gas == gas], sac)
-            footers.append(f"LOST {label} · TTS {b.time_to_surface(ss):.0f}"
-                           f" · back {back_l:.0f} L")
+        # Square dive: "max depth / bottom time". Multi-level: the whole profile
+        # as depth@runtime steps (runtime is cumulative min at the end of each
+        # level), because a single "36 m / 40 min" misreads — 40 min is the last
+        # level's runtime, not time spent at the max depth.
+        if levels and len(levels) > 1:
+            profile = " · ".join(f"{lv.depth:.0f}m@{lv.runtime:.0f}"
+                                 for lv in levels)
+        else:
+            profile = f"{depth:.0f} m / {bottom_time:.0f} min"
 
-        title = [
-            f"RUNTIME   {depth:.0f} m / {bottom_time:.0f} min",
-            f"{gas!r} · GF {plan.gf_low*100:.0f}/{plan.gf_high*100:.0f}"
-            f" · TTS {tts:.0f} · RT {total:.0f}",
-        ]
-        headers = (["depth", "stop", "run", "gas"] +
-                   [f"-{label}" for label, _s, _at, _t in lost])
-        card = format_card(title, rows, headers=headers, footer_lines=footers,
-                           aligns=[">", ">", ">", "<"] + [">"] * len(lost))
+        def rows_for(ss):
+            rows, run = [], 0.0
+            for s in ss:
+                run += s.duration
+                if s.kind == "bottom":
+                    rows.append([f"{s.depth_end:.0f} m", "-", f"{run:.0f}",
+                                 repr(s.gas)])
+                elif s.kind == "stop" and s.duration > 0:
+                    rows.append([f"{s.depth_start:.0f} m", f"{s.duration:.0f}",
+                                 f"{run:.0f}", repr(s.gas)])
+            rows.append(["surf", "-", f"{run:.0f}", ""])
+            return rows
+
+        cards: List[str] = []
+        for label, ss in scen:
+            name = ("MAIN DIVE" if label == "OK"
+                    else f"LOST {'ALL GASES' if label == 'all' else label}")
+            title = [
+                name, profile,
+                f"{gas!r} · GF {plan.gf_low*100:.0f}/{plan.gf_high*100:.0f}"
+                f" · TTS {b.time_to_surface(ss):.0f} · RT {b.total_runtime(ss):.0f}",
+            ]
+            footers = [min_gas]
+            if label != "OK":
+                back_l = b.segment_gas_liters([x for x in ss if x.gas == gas], sac)
+                footers.append(f"back gas {back_l:.0f} L on {gas!r}")
+            card = format_card(title, rows_for(ss),
+                               headers=["depth", "stop", "run", "gas"],
+                               footer_lines=footers, aligns=[">", ">", ">", "<"])
+            cards.append("\n".join(card))
 
         self.runtime_text.delete("1.0", tk.END)
-        self.runtime_text.insert(tk.END, "\n".join(card))
+        self.runtime_text.insert(tk.END, "\n\n".join(cards))
 
     def _render_runtime_png(self, path: str) -> str:
         from matplotlib.figure import Figure
         from matplotlib.backends.backend_agg import FigureCanvasAgg
         body = self.runtime_text.get("1.0", tk.END).rstrip("\n")
+        body = body.translate(_BOX_TO_ASCII)   # keep the frame aligned in the PNG
         n = body.count("\n") + 2  # body lines + the eko-deco brand line
         fig = Figure(figsize=(4.6, max(2.0, 0.24 * n + 0.5)), dpi=150)
         FigureCanvasAgg(fig)

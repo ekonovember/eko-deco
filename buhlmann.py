@@ -469,8 +469,21 @@ def plan_multilevel(levels: Sequence[Level], bottom_gas: Gas,
         going_down = level.depth > depth
         # Bottom-phase gas rule: the level's own mix if it names one, else the
         # bottom gas (descent_gas swaps in a travel mix where it is hypoxic).
-        gas_for = ((lambda d, g=level.gas: g) if level.gas is not None
-                   else descent_gas_for)
+        # A named level mix is only breathed on the *travel* leg where its ppO2
+        # sits in the usable window; too deep for a rich mix (e.g. ascending to
+        # a shallow level on a deco gas) we stay on the descent/bottom gas and
+        # switch at the mix's MOD, not at the deep end of the travel.
+        if level.gas is not None:
+            hi_ppo2 = ((plan.ppo2_bottom if going_down else plan.ppo2_deco)
+                       + plan.ppo2_switch_tol)
+
+            def gas_for(d, g=level.gas, hi=hi_ppo2):
+                po2 = g.ppo2(d, plan.surface_p, plan.msw_per_bar)
+                if plan.ppo2_min - 1e-9 <= po2 <= hi + 1e-9:
+                    return g
+                return descent_gas_for(d)
+        else:
+            gas_for = descent_gas_for
         _move(tissues, segs, plan, bottom_gas, depth, level.depth, gas_for,
               "descent" if going_down else "ascent", None)
         run += abs(level.depth - depth) / (plan.descent_rate if going_down

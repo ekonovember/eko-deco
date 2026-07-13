@@ -307,6 +307,26 @@ class TestMultilevel(unittest.TestCase):
         self.assertAlmostEqual(bottoms[0].gas.fHe, 0.35)
         self.assertAlmostEqual(bottoms[1].gas.fO2, 0.50)
 
+    def test_named_level_gas_not_breathed_over_ppo2_on_the_travel_up(self):
+        """Ascending to a shallow level on a rich named mix must not breathe it at
+        the deep end of the travel: the switch waits for the mix's MOD. Regression
+        for the chart showing EAN50 back at the bottom depth."""
+        levels = [b.Level(36, 20, b.EAN32), b.Level(20, 30, b.EAN50)]
+        segs, _ = b.plan_multilevel(levels, b.EAN32, self.PLAN)
+        for s in segs:
+            deep = max(s.depth_start, s.depth_end)
+            self.assertLessEqual(
+                s.gas.ppo2(deep),
+                self.PLAN.ppo2_deco + self.PLAN.ppo2_switch_tol + 1e-6,
+                f"{s.gas!r} over ppO2 at {deep:.1f} m")
+        # the flat 20 m level is still the mix the user asked for
+        bottoms = [s for s in segs if s.kind == "bottom"]
+        self.assertAlmostEqual(bottoms[-1].gas.fO2, 0.50)
+        # and EAN50 first appears no deeper than its switch depth
+        first_ean50 = next(max(s.depth_start, s.depth_end)
+                           for s in segs if s.gas == b.EAN50)
+        self.assertLessEqual(first_ean50, self.PLAN.switch_depth(b.EAN50) + 1e-6)
+
     def test_auto_level_breathes_the_bottom_gas_when_it_is_breathable(self):
         segs, _ = b.plan_multilevel([b.Level(40, 20), b.Level(20, 35)],
                                     b.EAN32, self.PLAN)

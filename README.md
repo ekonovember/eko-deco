@@ -40,8 +40,10 @@ Erik Baker's gradient factors — a zero-dependency core, plus a CLI and a Tkint
   Time-To-Surface (TTS).
 - Lost-deco-gas contingencies in the GUI: the schedule re-planned without each
   deco gas (and without all of them), with per-scenario gas usage showing what
-  the dive **needs against what you actually carry** (tank size × fill pressure),
-  bar remaining, and a `SHORT!` flag when a contingency outruns a cylinder.
+  the dive **needs at the normal SAC against what you actually carry** (tank size
+  × fill pressure), the emergency-SAC need (SAC × multiplier) in parentheses, bar
+  remaining, and a `SHORT!` flag when a contingency outruns a cylinder — plus a
+  second `SHORT!` inside the parens when even the emergency need is exceeded.
 - Ratio Deco (GUE/UTD) utility with standard gases and a Bühlmann cross-check.
 - Shared JSON config (`dive_plan.json`): the GUI and the CLI read/write the same
   dive, so `cli.py plan --save` shows up in the app on Reload and vice-versa.
@@ -62,8 +64,8 @@ Run `python app.py` for the visual planner shown above:
   it); SAC and the emergency SAC multiplier; plus **Save / Reload** of the
   shared `dive_plan.json`.
 - **Centre** — results as framed cards (gas, dive summary, the MultiDeco-style
-  stops + lost-deco-gas scenario table, per-scenario gas usage (need / have per
-  cylinder), per-cylinder gas + rock bottom, Ratio-Deco cross-check) and a
+  stops + lost-deco-gas scenario table, per-scenario gas usage (have / need per
+  cylinder, emergency need in parens), per-cylinder gas + rock bottom, Ratio-Deco cross-check) and a
   printable **runtime** wetnotes
   card — with the contingency columns — exportable to PNG with the
   `<//> eko-deco` mark.
