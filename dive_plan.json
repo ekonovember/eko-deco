@@ -3,36 +3,40 @@
     {
       "depth_m": 26.0,
       "runtime_min": 16.0,
-      "gas": null
+      "gas_id": 1
     },
     {
       "depth_m": 36.0,
       "runtime_min": 33.0,
-      "gas": null
+      "gas_id": 1
     },
     {
       "depth_m": 20.0,
       "runtime_min": 37.0,
-      "gas": {
-        "o2": 50,
-        "he": 0
-      }
+      "gas_id": 2
     }
   ],
   "gf_low": 30,
   "gf_high": 70,
-  "sac_normal": 18.5,
+  "sac_normal": 20.0,
   "sac_multiplier": 1.5,
   "problem_minutes": 1.0,
   "ascent_rate": 10.0,
   "descent_rate": 18.0,
   "stop_interval": 3.0,
-  "last_stop_m": 6.0,
+  "last_stop_m": 3.0,
   "ppo2_bottom": 1.4,
   "ppo2_deco": 1.6,
   "ppo2_min": 0.18,
+  "contingency": {
+    "time_before": 4,
+    "time_after": 3,
+    "depth_before": 3,
+    "depth_after": 1
+  },
   "gases": [
     {
+      "id": 1,
       "role": "Bottom",
       "o2": 30,
       "he": 0,
@@ -41,11 +45,12 @@
       "enabled": true
     },
     {
+      "id": 2,
       "role": "Deco",
       "o2": 50,
       "he": 0,
       "tank_l": 11.0,
-      "pressure_bar": 200.0,
+      "pressure_bar": 220.0,
       "enabled": true
     }
   ]

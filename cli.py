@@ -63,6 +63,30 @@ def parse_level(spec: str) -> b.Level:
     return b.Level(depth, runtime, gas)
 
 
+def parse_contingency(spec: str):
+    """Parse a cut-table step-count spec 'TB[:TA[:DB[:DA]]]' — bottom-time rows
+    3 min shorter/longer, depth columns 3 m shallower/deeper — e.g. '1:2:0:1'.
+    Empty parts (and the empty string, from a bare --contingency) mean "use the
+    config's value": returns a 4-tuple of count-or-None."""
+    parts = spec.strip().split(":")
+    if len(parts) > 4:
+        raise ValueError(f"contingency '{spec}': expected TB[:TA[:DB[:DA]]], "
+                         "e.g. 1 or 1:2:0:1")
+    counts = []
+    for p in parts + [""] * (4 - len(parts)):
+        if not p.strip():
+            counts.append(None)
+            continue
+        try:
+            n = int(p)
+        except ValueError:
+            raise ValueError(f"contingency '{spec}': step counts must be integers")
+        if n < 0:
+            raise ValueError(f"contingency '{spec}': step counts must be >= 0")
+        counts.append(n)
+    return tuple(counts)
+
+
 def _args_levels(args) -> List[b.Level]:
     """Levels from --level (repeatable), or the --depth/--time shorthand."""
     if args.level:
@@ -109,6 +133,10 @@ def _config_from_args(args) -> dict:
     """Serialise the CLI dive into a dive_config dict (for --save)."""
     _gp, gases = _args_gas_context(args)
     sac = args.sac if args.sac is not None else 20.0
+    counts = (None, None, None, None)
+    if args.contingency is not None:
+        counts = parse_contingency(args.contingency)
+    c_default = dc.default_config()["contingency"]
     return {
         "levels": [{"depth_m": l.depth, "runtime_min": l.runtime,
                     "gas": (None if l.gas is None
@@ -125,6 +153,8 @@ def _config_from_args(args) -> dict:
         "ppo2_bottom": args.ppo2_bottom,
         "ppo2_deco": args.ppo2_deco,
         "ppo2_min": args.ppo2_min,
+        "contingency": {k: (n if n is not None else c_default[k])
+                        for k, n in zip(dc.CONTINGENCY_KEYS, counts)},
         "gases": [{"role": role, "o2": round(g.fO2 * 100), "he": round(g.fHe * 100),
                    "tank_l": tk, "pressure_bar": pr} for (role, g, tk, pr) in gases],
     }
@@ -198,6 +228,51 @@ def _percylinder_gas(segs, depth, bottom_gas, gp, gases, ascent_rate=10.0):
     return data, lines
 
 
+def _contingency_output(grid, planned_depth: float, planned_time: float):
+    """(json_dict, text_lines) for the cut-table matrix from
+    ``buhlmann.contingency_schedules``: rows = bottom-time variants, columns =
+    depth variants, each cell the stop schedule as 'depth:min' pairs plus the
+    TTS rounded up to whole minutes, the wetnotes way ('no deco' when clean,
+    'n/a' when unplannable); '*' marks the planned row and column."""
+    data = {"time_step_min": b.CONTINGENCY_TIME_STEP,
+            "depth_step_m": b.CONTINGENCY_DEPTH_STEP,
+            "depths_m": [c.depth for c in grid[0]], "rows": []}
+    for row in grid:
+        cells = []
+        for c in row:
+            entry = {"depth_m": c.depth, "plannable": c.segments is not None}
+            if c.segments is not None:
+                entry["stops"] = [{"depth_m": s.depth_start,
+                                   "min": round(s.duration, 1)}
+                                  for s in c.segments if s.kind == "stop"]
+                entry["tts_min"] = round(b.time_to_surface(c.segments), 2)
+                entry["runtime_min"] = round(b.total_runtime(c.segments), 2)
+            cells.append(entry)
+        data["rows"].append({"bottom_time_min": row[0].bottom_time,
+                             "cells": cells})
+
+    lines = ["", "Contingency cut table (square profile at max depth, steps "
+                 f"{b.CONTINGENCY_TIME_STEP:g} min × {b.CONTINGENCY_DEPTH_STEP:g}"
+                 " m, * = planned; cell: stop depth:min · TTS rounded UP) — "
+                 "educational, NOT dive-safe:"]
+    heads = [f"{c.depth:g} m" + ("*" if abs(c.depth - planned_depth) < 1e-9
+                                 else "") for c in grid[0]]
+    texts = [[c.text() for c in row] for row in grid]
+    widths = [max(len(heads[j]), max(len(t[j]) for t in texts))
+              for j in range(len(heads))]
+    corner = "time\\depth"
+    lines.append((f"    {corner:<11}"
+                  + "  ".join(f"{heads[j]:<{widths[j]}}"
+                              for j in range(len(heads)))).rstrip())
+    for row, txt in zip(grid, texts):
+        label = f"{row[0].bottom_time:g}′" + (
+            "*" if abs(row[0].bottom_time - planned_time) < 1e-9 else "")
+        lines.append((f"    {label:<11}"
+                      + "  ".join(f"{txt[j]:<{widths[j]}}"
+                                  for j in range(len(heads)))).rstrip())
+    return data, lines
+
+
 def cmd_plan(args) -> int:
     load_path = args.config or args.load
     if load_path:
@@ -237,6 +312,22 @@ def cmd_plan(args) -> int:
     gas_data, gas_lines = _percylinder_gas(segs, depth, bottom, gp, gas_rows,
                                            plan.ascent_rate)
 
+    cont_data, cont_lines = None, []
+    if args.contingency is not None:
+        try:
+            counts = parse_contingency(args.contingency)
+        except ValueError as e:
+            print(f"plan: {e}", file=sys.stderr)
+            return 2
+        base = dc.contingency_of(cfg if load_path else {})
+        tb, ta, db, da = (base[i] if counts[i] is None else counts[i]
+                          for i in range(4))
+        grid = b.contingency_schedules(levels, bottom, plan,
+                                       time_before=tb, time_after=ta,
+                                       depth_before=db, depth_after=da)
+        cont_data, cont_lines = _contingency_output(grid, depth,
+                                                    levels[-1].runtime)
+
     saved_to = dc.save(cfg if load_path else _config_from_args(args),
                        args.save) if args.save else None
 
@@ -260,6 +351,8 @@ def cmd_plan(args) -> int:
         }
         if gas_data is not None:
             out["gas"] = gas_data
+        if cont_data is not None:
+            out["contingency"] = cont_data
         if saved_to:
             out["saved_to"] = saved_to
         print(json.dumps(out, indent=2))
@@ -292,6 +385,8 @@ def cmd_plan(args) -> int:
         print(f"⚠  level at {s.depth_start:g} m is ABOVE the decompression "
               f"ceiling ({s.ceiling_m:.1f} m) — the profile itself violates deco")
     for line in gas_lines:
+        print(line)
+    for line in cont_lines:
         print(line)
     if saved_to:
         print(f"Saved dive to {saved_to}")
@@ -389,6 +484,14 @@ def main(argv: List[str] | None = None) -> int:
                     help="Minutes solving the problem at max depth (rock bottom).")
     sp.add_argument("--tank-size", type=float,
                     help="Bottom-gas cylinder volume (L); or use --gas mix@litres.")
+    sp.add_argument("--contingency", nargs="?", const="",
+                    metavar="TB[:TA[:DB[:DA]]]",
+                    help="Backup cut-table matrix for a bottom timer: square-"
+                         "profile schedules on a 3 min × 3 m grid, TB/TA "
+                         "bottom-time rows shorter/longer and DB/DA depth "
+                         "columns shallower/deeper than planned (default from "
+                         "the config, else 1:1:1:1; a zero count disables "
+                         "that direction).")
     sp.add_argument("--load", nargs="?", const=dc.DEFAULT_PATH,
                     help="Load the dive from a JSON config (default dive_plan.json).")
     sp.add_argument("--save", nargs="?", const=dc.DEFAULT_PATH,

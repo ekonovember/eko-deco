@@ -118,6 +118,43 @@ class TestCLI(unittest.TestCase):
             with self.assertRaises(ValueError, msg=spec):
                 parse_level(spec)
 
+    def test_parse_contingency(self):
+        from cli import parse_contingency
+        none4 = (None, None, None, None)
+        self.assertEqual(parse_contingency(""), none4)            # bare flag
+        self.assertEqual(parse_contingency("2"), (2, None, None, None))
+        self.assertEqual(parse_contingency("1:2:0:1"), (1, 2, 0, 1))
+        self.assertEqual(parse_contingency(":2"), (None, 2, None, None))
+        self.assertEqual(parse_contingency("::0:2"), (None, None, 0, 2))
+        for spec in ("1:2:3:4:5", "soon", "-1", "1:-2", "1.5"):
+            with self.assertRaises(ValueError, msg=spec):
+                parse_contingency(spec)
+
+    def test_plan_json_contingency_end_to_end(self):
+        import contextlib
+        import io
+        import json
+        import cli
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = cli.main(["plan", "--depth", "40", "--time", "20",
+                           "--gas", "air", "--deco-gas", "50",
+                           "--contingency", "--json"])
+        self.assertEqual(rc, 0)
+        cont = json.loads(buf.getvalue())["contingency"]
+        self.assertEqual(cont["time_step_min"], 3.0)
+        self.assertEqual(cont["depth_step_m"], 3.0)
+        self.assertEqual(cont["depths_m"], [37.0, 40.0, 43.0])
+        self.assertEqual([r["bottom_time_min"] for r in cont["rows"]],
+                         [17.0, 20.0, 23.0])
+        for row in cont["rows"]:
+            self.assertEqual([c["depth_m"] for c in row["cells"]],
+                             [37.0, 40.0, 43.0])
+            for c in row["cells"]:
+                self.assertTrue(c["plannable"])
+                self.assertIn("stops", c)
+                self.assertIn("tts_min", c)
+
 
 class TestMultiGasTravel(unittest.TestCase):
     HYPOXIC = b.Gas(0.10, 0.70)   # 10/70 hypoxic trimix
@@ -490,6 +527,98 @@ class TestCeilingProfile(unittest.TestCase):
         prof = b.ceiling_profile(segs, plan)
         self.assertTrue(all(math.isfinite(c) and 0.0 <= c <= 60.0
                             for _t, c in prof))
+
+
+class TestContingency(unittest.TestCase):
+    PLAN = b.DivePlan(deco_gases=(b.EAN50,))
+
+    def _stops(self, segs):
+        return [(s.depth_start, s.duration) for s in segs if s.kind == "stop"]
+
+    def test_grid_shape_and_variants(self):
+        # Rows = bottom-time variants, columns = depth variants, 3 min x 3 m.
+        grid = b.contingency_schedules([b.Level(40, 20)], b.AIR, self.PLAN)
+        self.assertEqual([len(row) for row in grid], [3, 3, 3])
+        self.assertEqual([[(c.depth, c.bottom_time) for c in row]
+                          for row in grid],
+                         [[(37, 17), (40, 17), (43, 17)],
+                          [(37, 20), (40, 20), (43, 20)],
+                          [(37, 23), (40, 23), (43, 23)]])
+
+    def test_step_counts_extend_the_grid(self):
+        grid = b.contingency_schedules([b.Level(40, 20)], b.AIR, self.PLAN,
+                                       time_before=0, time_after=2,
+                                       depth_before=0, depth_after=1)
+        self.assertEqual([c.bottom_time for row in grid for c in row[:1]],
+                         [20, 23, 26])
+        self.assertEqual([c.depth for c in grid[0]], [40, 43])
+
+    def test_plan_cell_matches_plan_dive(self):
+        grid = b.contingency_schedules([b.Level(40, 20)], b.AIR, self.PLAN)
+        segs, _ = b.plan_dive(40, 20, b.AIR, self.PLAN)
+        cell = grid[1][1]                      # planned time x planned depth
+        self.assertEqual(self._stops(cell.segments), self._stops(segs))
+        self.assertAlmostEqual(b.time_to_surface(cell.segments),
+                               b.time_to_surface(segs))
+
+    def test_tts_monotone_in_time_and_depth(self):
+        grid = b.contingency_schedules([b.Level(40, 25)], b.AIR, self.PLAN)
+        for row in grid:                       # deeper column -> more deco
+            tts = [b.time_to_surface(c.segments) for c in row]
+            self.assertEqual(tts, sorted(tts))
+        for col in range(3):                   # longer row -> more deco
+            tts = [b.time_to_surface(row[col].segments) for row in grid]
+            self.assertEqual(tts, sorted(tts))
+
+    def test_no_deco_variant_is_a_normal_cell(self):
+        grid = b.contingency_schedules([b.Level(18, 20)], b.AIR)
+        short = grid[0][0]                     # shortest x shallowest
+        self.assertIsNotNone(short.segments)
+        self.assertFalse(any(s.kind == "stop" for s in short.segments))
+        self.assertIn("no deco", short.text())
+
+    def test_unplannable_cell_keeps_its_place(self):
+        # T - 3 = 1 min < the descent to 45 m: the whole shortened row is
+        # unplannable, but the grid stays rectangular (3x3) with n/a cells.
+        grid = b.contingency_schedules([b.Level(45, 4)], b.AIR)
+        self.assertEqual([len(row) for row in grid], [3, 3, 3])
+        self.assertIsNone(grid[0][1].segments)
+        self.assertEqual(grid[0][1].text(), "n/a")
+        self.assertIsNotNone(grid[1][1].segments)
+
+    def test_zero_counts_disable_directions(self):
+        grid = b.contingency_schedules([b.Level(40, 20)], b.AIR,
+                                       time_before=0, time_after=0,
+                                       depth_before=0, depth_after=0)
+        self.assertEqual([len(row) for row in grid], [1])
+        self.assertEqual((grid[0][0].depth, grid[0][0].bottom_time), (40, 20))
+
+    def test_nonpositive_variants_are_dropped(self):
+        # 2 min - 3 min and 3 m - 3 m would be <= 0: those rows/columns vanish
+        # instead of appearing as unplannable cells.
+        grid = b.contingency_schedules([b.Level(3, 2)], b.AIR)
+        self.assertEqual([c.bottom_time for row in grid for c in row[:1]],
+                         [2, 5])
+        self.assertEqual([c.depth for c in grid[0]], [3, 6])
+
+    def test_cell_text_lists_stops_and_tts(self):
+        import re
+        grid = b.contingency_schedules([b.Level(40, 25)], b.AIR, self.PLAN)
+        cell = grid[1][1]
+        self.assertTrue(any(s.kind == "stop" for s in cell.segments))
+        self.assertRegex(cell.text(), r"^(\d+:\d+ )*\d+:\d+ · \d+′$")
+        tts = int(re.search(r"· (\d+)′$", cell.text()).group(1))
+        self.assertEqual(tts, math.ceil(b.time_to_surface(cell.segments) - 1e-9))
+
+    def test_multilevel_flattens_to_conservative_square(self):
+        levels = [b.Level(45, 20), b.Level(30, 35), b.Level(18, 50)]
+        grid = b.contingency_schedules(levels, b.AIR, self.PLAN)
+        cell = grid[1][1]
+        self.assertEqual(cell.depth, b.max_depth(levels))
+        self.assertEqual(cell.bottom_time, levels[-1].runtime)
+        real, _ = b.plan_multilevel(levels, b.AIR, self.PLAN)
+        self.assertGreaterEqual(b.time_to_surface(cell.segments),
+                                b.time_to_surface(real))
 
 
 if __name__ == "__main__":

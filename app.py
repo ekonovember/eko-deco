@@ -91,14 +91,17 @@ def build_profile_points(segs) -> Tuple[List[float], List[float]]:
 def format_card(title_lines: List[str], rows: List[List[str]],
                 headers: Optional[List[str]] = None,
                 footer_lines: Optional[List[str]] = None,
-                aligns: Optional[List[str]] = None) -> List[str]:
+                aligns: Optional[List[str]] = None,
+                widen: int = -1) -> List[str]:
     """Render a monospace box-drawing "slate" and return its lines. Every section
     is optional: full-width ``title_lines`` on top, an optional column ``headers``
     row, the ``rows`` grid, then optional full-width ``footer_lines`` — all framed
     to one width so columns line up in the Tk card and the exported PNG alike.
 
     ``aligns`` gives ``"<"`` / ``">"`` / ``"^"`` per grid column (default: first
-    column left, the rest right)."""
+    column left, the rest right). ``widen`` is the column that absorbs any extra
+    width a long title/footer line forces: the last by default; pick a
+    left-aligned one to keep right-aligned number columns snug."""
     title_lines = list(title_lines or [])
     footer_lines = list(footer_lines or [])
     grid_rows = [[str(c) for c in row] for row in rows]
@@ -113,8 +116,8 @@ def format_card(title_lines: List[str], rows: List[List[str]],
     # both sides (w + 2) and columns are joined by a single divider.
     inner = sum(w + 2 for w in widths) + (cols - 1)
     longest = max((len(s) for s in title_lines + footer_lines), default=0)
-    if longest > inner - 2:                        # widen last column to fit the text
-        widths[-1] += longest - (inner - 2)
+    if longest > inner - 2:                        # widen a column to fit the text
+        widths[widen] += longest - (inner - 2)
         inner = sum(w + 2 for w in widths) + (cols - 1)
 
     def full(s: str) -> str:                       # a full-width (spanning) row
@@ -163,12 +166,16 @@ class DecoApp:
         self.root = root
         root.title(f"{APP_NAME} — Bühlmann ZHL-16C + gradient factors "
                    "+ rock bottom")
-        root.geometry("1500x900")
+        self._ui_settings = load_ui_settings()
+        try:                       # last session's size/position (ui_settings)
+            root.geometry(str(self._ui_settings.get("geometry") or "1500x900"))
+        except tk.TclError:
+            root.geometry("1500x900")
+        root.protocol("WM_DELETE_WINDOW", self._on_close)
         self._set_window_icon()
 
         self._building = True
         self._base_cfg = dc.default_config()
-        self._ui_settings = load_ui_settings()
         self._build_layout()
         self._apply_theme()
         self._apply_config(dc.load())
@@ -268,6 +275,29 @@ class DecoApp:
                                   fmt="%.1f")
         self.sac_mult = self._add_spin(sacrow, "Emergency ×", 1.0, 9.0, 0.05, 2.0,
                                        fmt="%.2f")
+
+        # --- contingency cut tables (bottom-timer backup matrix) ---
+        cont = ttk.LabelFrame(left, text="Contingency (cut table)", padding=6)
+        cont.pack(fill=tk.X, pady=(8, 0))
+        self.cont_tb = tk.IntVar(value=1)
+        self.cont_ta = tk.IntVar(value=1)
+        self.cont_db = tk.IntVar(value=1)
+        self.cont_da = tk.IntVar(value=1)
+        # Step counts on the fixed 3 min × 3 m grid, one slider per direction.
+        # Classic tk.Scale (ttk has no labelled slider); themed in _apply_theme.
+        self._cont_scales = tuple(
+            tk.Scale(cont, from_=0, to=4, resolution=1, orient=tk.HORIZONTAL,
+                     label=label, variable=var)
+            for label, var in (("− time (×3 min)", self.cont_tb),
+                               ("+ time (×3 min)", self.cont_ta),
+                               ("− depth (×3 m)", self.cont_db),
+                               ("+ depth (×3 m)", self.cont_da)))
+        for i, scale in enumerate(self._cont_scales):
+            scale.configure(command=lambda _v: None if self._building
+                            else self.recompute())
+            scale.grid(row=i // 2, column=i % 2, sticky="ew", padx=2)
+        cont.columnconfigure(0, weight=1)
+        cont.columnconfigure(1, weight=1)
 
         # --- Settings menu: dark mode (ui_settings.json, not the dive plan) ---
         self.dark = tk.BooleanVar(value=bool(self._ui_settings.get("dark_mode")))
@@ -374,6 +404,25 @@ class DecoApp:
         self.root.configure(bg=p["bg"])
         for txt in (self.readout, self.runtime_text):
             txt.configure(bg=p["bg"], fg=p["fg"], insertbackground=p["fg"])
+        # tk.Scale is a classic (non-ttk) widget: style it by hand like the Texts.
+        for scale in self._cont_scales:
+            scale.configure(bg=p["bg"], fg=p["fg"], troughcolor=p["trough"],
+                            activebackground=p["active"], highlightthickness=0)
+
+    def _on_close(self) -> None:
+        # Window size/position is a UI preference like dark mode: it goes to
+        # ui_settings.json on close, never into the shareable dive config.
+        # An unmapped/iconified window reports 1x1+0+0 — don't persist that,
+        # it would shrink the next launch to nothing.
+        geom = self.root.geometry()
+        try:
+            w, h = (int(v) for v in geom.split("+", 1)[0].split("x"))
+            if w >= 200 and h >= 200:
+                self._ui_settings["geometry"] = geom
+                save_ui_settings(self._ui_settings)
+        except ValueError:
+            pass
+        self.root.destroy()
 
     def _on_dark_toggle(self, *_) -> None:
         self._apply_theme()
@@ -427,6 +476,18 @@ class DecoApp:
     # is not) — drawn from the Gases panel like every other choice here.
     AUTO_GAS = "auto"
 
+    @staticmethod
+    def _gas_label(g: b.Gas) -> str:
+        """Dropdown label for a mix: OXYGEN, AIR, EAN 50, TMX 18/40."""
+        o2 = int(round(g.fO2 * 100))
+        if g.fHe > 0:
+            return f"TMX {o2}/{int(round(g.fHe * 100))}"
+        if o2 == 100:
+            return "OXYGEN"
+        if o2 == 21:
+            return "AIR"
+        return f"EAN {o2}"
+
     def _gas_choices(self) -> List[str]:
         """The level gas dropdown: 'auto' plus every gas in the Gases panel that
         is ticked for use. The panel is the single source of truth — a level can
@@ -434,18 +495,20 @@ class DecoApp:
         out = [self.AUTO_GAS]
         for row in self.gas_rows:
             g = self._row_gas(row)
-            if g is not None and repr(g) not in out:
-                out.append(repr(g))
+            if g is not None and self._gas_label(g) not in out:
+                out.append(self._gas_label(g))
         return out
 
     def _refresh_level_gas_choices(self) -> None:
         """Keep each level's gas dropdown in step with the Gases panel: edited
-        mixes, added, removed and unticked gases all flow through. A level
-        pointing at a gas that is no longer carried falls back to 'auto' rather
-        than planning a gas the diver doesn't have."""
+        mixes, added, removed and unticked gases all flow through — the boxes
+        resize to the longest label. A level pointing at a gas that is no longer
+        carried falls back to 'auto' rather than planning a gas the diver
+        doesn't have."""
         choices = self._gas_choices()
+        width = max(len(c) for c in choices)
         for row in self.level_rows:
-            row["gas_box"].configure(values=choices)
+            row["gas_box"].configure(values=choices, width=width)
             if row["gas"].get() not in choices:
                 row["gas"].set(self.AUTO_GAS)
 
@@ -455,8 +518,10 @@ class DecoApp:
         run_var = tk.StringVar(value=f"{runtime:g}")
         gas_var = tk.StringVar(value=gas or self.AUTO_GAS)
 
-        gas_box = ttk.Combobox(self.level_list, textvariable=gas_var, width=8,
-                               state="readonly", values=self._gas_choices())
+        choices = self._gas_choices()
+        gas_box = ttk.Combobox(self.level_list, textvariable=gas_var,
+                               width=max(len(c) for c in choices),
+                               state="readonly", values=choices)
         widgets = [
             ttk.Spinbox(self.level_list, from_=1, to=300, width=5,
                         textvariable=depth_var),
@@ -496,7 +561,7 @@ class DecoApp:
     def _row_levels(self) -> List[b.Level]:
         """Every level row exactly as typed — never drops one. This is what gets
         saved: a field left blank mid-edit must not silently delete the level."""
-        by_label = {repr(g): g for g in
+        by_label = {self._gas_label(g): g for g in
                     (self._row_gas(r) for r in self.gas_rows) if g is not None}
         return [b.Level(self._num(row["depth"], 0.0, lo=0.0),
                         self._num(row["runtime"], 0.0, lo=0.0),
@@ -517,7 +582,8 @@ class DecoApp:
 
     def _add_gas_row(self, role: str = "Deco", fo2: float = 50, fhe: float = 0,
                      tank: float = 11, pressure: float = 232,
-                     enabled: bool = True, recompute: bool = True) -> None:
+                     enabled: bool = True, recompute: bool = True,
+                     gas_id: Optional[int] = None) -> None:
         role_var = tk.StringVar(value=role)
         fo2_var = tk.StringVar(value=str(int(fo2)))
         fhe_var = tk.StringVar(value=str(int(fhe)))
@@ -534,9 +600,12 @@ class DecoApp:
             ttk.Spinbox(self.gas_list, from_=0, to=300, width=4, textvariable=press_var),
         ]
 
+        # The numeric config id rides along invisibly (levels reference gases
+        # by it); rows added in the UI leave it None and dive_config assigns
+        # the next free number on save.
         row = {"widgets": widgets, "role": role_var, "fo2": fo2_var,
                "fhe": fhe_var, "tank": tank_var, "pressure": press_var,
-               "use": use_var}
+               "use": use_var, "id": gas_id}
         widgets.append(ttk.Checkbutton(self.gas_list, variable=use_var,
                                        style="GasUse.TCheckbutton"))
         widgets.append(ttk.Button(self.gas_list, text="✕", width=2,
@@ -1067,8 +1136,43 @@ class DecoApp:
                                footer_lines=footers, aligns=[">", ">", ">", "<"])
             cards.append("\n".join(card))
 
+        # Cut table: the bottom-timer backup matrix (computer failure, full gas
+        # stack — matrix × lost-gas combinations are deliberately not planned).
+        tb, ta = int(self.cont_tb.get()), int(self.cont_ta.get())
+        db, da = int(self.cont_db.get()), int(self.cont_da.get())
+        if (tb or ta or db or da) and levels:
+            grid = b.contingency_schedules(levels, gas, plan,
+                                           time_before=tb, time_after=ta,
+                                           depth_before=db, depth_after=da)
+            cards.append("\n".join(self._cut_table_card(
+                grid, plan, depth, levels[-1].runtime)))
+
         self.runtime_text.delete("1.0", tk.END)
         self.runtime_text.insert(tk.END, "\n\n".join(cards))
+
+    @staticmethod
+    def _cut_table_card(grid, plan, planned_depth: float,
+                        planned_time: float) -> List[str]:
+        """The wetnotes cut-table matrix card: rows are the bottom-time
+        variants, columns the depth variants, each cell the stop schedule as
+        'depth:min' pairs plus the TTS — rounded UP, the conservative wetnotes
+        convention ('no deco' when clean, 'n/a' when the variant can't be
+        planned). '*' marks the planned row and column: on the dive, round the
+        gauge UP to the next row/column."""
+        title = ["CUT TABLE (square @ max depth)",
+                 f"steps 3′ × 3 m · "
+                 f"GF {plan.gf_low*100:.0f}/{plan.gf_high*100:.0f}"]
+        headers = ["time\\depth"] + [
+            f"{c.depth:g} m" + ("*" if abs(c.depth - planned_depth) < 1e-9
+                                else "") for c in grid[0]]
+        rows = [[f"{row[0].bottom_time:g}′"
+                 + ("*" if abs(row[0].bottom_time - planned_time) < 1e-9
+                    else "")] + [c.text() for c in row]
+                for row in grid]
+        return format_card(title, rows, headers=headers,
+                           footer_lines=["cell: stop:min · TTS (UP) — * planned",
+                                         "gauge: max depth + dive time"],
+                           aligns=["<"] * len(headers), widen=0)
 
     def _render_runtime_png(self, path: str) -> str:
         from matplotlib.figure import Figure
@@ -1114,20 +1218,28 @@ class DecoApp:
             self.last_stop6.set(cfg.get("last_stop_m", 3.0) >= 6.0)
             self.sac.set(f"{cfg['sac_normal']:g}")
             self.sac_mult.set(f"{cfg.get('sac_multiplier', 2.0):.2f}")
+            cont = cfg.get("contingency", {})
+            for var, key in zip((self.cont_tb, self.cont_ta,
+                                 self.cont_db, self.cont_da),
+                                dc.CONTINGENCY_KEYS):
+                var.set(int(cont.get(key, 1)))
             for row in list(self.gas_rows):
                 self._remove_gas_row(row)
             for g in cfg["gases"]:
                 self._add_gas_row(g["role"], g["o2"], g.get("he", 0),
                                   g.get("tank_l", 0), g.get("pressure_bar", 232),
                                   enabled=g.get("enabled", True),
-                                  recompute=False)
-            # levels after the gases, so the gas dropdowns can be populated
+                                  recompute=False, gas_id=g.get("id"))
+            # levels after the gases, so the gas dropdowns can be populated;
+            # a level's gas is an id into the stack (None = automatic)
+            by_id = {g["id"]: g for g in cfg["gases"] if g.get("id")}
             self.level_rows.clear()
             for w in self.level_list.winfo_children():
                 if int(w.grid_info().get("row", 0)) > 0:
                     w.destroy()
             for lv in cfg["levels"]:
-                label = (repr(dc.gas_of(lv["gas"])) if lv.get("gas")
+                gid = lv.get("gas_id")
+                label = (self._gas_label(dc.gas_of(by_id[gid])) if gid in by_id
                          else self.AUTO_GAS)
                 self._add_level_row(lv["depth_m"], lv["runtime_min"], label,
                                     recompute=False)
@@ -1141,6 +1253,9 @@ class DecoApp:
         cfg.pop("depth_m", None)                 # legacy square-profile keys
         cfg.pop("bottom_time_min", None)
         cfg.update({
+            # Levels write the legacy inline mix; dive_config.save normalizes
+            # it to a gas_id referencing the stack (None = automatic), so the
+            # file on disk never carries a separate mix definition.
             "levels": [{"depth_m": l.depth, "runtime_min": l.runtime,
                         "gas": (None if l.gas is None
                                 else {"o2": round(l.gas.fO2 * 100),
@@ -1151,7 +1266,12 @@ class DecoApp:
             "last_stop_m": 6.0 if self.last_stop6.get() else 3.0,
             "sac_normal": self._num(self.sac, 20.0, lo=1.0),
             "sac_multiplier": round(self._num(self.sac_mult, 2.0, lo=1.0), 2),
-            "gases": [{"role": r["role"].get(),
+            "contingency": dict(zip(dc.CONTINGENCY_KEYS,
+                                    (int(self.cont_tb.get()),
+                                     int(self.cont_ta.get()),
+                                     int(self.cont_db.get()),
+                                     int(self.cont_da.get())))),
+            "gases": [{"id": r["id"], "role": r["role"].get(),
                        "o2": int(float(r["fo2"].get() or 0)),
                        "he": int(float(r["fhe"].get() or 0)),
                        "tank_l": self._row_tank(r),

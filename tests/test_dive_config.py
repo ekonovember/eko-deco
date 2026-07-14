@@ -81,7 +81,65 @@ class TestDiveConfig(unittest.TestCase):
         self.assertAlmostEqual(levels[0].depth, 120)
         self.assertAlmostEqual(levels[0].runtime, 20)
         self.assertAlmostEqual(levels[0].gas.fHe, 0.70)
-        self.assertIsNone(levels[1].gas)          # None = "auto"
+        self.assertIsNone(levels[1].gas)          # None = automatic
+        # The legacy inline 10/70 was not in the stack: it must have been
+        # parked as a disabled entry and referenced by id — levels never keep
+        # separate mix definitions on disk.
+        self.assertNotIn("gas", back["levels"][0])
+        self.assertEqual(back["levels"][0]["gas_id"], 3)  # after ids 1 and 2
+        parked = next(g for g in back["gases"] if g["id"] == 3)
+        self.assertFalse(parked["enabled"])       # not part of the active plan
+
+    def test_gas_ids_assigned_uniquely_when_defined(self):
+        # A gas gets the next free plain number the moment it is defined —
+        # unique per entry (twin cylinders of one mix get their own ids),
+        # never confusable with a display label.
+        cfg = dc._merged({"gases": [
+            {"role": "Bottom", "o2": 21, "he": 0},
+            {"role": "Travel", "o2": 35, "he": 25},
+            {"role": "Deco", "o2": 50, "he": 0},
+            {"role": "Deco", "o2": 50, "he": 0},   # twin cylinder, same mix
+            {"role": "Deco", "o2": 100, "he": 0},
+        ]})
+        self.assertEqual([g["id"] for g in cfg["gases"]], [1, 2, 3, 4, 5])
+
+    def test_gas_ids_stick_to_the_entry_across_mix_edits(self):
+        # The id names the cylinder entry, not a mix snapshot: existing ids
+        # are kept (new entries fill in above the highest), so a level's
+        # reference follows a mix edit instead of going stale.
+        cfg = dc._merged({
+            "gases": [{"id": 7, "role": "Bottom", "o2": 32, "he": 0},
+                      {"role": "Deco", "o2": 50, "he": 0}],
+            "levels": [{"depth_m": 30, "runtime_min": 20, "gas_id": 7}],
+        })
+        self.assertEqual([g["id"] for g in cfg["gases"]], [7, 8])
+        self.assertEqual(cfg["levels"][0]["gas_id"], 7)
+        self.assertAlmostEqual(dc.levels_of(cfg)[0].gas.fO2, 0.32)
+
+    def test_level_gas_id_resolves_or_falls_back_to_automatic(self):
+        base = {"gases": [{"role": "Bottom", "o2": 21, "he": 0},
+                          {"role": "Deco", "o2": 50, "he": 0}]}
+        cfg = dc._merged({**base, "levels": [
+            {"depth_m": 30, "runtime_min": 20, "gas_id": 2.0},   # float ok
+            {"depth_m": 30, "runtime_min": 30, "gas_id": None},
+            {"depth_m": 30, "runtime_min": 40, "gas_id": 99},    # stale
+        ]})
+        self.assertEqual([l["gas_id"] for l in cfg["levels"]],
+                         [2, None, None])
+        levels = dc.levels_of(cfg)
+        self.assertAlmostEqual(levels[0].gas.fO2, 0.50)  # forced from the stack
+        self.assertIsNone(levels[1].gas)                 # automatic
+        self.assertIsNone(levels[2].gas)                 # stale id -> automatic
+
+    def test_legacy_inline_gas_matches_stack_without_new_entry(self):
+        cfg = dc._merged({
+            "gases": [{"role": "Bottom", "o2": 21, "he": 0},
+                      {"role": "Deco", "o2": 50, "he": 0}],
+            "levels": [{"depth_m": 21, "runtime_min": 30,
+                        "gas": {"o2": 50, "he": 0}}],
+        })
+        self.assertEqual(cfg["levels"][0]["gas_id"], 2)
+        self.assertEqual(len(cfg["gases"]), 2)           # nothing parked
 
     def test_empty_levels_never_leaves_the_planner_without_a_dive(self):
         # A config can arrive with no levels (an empty list written by a GUI
@@ -97,7 +155,8 @@ class TestDiveConfig(unittest.TestCase):
         # already meant "runtime at the end of the bottom" — so it carries over.
         cfg = dc._merged({"depth_m": 40, "bottom_time_min": 22})
         self.assertEqual(cfg["levels"],
-                         [{"depth_m": 40.0, "runtime_min": 22.0, "gas": None}])
+                         [{"depth_m": 40.0, "runtime_min": 22.0,
+                           "gas_id": None}])
         self.assertNotIn("depth_m", cfg)
         self.assertNotIn("bottom_time_min", cfg)
         level = dc.levels_of(cfg)[0]
@@ -153,6 +212,53 @@ class TestDiveConfig(unittest.TestCase):
             back = dc.load(path)
         self.assertTrue(back["gases"][0]["enabled"])
         self.assertFalse(back["gases"][1]["enabled"])
+
+    def test_contingency_defaults_and_roundtrip(self):
+        cfg = dc.default_config()
+        self.assertEqual(cfg["contingency"],
+                         {"time_before": 1, "time_after": 1,
+                          "depth_before": 1, "depth_after": 1})
+        cfg["contingency"] = {"time_before": 0, "time_after": 2,
+                              "depth_before": 1, "depth_after": 3}
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "c.json")
+            dc.save(cfg, path)
+            back = dc.load(path)
+        self.assertEqual(back["contingency"],
+                         {"time_before": 0, "time_after": 2,
+                          "depth_before": 1, "depth_after": 3})
+        self.assertEqual(dc.contingency_of(back), (0, 2, 1, 3))
+
+    def test_contingency_partial_block_fills_defaults(self):
+        # A hand-edited block naming one count must not clobber the others.
+        cfg = dc._merged({"contingency": {"time_after": 3}})
+        self.assertEqual(cfg["contingency"],
+                         {"time_before": 1, "time_after": 3,
+                          "depth_before": 1, "depth_after": 1})
+
+    def test_contingency_missing_block_gets_defaults(self):
+        self.assertEqual(dc.contingency_of({}), (1, 1, 1, 1))
+
+    def test_contingency_negatives_clamp_to_zero(self):
+        cfg = dc._merged({"contingency": {"time_before": -5, "time_after": -1,
+                                          "depth_before": -2, "depth_after": -3}})
+        self.assertEqual(cfg["contingency"],
+                         {"time_before": 0, "time_after": 0,
+                          "depth_before": 0, "depth_after": 0})
+
+    def test_contingency_legacy_deltas_migrate_to_steps(self):
+        # Old configs stored time +-DT min / depth +DD m deltas: DT becomes
+        # round(DT/3) rows both ways, DD round(DD/3) deeper columns only.
+        cfg = dc._merged({"contingency": {"time_delta_min": 5.0,
+                                          "depth_delta_m": 3.0}})
+        self.assertEqual(cfg["contingency"],
+                         {"time_before": 2, "time_after": 2,
+                          "depth_before": 0, "depth_after": 1})
+        cfg = dc._merged({"contingency": {"time_delta_min": 0,
+                                          "depth_delta_m": 6}})
+        self.assertEqual(cfg["contingency"],
+                         {"time_before": 0, "time_after": 0,
+                          "depth_before": 0, "depth_after": 2})
 
     def test_invalid_role_coerced_to_deco(self):
         cfg = dc.default_config()

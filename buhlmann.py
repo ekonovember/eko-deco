@@ -682,6 +682,79 @@ def time_to_surface(segments: Iterable[DiveSegment]) -> float:
                if s.kind in ("ascent", "stop"))
 
 
+# Cut-table grid pitch: 3 m matches the stop interval, 3 min keeps the
+# round-up penalty small — the diver rounds the gauge UP to the next cell.
+CONTINGENCY_TIME_STEP = 3.0    # min per time step
+CONTINGENCY_DEPTH_STEP = 3.0   # m per depth step
+
+
+@dataclass
+class ContingencyCell:
+    """One cell of a contingency ("cut table") matrix: a square-profile dive at
+    `depth` msw leaving the bottom at `bottom_time` min runtime. `segments` is
+    None when the variant cannot be planned (e.g. the shortened time is less
+    than the descent takes)."""
+    depth: float
+    bottom_time: float
+    segments: Optional[List[DiveSegment]]
+
+    def text(self) -> str:
+        """Wetnotes cell text: stops deep→shallow as 'depth:min', then the TTS
+        rounded UP ('· N′'); 'no deco' when clean, 'n/a' when unplannable."""
+        if self.segments is None:
+            return "n/a"
+        stops = [f"{s.depth_start:g}:{s.duration:g}" for s in self.segments
+                 if s.kind == "stop" and s.duration > 0]
+        tts = math.ceil(time_to_surface(self.segments) - 1e-9)
+        return f"{' '.join(stops) if stops else 'no deco'} · {tts:g}′"
+
+
+def contingency_schedules(levels: Sequence[Level], bottom_gas: Gas,
+                          plan: DivePlan = DivePlan(), *,
+                          time_before: int = 1, time_after: int = 1,
+                          depth_before: int = 1, depth_after: int = 1,
+                          time_step: float = CONTINGENCY_TIME_STEP,
+                          depth_step: float = CONTINGENCY_DEPTH_STEP
+                          ) -> List[List[ContingencyCell]]:
+    """Backup "cut table" matrix for a bottom-timer (gauge) diver: schedules for
+    the planned dive and its neighbours on a fixed grid.
+
+    The profile is flattened to a square dive at max depth x total bottom time
+    — deliberately more conservative than the real multilevel schedule, because
+    max depth and dive time are what a gauge shows (average depth is not live
+    on a bottom timer). Rows are bottom-time variants (`time_before` steps
+    shorter … planned … `time_after` steps longer), columns depth variants
+    (`depth_before` shallower … `depth_after` deeper), both on the fixed
+    `time_step` × `depth_step` pitch (3 min × 3 m: round the gauge UP to the
+    next row/column). Zero counts disable a direction; variants at or below
+    zero are dropped. The full gas stack stays available — the table covers
+    computer failure, not gas loss.
+
+    Unlike the lost-gas scenarios (which drop unplannable variants), the grid
+    stays rectangular: an unplannable cell keeps its place with segments=None,
+    so renderers can align columns across rows. Tissues start fresh per cell.
+    """
+    d0 = max_depth(levels)
+    t0 = levels[-1].runtime
+    times = [t0 + i * time_step for i in range(-int(time_before),
+                                               int(time_after) + 1) if
+             t0 + i * time_step > 0]
+    depths = [d0 + j * depth_step for j in range(-int(depth_before),
+                                                 int(depth_after) + 1) if
+              d0 + j * depth_step > 0]
+    grid: List[List[ContingencyCell]] = []
+    for t in times:
+        row = []
+        for d in depths:
+            try:
+                segs, _ = plan_dive(d, t, bottom_gas, plan)
+            except (ValueError, RuntimeError):
+                segs = None
+            row.append(ContingencyCell(d, t, segs))
+        grid.append(row)
+    return grid
+
+
 # -----------------------------------------------------------------------------
 # Gas management: consumption, TTS and "rock bottom" (minimum) gas
 # -----------------------------------------------------------------------------

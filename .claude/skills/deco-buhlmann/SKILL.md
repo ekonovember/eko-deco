@@ -21,10 +21,11 @@ never present results as safe for real dives.** Run commands from the repo root.
 - "Rock bottom / minimum gas for this dive" (SAC + emergency multiplier, single diver) and TTS
 - "Do I have enough gas?" — per-cylinder need vs carried (tank size x fill pressure)
 - Hypoxic trimix that needs a travel gas
+- "Backup / cut table for a bottom timer" — contingency matrix on a 3 min × 3 m grid (time rows × depth columns)
 
 ## Files
 
-- `buhlmann.py` — library: `Gas`, `Tissues`, `Level`/`plan_multilevel` (multi-level; `plan_dive` = one level), `ndl`, `ceiling`, `ceiling_profile`, `time_to_surface`, `max_depth`/`average_depth`, `GasPlan`/`rock_bottom_liters`
+- `buhlmann.py` — library: `Gas`, `Tissues`, `Level`/`plan_multilevel` (multi-level; `plan_dive` = one level), `ndl`, `ceiling`, `ceiling_profile`, `time_to_surface`, `max_depth`/`average_depth`, `GasPlan`/`rock_bottom_liters`, `contingency_schedules` (cut-table matrix, square @ max depth)
 - `cli.py` — `python cli.py {plan|ndl|tissues} …` (`--json` for machine output)
 - `dive_config.py` / `dive_plan.json` — shared JSON dive config (`levels` + gases + GF); `plan --save` writes it, the GUI reads it
 - `tests/` — `python -m unittest discover -s tests`; includes cross-checks against
@@ -45,6 +46,7 @@ python cli.py plan dive_plan.json                                               
 python cli.py plan --depth 45 --time 25 --gas 21/35 --deco-gas 50 --last-stop 6   # Shearwater-style last stop
 python cli.py plan --level 45:25 --level 30:40 --level 18:55 --gas 21/35 --deco-gas 50   # multi-level
 python cli.py plan --level 120:20:10/70 --level 45:40 --gas 10/70 --travel-gas 35/25     # gas per level
+python cli.py plan --depth 40 --time 25 --gas air --deco-gas 50 --contingency 0:2:0:1    # cut table +2 time steps, +1 depth step
 ```
 
 Gas syntax: `air`, `o2`, `ean32` / `nx32` / `32`, trimix `21/35` (fO2/fHe %).

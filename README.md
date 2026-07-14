@@ -45,11 +45,22 @@ Erik Baker's gradient factors — a zero-dependency core, plus a CLI and a Tkint
   × fill pressure), the emergency-SAC need (SAC × multiplier) in parentheses, bar
   remaining, and a `SHORT!` flag when a contingency outruns a cylinder — plus a
   second `SHORT!` inside the parens when even the emergency need is exceeded.
+- A contingency **cut table** for a bottom-timer (gauge) backup, MultiDeco/
+  V-Planner range-plan style: the dive flattened to a square profile at max
+  depth, re-planned on a fixed **3 min × 3 m grid** around the plan — rows are
+  bottom-time variants, columns depth variants, each cell the stop schedule as
+  `depth:min` pairs plus TTS. How many steps shorter/longer and shallower/deeper
+  is adjustable per direction (0 disables it) — if the computer dies you read
+  max depth + dive time off the gauge and round UP to the next row/column.
 - A deco-ceiling curve on the profile chart (Subsurface-style): the
   GF-interpolated ceiling, anchored on the planned first stop, drawn as a dashed
   line with a translucent curtain from the surface.
 - Shared JSON config (`dive_plan.json`): the GUI and the CLI read/write the same
   dive, so `cli.py plan --save` shows up in the app on Reload and vice-versa.
+  Levels reference the gas stack by a numeric `gas_id` — a unique plain number
+  each gas gets when it is defined (never a label, never shown in the UI), so
+  there is one source of truth and no duplicate mix definitions; `null` means
+  automatic gas selection (bottom gas while breathable, travel gas where not).
 - Printable **runtime** (wetnotes card) in the GUI — depth / stop / runtime / gas
   plus TTS and minimum-gas / turn pressure — exportable to PNG to take in the water.
 - NDL calculator and tissue-loading report.
@@ -64,20 +75,25 @@ Run `python app.py` for the visual planner shown above:
   breathes whatever is relevant at that depth) to plan a multi-level dive; an
   editable gas stack (bottom / travel / deco, each with its own O₂, He, tank and
   fill, and a **use** checkbox to leave a gas out of the plan without deleting
-  it); SAC and the emergency SAC multiplier; plus **Save / Reload** of the
-  shared `dive_plan.json`.
+  it); SAC and the emergency SAC multiplier; four **Contingency (cut table)**
+  sliders — bottom-time steps −/+ and depth steps −/+ on the fixed 3 min × 3 m
+  grid (0 disables a direction); plus **Save / Reload** of the shared
+  `dive_plan.json`.
 - **Results tab** — results as framed cards (gas, dive summary, the
   MultiDeco-style stops + lost-deco-gas scenario table, per-scenario gas usage
   (have / need per cylinder, emergency need in parens), per-cylinder gas + rock
-  bottom) and a printable **runtime** wetnotes card — with the contingency
-  columns — exportable to PNG with the `<//> eko-deco` mark.
+  bottom) and a printable **runtime** wetnotes card — one framed card per
+  lost-gas scenario, then the **CUT TABLE** matrix card (bottom-time rows ×
+  depth columns, each cell the stops + TTS; `*` marks the planned row and
+  column) — exportable to PNG with the `<//> eko-deco` mark.
 - **Profile tab** — the depth-vs-time chart: the Bühlmann GF ascent with stops
   and gas switches, plus the decompression ceiling (dashed, with a translucent
   curtain from the surface) so you can see how close the schedule runs to it.
 
 **Dark mode** lives in the **Settings** menu and themes the whole app including
-the chart; the choice is remembered in `ui_settings.json` (per-user,
-git-ignored), kept separate from the dive itself in `dive_plan.json`.
+the chart; the choice — and the window size/position, captured when you close
+the app — is remembered in `ui_settings.json` (per-user, git-ignored), kept
+separate from the dive itself in `dive_plan.json`.
 
 **Taskbar icon:** the app sets its `<//>` tile as the window icon everywhere.
 GNOME docks additionally need a launcher to show it — register one (per-user,
@@ -115,6 +131,13 @@ python cli.py plan --level 120:20:10/70 --level 45:40 --gas 10/70 --travel-gas 3
 
 # Last stop at 6 m instead of 3 m (Shearwater/MultiDeco style)
 python cli.py plan --depth 45 --time 25 --gas 21/35 --deco-gas 50 --last-stop 6
+
+# Contingency cut table for a bottom-timer backup: a matrix on a 3 min × 3 m
+# grid — bottom-time rows shorter/longer, depth columns shallower/deeper.
+# Bare --contingency takes the step counts from the config; or pass
+# TB[:TA[:DB[:DA]]] (time before/after, depth before/after; 0 disables one).
+python cli.py plan --depth 40 --time 25 --gas air --deco-gas 50 --contingency
+python cli.py plan --depth 40 --time 25 --gas air --deco-gas 50 --contingency 0:2:0:1
 
 # Hypoxic trimix + travel gas, per-gas tanks, gas planning (TTS + rock bottom)
 python cli.py plan --depth 60 --time 25 --gas 10/70@24 \
@@ -166,18 +189,19 @@ python -m unittest discover -s tests -v
 
 The suite has two tiers:
 
-- **69 core tests** — constant counts, surface saturation, Haldane equivalence,
+- **82 core tests** — constant counts, surface saturation, Haldane equivalence,
   NDLs against published Bühlmann values (±5 min), multi-level profiles,
   gas-switch and travel-gas behaviour, the last-stop option, TTS / rock-bottom
-  gas, the ceiling profile and config round-trips. Pure standard library:
-  these run everywhere, including a bare Windows Python.
+  gas, the contingency cut-table matrix, the ceiling profile and config
+  round-trips. Pure standard library: these run everywhere, including a bare
+  Windows Python.
 - **26 cross-check tests** — these compile the reference implementations
   (Subsurface's `deco.cpp` with **g++**, Baker's `GFDECO` with **gfortran**) and
   run eko-deco against them. Without those compilers the two modules skip
-  themselves and you see `Ran 69 tests` — that is a *missing compiler*, not
+  themselves and you see `Ran 82 tests` — that is a *missing compiler*, not
   missing data; the skip message says so and tells you what to install. On
   Windows, install MSYS2/MinGW-w64 (or just run the suite under WSL) to get all
-  95.
+  108.
 
 The oracles are compiled on demand from Python, so no `make` step is needed.
 
