@@ -18,3 +18,4 @@ ui_settings.json
 *.dll
 tests/baker_oracle/gfdeco
 tests/baker_oracle/gfdeco.exe
+.claude/settings.local.json*
