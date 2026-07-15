@@ -20,6 +20,8 @@ from typing import List
 import buhlmann as b
 import dive_config as dc
 
+DISCLAIMER = "Educational model — NOT validated for planning real dives."
+
 
 def parse_gas(spec: str) -> b.Gas:
     """Parse 'air', 'ean32', 'nx32', '32', or trimix '21/35' (= 21% O2, 35% He)."""
@@ -125,7 +127,7 @@ def _args_gas_context(args):
     if args.sac is None:
         return None, gases
     gp = b.GasPlan(sac=args.sac, sac_multiplier=args.sac_multiplier,
-                   problem_minutes=args.problem_time)
+                   problem_minutes=args.problem_time, divers=args.divers)
     return gp, gases
 
 
@@ -145,7 +147,7 @@ def _config_from_args(args) -> dict:
                    for l in _args_levels(args)],
         "gf_low": round(args.gf_low * 100), "gf_high": round(args.gf_high * 100),
         "sac_normal": sac, "sac_multiplier": args.sac_multiplier,
-        "problem_minutes": args.problem_time,
+        "problem_minutes": args.problem_time, "divers": args.divers,
         "ascent_rate": args.ascent_rate,
         "descent_rate": args.descent_rate,
         "stop_interval": args.stop_interval,
@@ -167,20 +169,33 @@ def _percylinder_gas(segs, depth, bottom_gas, gp, gases, ascent_rate=10.0):
         return None, []
     sac = gp.sac
     sac_e = gp.sac * gp.sac_multiplier
-    tank_by = {repr(g): tk for (_r, g, tk, _p) in gases}
-    press_by = {repr(g): pr for (_r, g, _t, pr) in gases}
-    role_by = {repr(g): role for (role, g, _t, _p) in gases}
-    back_tank, back_pressure = next(((tk, pr) for (_r, g, tk, pr) in gases
-                                     if g == bottom_gas), (0.0, 0.0))
-    lines = [f"Gas  need vs have (emergency in parens; SAC {gp.sac:g}"
-             f" / {sac_e:g} L/min, ×{gp.sac_multiplier:g}):"]
+    # Same-mix cylinders (twin bottom tanks, two identical stages) act as one
+    # manifolded bank: volumes add, the fill pressure is volume-weighted.
+    tank_by: dict = {}
+    press_by: dict = {}
+    role_by: dict = {}
+    for role, g, tk, pr in gases:
+        key = repr(g)
+        vol = tank_by.get(key, 0.0)
+        total = vol + (tk or 0.0)
+        press_by[key] = ((press_by.get(key, 0.0) * vol + (pr or 0.0) * (tk or 0.0))
+                         / total if total > 0 else (pr or 0.0))
+        tank_by[key] = total
+        role_by.setdefault(key, role)
+    back_tank = tank_by.get(repr(bottom_gas), 0.0)
+    back_pressure = press_by.get(repr(bottom_gas), 0.0)
+    shared = (f" × {gp.divers} divers to the first switch"
+              if gp.divers > 1 else "")
+    lines = [f"Gas  need vs have (emrg in parens: bottom at SAC {gp.sac:g}, then"
+             f" problem {gp.problem_minutes:g} min @ max depth + ascent/deco"
+             f" at {sac_e:g} L/min{shared}):"]
     cylinders, seen = [], []
     for s in segs:
         if repr(s.gas) in seen:
             continue
         seen.append(repr(s.gas))
         liters = b.segment_gas_liters([x for x in segs if x.gas == s.gas], sac)
-        liters_e = liters * gp.sac_multiplier      # same volume at the emergency SAC
+        liters_e = b.emergency_gas_liters(segs, s.gas, gp)
         tk = tank_by.get(repr(s.gas), 0.0)
         pr = press_by.get(repr(s.gas), 0.0)
         role = role_by.get(repr(s.gas), "Bottom" if s.gas == bottom_gas else "stage")
@@ -209,6 +224,7 @@ def _percylinder_gas(segs, depth, bottom_gas, gp, gases, ascent_rate=10.0):
     rock = b.rock_bottom_liters(depth, gp, ascent_rate)
     data = {"sac_normal_l_min": gp.sac, "sac_multiplier": gp.sac_multiplier,
             "sac_emergency_l_min": gp.sac * gp.sac_multiplier,
+            "problem_minutes": gp.problem_minutes, "divers": gp.divers,
             "cylinders": cylinders, "rock_bottom_l": round(rock, 1)}
     if back_tank > 0:
         rock_bar = rock / back_tank
@@ -225,6 +241,8 @@ def _percylinder_gas(segs, depth, bottom_gas, gp, gases, ascent_rate=10.0):
         lines.append(line)
     else:
         lines.append(f"  Rock bottom: {rock:.0f} L (set bottom-gas tank for bar)")
+    lines.append("  (cylinder litres are ideal-gas: a 232 bar fill actually "
+                 "holds ~5% less, 300 bar ~10%)")
     return data, lines
 
 
@@ -276,11 +294,24 @@ def _contingency_output(grid, planned_depth: float, planned_time: float):
 def cmd_plan(args) -> int:
     load_path = args.config or args.load
     if load_path:
-        if not os.path.exists(load_path):
-            print(f"plan: config '{load_path}' not found; using defaults.",
+        # A typo'd path or a broken hand-edit must never silently plan the
+        # default dive — that is the worst failure mode for planning software.
+        try:
+            cfg = dc.load(load_path, strict=True)
+        except FileNotFoundError:
+            print(f"plan: config '{load_path}' not found.", file=sys.stderr)
+            return 2
+        except (OSError, ValueError) as e:
+            print(f"plan: config '{load_path}' is not readable JSON: {e}",
                   file=sys.stderr)
-        cfg = dc.load(load_path)
-        bottom, plan, gp, gas_rows = dc.to_buhlmann(cfg)
+            return 2
+        print(f"plan: dive loaded from '{load_path}' — CLI profile/gas/GF "
+              "flags are ignored (edit the config instead).", file=sys.stderr)
+        try:
+            bottom, plan, gp, gas_rows = dc.to_buhlmann(cfg)
+        except ValueError as e:
+            print(f"plan: {e}", file=sys.stderr)
+            return 2
         levels = dc.levels_of(cfg)
         gf_low, gf_high = cfg["gf_low"] / 100.0, cfg["gf_high"] / 100.0
     else:
@@ -288,15 +319,15 @@ def cmd_plan(args) -> int:
             print("plan: --depth and --time (or --level DEPTH:RUNTIME) are "
                   "required (or pass a config file / --load).", file=sys.stderr)
             return 2
-        bottom = parse_gas_spec(args.gas)[0]
-        plan = _build_plan(args)
         try:
+            bottom = parse_gas_spec(args.gas)[0]
+            plan = _build_plan(args)          # validates the gradient factors
             levels = _args_levels(args)
+            gp, gas_rows = _args_gas_context(args)
         except ValueError as e:
             print(f"plan: {e}", file=sys.stderr)
             return 2
         gf_low, gf_high = args.gf_low, args.gf_high
-        gp, gas_rows = _args_gas_context(args)
 
     try:
         segs, tissues = b.plan_multilevel(levels, bottom, plan)
@@ -306,11 +337,28 @@ def cmd_plan(args) -> int:
     depth = b.max_depth(levels)
     avg_depth = b.average_depth(segs)
     violations = b.ceiling_violations(segs)
+    po2_viol = b.worst_ppo2_violations(segs, plan)
+    cns, otu = b.cns_otu(segs)
+    end_m = bottom.end(depth, plan.surface_p, plan.msw_per_bar)
+    density = bottom.density(depth, plan.surface_p, plan.msw_per_bar)
     model_label = f"Bühlmann GF {int(gf_low * 100)}/{int(gf_high * 100)}"
     surface_ceiling = b.ceiling_depth(tissues, gf_high)
     tts = b.time_to_surface(segs)
     gas_data, gas_lines = _percylinder_gas(segs, depth, bottom, gp, gas_rows,
                                            plan.ascent_rate)
+
+    warnings = [f"level at {s.depth_start:g} m is above the "
+                f"{s.ceiling_m:.1f} m ceiling" for s in violations]
+    for v in po2_viol:
+        if v.kind == "high":
+            warnings.append(f"ppO2 {v.ppo2:.2f} bar on {v.segment.gas!r} at "
+                            f"{v.depth:.0f} m — over the {v.limit:.2f} limit")
+        else:
+            warnings.append(f"ppO2 {v.ppo2:.2f} bar on {v.segment.gas!r} at "
+                            f"{v.depth:.0f} m — hypoxic (min {v.limit:.2f})")
+    if density > b.DENSITY_MAX_G_L:
+        warnings.append(f"gas density {density:.1f} g/L at {depth:g} m exceeds "
+                        f"{b.DENSITY_MAX_G_L:g} g/L (CO2 retention risk)")
 
     cont_data, cont_lines = None, []
     if args.contingency is not None:
@@ -346,8 +394,12 @@ def cmd_plan(args) -> int:
             "total_runtime_min": round(b.total_runtime(segs), 2),
             "tts_min": round(tts, 2),
             "final_ceiling_m": round(surface_ceiling, 2),
-            "warnings": [f"level at {s.depth_start:g} m is above the "
-                         f"{s.ceiling_m:.1f} m ceiling" for s in violations],
+            "cns_pct": round(cns, 1),
+            "otu": round(otu, 1),
+            "end_m": round(end_m, 1),
+            "gas_density_g_l": round(density, 2),
+            "warnings": warnings,
+            "disclaimer": DISCLAIMER,
         }
         if gas_data is not None:
             out["gas"] = gas_data
@@ -366,50 +418,67 @@ def cmd_plan(args) -> int:
     print(f"\nDive plan  {model_label}  {profile} on {bottom!r}")
     if len(levels) > 1:
         print(f"Max depth {depth:g} m · average depth {avg_depth:.1f} m")
+    print(f"Bottom gas @ {depth:g} m: ppO₂ {bottom.ppo2(depth):.2f} bar · "
+          f"END {end_m:.0f} m (O₂ narcotic) · density {density:.1f} g/L")
     if plan.travel_gases:
         print(f"Travel gases: {', '.join(repr(g) for g in plan.travel_gases)}")
     if plan.deco_gases:
         print(f"Deco gases: {', '.join(repr(g) for g in plan.deco_gases)}")
     print("-" * 78)
-    print(f"{'segment':<10}{'from':>7}{'to':>7}{'min':>8}{'gas':>14}{'GF':>8}")
+    print(f"{'segment':<10}{'from':>7}{'to':>7}{'min':>8}{'run':>8}"
+          f"{'gas':>14}{'GF':>6}")
     print("-" * 78)
+    run = 0.0
     for s in segs:
+        run += s.duration
         gf = "" if s.gf_used is None else f"{s.gf_used:.2f}"
         print(f"{s.kind:<10}{s.depth_start:>7.1f}{s.depth_end:>7.1f}"
-              f"{s.duration:>8.1f}{repr(s.gas):>14}{gf:>8}")
+              f"{s.duration:>8.1f}{run:>8.1f}{repr(s.gas):>14}{gf:>6}")
     print("-" * 78)
     print(f"Total runtime: {b.total_runtime(segs):.1f} min    "
           f"Time to surface (TTS): {tts:.1f} min")
-    print(f"Surface ceiling at GF-High: {surface_ceiling:.2f} m")
-    for s in violations:
-        print(f"⚠  level at {s.depth_start:g} m is ABOVE the decompression "
-              f"ceiling ({s.ceiling_m:.1f} m) — the profile itself violates deco")
+    print(f"CNS {cns:.0f}% · OTU {otu:.0f}    "
+          f"Surface ceiling at GF-High: {surface_ceiling:.2f} m")
+    for w in warnings:
+        print(f"⚠  {w}")
     for line in gas_lines:
         print(line)
     for line in cont_lines:
         print(line)
     if saved_to:
         print(f"Saved dive to {saved_to}")
+    print(DISCLAIMER)
     return 0
 
 
 def cmd_ndl(args) -> int:
-    plan = _build_plan(args)
-    gas = parse_gas(args.gas)
+    try:
+        plan = _build_plan(args)
+        gas = parse_gas(args.gas)
+    except ValueError as e:
+        print(f"ndl: {e}", file=sys.stderr)
+        return 2
     n = b.ndl(args.depth, gas, plan)
     label = "(>10h)" if n is None else f"{n} min"
     if args.json:
         print(json.dumps({"depth_m": args.depth, "gas": args.gas,
-                          "gf_high": args.gf_high, "ndl_min": n}))
+                          "gf_high": args.gf_high, "ndl_min": n,
+                          "disclaimer": DISCLAIMER}))
     else:
         print(f"NDL at {args.depth} m on {gas!r} "
               f"(Bühlmann GF-High {args.gf_high:.2f}): {label}")
+        print(DISCLAIMER)
     return 0
 
 
 def cmd_tissues(args) -> int:
-    plan = _build_plan(args)
-    segs, tissues = b.plan_dive(args.depth, args.time, parse_gas(args.gas), plan)
+    try:
+        plan = _build_plan(args)
+        gas = parse_gas(args.gas)
+    except ValueError as e:
+        print(f"tissues: {e}", file=sys.stderr)
+        return 2
+    segs, tissues = b.plan_dive(args.depth, args.time, gas, plan)
     rows = []
     for i in range(b.N_COMP):
         p_comp = tissues.pN2[i] + tissues.pHe[i]
@@ -425,7 +494,7 @@ def cmd_tissues(args) -> int:
     if args.json:
         print(json.dumps({"compartments": rows}, indent=2))
         return 0
-    print(f"\nTissue loading after {args.time} min @ {args.depth} m on {parse_gas(args.gas)!r}")
+    print(f"\nTissue loading after {args.time} min @ {args.depth} m on {gas!r}")
     print(f"{'#':>3}{'t½N2':>8}{'pN2':>10}{'pHe':>10}{'pTot':>10}{'a':>9}{'b':>9}")
     for r in rows:
         print(f"{r['compartment']:>3}{r['halftime_N2_min']:>8.1f}"
@@ -439,8 +508,10 @@ def main(argv: List[str] | None = None) -> int:
         description="Bühlmann ZHL-16C + Gradient Factor dive planner (educational).")
     # Shared options
     common = argparse.ArgumentParser(add_help=False)
-    common.add_argument("--gf-low", type=float, default=0.30)
-    common.add_argument("--gf-high", type=float, default=0.80)
+    common.add_argument("--gf-low", type=float, default=0.30,
+                        help="default 0.30")
+    common.add_argument("--gf-high", type=float, default=0.70,
+                        help="default 0.70 (same as the GUI/config default)")
     common.add_argument("--descent-rate", type=float, default=18.0, help="m/min")
     common.add_argument("--ascent-rate", type=float, default=10.0, help="m/min")
     common.add_argument("--stop-interval", type=float, default=3.0, help="m")
@@ -481,7 +552,12 @@ def main(argv: List[str] | None = None) -> int:
                     help="Emergency SAC multiplier for rock bottom (e.g. 1.5); "
                          "emergency SAC = --sac x this. Default 2.0.")
     sp.add_argument("--problem-time", type=float, default=1.0,
-                    help="Minutes solving the problem at max depth (rock bottom).")
+                    help="Minutes solving the problem at max depth (rock bottom"
+                         " and the worst-moment emergency gas need).")
+    sp.add_argument("--divers", type=int, default=1,
+                    help="Divers sharing the supply in the emergency (2 = buddy"
+                         " out of gas, shared until the first gas switch)."
+                         " Scales rock bottom too. Default 1.")
     sp.add_argument("--tank-size", type=float,
                     help="Bottom-gas cylinder volume (L); or use --gas mix@litres.")
     sp.add_argument("--contingency", nargs="?", const="",

@@ -18,14 +18,14 @@ never present results as safe for real dives.** Run commands from the repo root.
 - "Show the tissue loading after this profile"
 - "How does GF low/high change the schedule?"
 - Trimix, nitrox, multi-gas deco plans
-- "Rock bottom / minimum gas for this dive" (SAC + emergency multiplier, single diver) and TTS
+- "Rock bottom / minimum gas for this dive" (SAC + emergency multiplier + problem time, single diver) and TTS
 - "Do I have enough gas?" — per-cylinder need vs carried (tank size x fill pressure)
 - Hypoxic trimix that needs a travel gas
 - "Backup / cut table for a bottom timer" — contingency matrix on a 3 min × 3 m grid (time rows × depth columns)
 
 ## Files
 
-- `buhlmann.py` — library: `Gas`, `Tissues`, `Level`/`plan_multilevel` (multi-level; `plan_dive` = one level), `ndl`, `ceiling`, `ceiling_profile`, `time_to_surface`, `max_depth`/`average_depth`, `GasPlan`/`rock_bottom_liters`, `contingency_schedules` (cut-table matrix, square @ max depth)
+- `buhlmann.py` — library: `Gas` (incl. `end`/`density`), `Tissues`, `Level`/`plan_multilevel` (multi-level; `plan_dive` = one level), `ndl`, `ceiling`, `ceiling_profile`, `time_to_surface`, `max_depth`/`average_depth`, `GasPlan`/`rock_bottom_liters`, `ppo2_violations`/`worst_ppo2_violations` (segments outside the ppO2 window — always surface these), `cns_otu` (NOAA CNS% + OTU), `contingency_schedules` (cut-table matrix, square @ max depth)
 - `cli.py` — `python cli.py {plan|ndl|tissues} …` (`--json` for machine output)
 - `dive_config.py` / `dive_plan.json` — shared JSON dive config (`levels` + gases + GF); `plan --save` writes it, the GUI reads it
 - `tests/` — `python -m unittest discover -s tests`; includes cross-checks against
@@ -50,10 +50,16 @@ python cli.py plan --depth 40 --time 25 --gas air --deco-gas 50 --contingency 0:
 ```
 
 Gas syntax: `air`, `o2`, `ean32` / `nx32` / `32`, trimix `21/35` (fO2/fHe %).
-Defaults: GF 30/80, descent 18 m/min, ascent 10 m/min, 3 m stops, last stop 3 m
+Defaults: GF 30/70 on the CLI (the library `DivePlan` uses 30/80), descent
+18 m/min, ascent 10 m/min, 3 m stops, last stop 3 m
 (`--last-stop 6` for the Shearwater/MultiDeco option), deco ppO2 1.6, sea level
 1.01325 bar, 10 msw/bar. Deco-gas switches snap to standard stop depths (O2 at
 the 6 m stop, EAN50 at 21 m). On Windows set `PYTHONUTF8=1` for clean output.
+Every plan prints ppO2/density/ceiling warnings (`warnings` in `--json`),
+CNS%/OTU, END + gas density, and an educational disclaimer — quote the
+warnings, and the disclaimer, when relaying a schedule. GF-low > GF-high is
+rejected. `plan <config>` errors out (exit 2) on a missing/corrupt file and
+ignores other CLI flags.
 
 ## Library use
 

@@ -77,6 +77,16 @@ def p_amb_to_depth(p_amb: float, surface_p: float = P_ATM,
 # Gas
 # -----------------------------------------------------------------------------
 
+# Molar masses (g/mol) and the ideal-gas molar volume at 0 °C / 1 atm (L/mol),
+# for the gas-density figure (Anthony & Mitchell's 5.2 / 6.2 g/L guidance).
+M_O2, M_N2, M_HE = 31.9988, 28.0134, 4.0026
+MOLAR_VOLUME = 22.414
+
+# Density above which work of breathing / CO2 retention risk is unacceptable
+# (Anthony & Mitchell 2015; preferred maximum is 5.2 g/L).
+DENSITY_MAX_G_L = 6.2
+
+
 @dataclass(frozen=True)
 class Gas:
     """Breathing gas. fO2 + fHe + fN2 == 1."""
@@ -111,11 +121,33 @@ class Gas:
         surface; positive for a hypoxic mix that needs a travel gas above it."""
         return max(0.0, (ppo2_min / self.fO2 - surface_p) * msw_per_bar)
 
+    def end(self, depth_m: float, surface_p: float = P_ATM,
+            msw_per_bar: float = MSW_PER_BAR, o2_narcotic: bool = True) -> float:
+        """Equivalent narcotic depth (msw): the depth at which AIR carries the
+        same narcotic gas pressure. O2 counted as narcotic as N2 (the GUE /
+        MultiDeco convention, so END = depth of p_amb*(1-fHe)); pass
+        o2_narcotic=False for the N2-only convention (scaled by air's fN2)."""
+        p_amb = depth_to_p_amb(depth_m, surface_p, msw_per_bar)
+        p_narc = p_amb * ((1.0 - self.fHe) if o2_narcotic
+                          else self.fN2 / AIR.fN2)
+        return p_amb_to_depth(p_narc, surface_p, msw_per_bar)
+
+    def density(self, depth_m: float = 0.0, surface_p: float = P_ATM,
+                msw_per_bar: float = MSW_PER_BAR) -> float:
+        """Gas density (g/L) at depth, ideal gas at 0 °C. Anthony & Mitchell
+        (2015): keep it <= 5.2 g/L, hard ceiling 6.2 g/L (air passes that at
+        about 39 m) — high density drives CO2 retention regardless of narcosis."""
+        molar_mass = (self.fO2 * M_O2 + self.fHe * M_HE + self.fN2 * M_N2)
+        p_amb = depth_to_p_amb(depth_m, surface_p, msw_per_bar)
+        return molar_mass / MOLAR_VOLUME * p_amb / P_ATM
+
     def __repr__(self) -> str:  # pragma: no cover - cosmetic
         if self.fHe > 0:
             return f"Trimix {int(round(self.fO2*100))}/{int(round(self.fHe*100))}"
         if abs(self.fO2 - 0.21) < 1e-6:
             return "Air"
+        if abs(self.fO2 - 1.0) < 1e-6:
+            return "O2"          # what a diver writes on a slate, not "EAN100"
         return f"EAN{int(round(self.fO2*100))}"
 
 
@@ -309,6 +341,14 @@ class DivePlan:
     # excess stays within this tolerance (bar); otherwise the switch rounds
     # down to the next shallower stop.
     ppo2_switch_tol: float = 0.05
+
+    def __post_init__(self) -> None:
+        # GF-low > GF-high would make the GF line *rise* toward the first stop —
+        # a profile no agency teaches and almost certainly a swapped input.
+        if not (0.0 < self.gf_low <= self.gf_high <= 1.0):
+            raise ValueError(
+                f"gradient factors must satisfy 0 < GF-low <= GF-high <= 1.0 "
+                f"(got {self.gf_low:g}/{self.gf_high:g})")
 
     def _usable(self, gas: Gas, depth: float, ppo2_ceiling: float) -> bool:
         pp = gas.ppo2(depth, self.surface_p, self.msw_per_bar)
@@ -622,6 +662,110 @@ def ceiling_violations(segments: Iterable[DiveSegment]) -> List[DiveSegment]:
     return [s for s in segments if s.ceiling_m is not None]
 
 
+@dataclass(frozen=True)
+class PpO2Violation:
+    """A segment breathed outside the plan's ppO2 window."""
+    segment: DiveSegment
+    ppo2: float        # worst ppO2 on the segment (bar)
+    limit: float       # the bound it broke (bar)
+    kind: str          # "high" (over the working ceiling) | "low" (hypoxic)
+    depth: float       # depth of the worst point (msw)
+
+
+def ppo2_violations(segments: Iterable[DiveSegment],
+                    plan: DivePlan = DivePlan()) -> List[PpO2Violation]:
+    """Segments breathed outside the ppO2 window — hyperoxic past the working
+    ceiling (descent/bottom: ppo2_bottom, ascent/stop: ppo2_deco, both + the
+    switch tolerance) or hypoxic below ppo2_min.
+
+    The planner never *chooses* such a gas, but it faithfully plans what it is
+    given (air deeper than its MOD, a hypoxic mix with no travel gas, a level
+    that names a gas over its MOD) and that must never pass silently. Segments
+    are constant-gas and constant-rate, so the worst ppO2 sits at an endpoint."""
+    out: List[PpO2Violation] = []
+    for s in segments:
+        hi_limit = ((plan.ppo2_bottom if s.kind in ("descent", "bottom")
+                     else plan.ppo2_deco) + plan.ppo2_switch_tol)
+        d_deep = max(s.depth_start, s.depth_end)
+        d_shallow = min(s.depth_start, s.depth_end)
+        po2_deep = s.gas.ppo2(d_deep, plan.surface_p, plan.msw_per_bar)
+        po2_shallow = s.gas.ppo2(d_shallow, plan.surface_p, plan.msw_per_bar)
+        if po2_deep > hi_limit + 1e-6:
+            out.append(PpO2Violation(s, po2_deep, hi_limit, "high", d_deep))
+        if po2_shallow < plan.ppo2_min - 1e-6:
+            out.append(PpO2Violation(s, po2_shallow, plan.ppo2_min, "low",
+                                     d_shallow))
+    return out
+
+
+def worst_ppo2_violations(segments: Iterable[DiveSegment],
+                          plan: DivePlan = DivePlan()) -> List[PpO2Violation]:
+    """`ppo2_violations` reduced to the single worst offence per (gas, kind) —
+    what a warning banner should show (air below its MOD flags the descent AND
+    the bottom; one line with the deepest ppO2 says everything)."""
+    worst: dict = {}
+    for v in ppo2_violations(segments, plan):
+        key = (repr(v.segment.gas), v.kind)
+        cur = worst.get(key)
+        if (cur is None or (v.kind == "high" and v.ppo2 > cur.ppo2)
+                or (v.kind == "low" and v.ppo2 < cur.ppo2)):
+            worst[key] = v
+    return list(worst.values())
+
+
+# -----------------------------------------------------------------------------
+# Oxygen toxicity: CNS% (NOAA single-exposure clock) and OTU (Repex)
+# -----------------------------------------------------------------------------
+
+# NOAA single-exposure oxygen limits (ppO2 bar -> minutes), NOAA Diving Manual.
+# Stored as (ppO2, CNS fraction per minute); linear between points, zero below
+# 0.5 bar. Above 1.6 bar the last slope extrapolates — there is no published
+# limit up there, only a steeply growing hazard.
+_CNS_RATE = (
+    (0.5, 0.0),
+    (0.6, 1.0 / 720.0), (0.7, 1.0 / 570.0), (0.8, 1.0 / 450.0),
+    (0.9, 1.0 / 360.0), (1.0, 1.0 / 300.0), (1.1, 1.0 / 240.0),
+    (1.2, 1.0 / 210.0), (1.3, 1.0 / 180.0), (1.4, 1.0 / 150.0),
+    (1.5, 1.0 / 120.0), (1.6, 1.0 / 45.0),
+)
+
+
+def _cns_rate(po2: float) -> float:
+    """CNS clock fraction per minute at a ppO2 (bar)."""
+    if po2 <= _CNS_RATE[0][0]:
+        return 0.0
+    for (p0, r0), (p1, r1) in zip(_CNS_RATE, _CNS_RATE[1:]):
+        if po2 <= p1:
+            return r0 + (r1 - r0) * (po2 - p0) / (p1 - p0)
+    (p0, r0), (p1, r1) = _CNS_RATE[-2], _CNS_RATE[-1]
+    return r1 + (r1 - r0) * (po2 - p1) / (p1 - p0)
+
+
+def cns_otu(segments: Iterable[DiveSegment], surface_p: float = P_ATM,
+            msw_per_bar: float = MSW_PER_BAR,
+            step: float = 0.5) -> Tuple[float, float]:
+    """(CNS %, OTU) accumulated over the planned segments.
+
+    CNS integrates the NOAA single-exposure clock (`_CNS_RATE`); OTU uses the
+    Repex / Hamilton pulmonary dose, rate = ((ppO2 - 0.5) / 0.5)^0.83 per
+    minute for ppO2 > 0.5 bar. Depth-changing segments are integrated in
+    sub-steps of `step` minutes at the midpoint ppO2."""
+    cns = otu = 0.0
+    for s in segments:
+        if s.duration <= 0:
+            continue
+        n = max(1, math.ceil(s.duration / step - 1e-9))
+        dt = s.duration / n
+        for k in range(n):
+            frac = (k + 0.5) / n
+            depth = s.depth_start + (s.depth_end - s.depth_start) * frac
+            po2 = s.gas.ppo2(depth, surface_p, msw_per_bar)
+            cns += _cns_rate(po2) * dt
+            if po2 > 0.5:
+                otu += dt * ((po2 - 0.5) / 0.5) ** 0.83
+    return cns * 100.0, otu
+
+
 def ceiling_profile(segments: Sequence[DiveSegment], plan: DivePlan = DivePlan(),
                     start_tissues: Optional[Tissues] = None,
                     step: float = 0.5) -> List[Tuple[float, float]]:
@@ -765,6 +909,9 @@ class GasPlan:
     sac: float                            # normal / working SAC
     sac_multiplier: float = 2.0           # emergency SAC = sac * sac_multiplier
     problem_minutes: float = 1.0          # time solving the problem at max depth
+    divers: int = 1                       # divers sharing the supply in an
+                                          # emergency (2 = buddy out of gas,
+                                          # shared until the first gas switch)
     tank_liters: Optional[float] = None   # total cylinder volume, for bar output
 
 
@@ -783,20 +930,64 @@ def segment_gas_liters(segments: Iterable[DiveSegment], sac: float,
     return total
 
 
+def emergency_gas_liters(segments: Iterable[DiveSegment], gas: Gas,
+                         gas_plan: GasPlan, surface_p: float = P_ATM,
+                         msw_per_bar: float = MSW_PER_BAR) -> float:
+    """Litres of `gas` the dive needs if the problem strikes at the worst
+    possible moment — the end of the bottom phase (deepest tissue loading,
+    hence the longest deco), with the problem itself billed at max depth.
+
+    Before the problem nothing has gone wrong, so the bottom phase (descent +
+    levels + travel legs) is breathed at the normal SAC; then `problem_minutes`
+    at max depth plus the entire planned ascent + deco run at the emergency SAC
+    (`sac * sac_multiplier`). The problem minutes are billed to the gas breathed
+    at the deepest point, so they land on the bottom gas only.
+
+    With `divers > 1` the team shares the supply (a buddy out of gas): the
+    problem minutes and the ascent up to the first planned gas switch are
+    multiplied by `divers`; from the switch on each diver is back on their own
+    cylinder, so the rest of the deco is billed once. No switch = shared all
+    the way to the surface."""
+    segs = list(segments)
+    be = _bottom_phase_end(segs)
+    sac_e = gas_plan.sac * gas_plan.sac_multiplier
+    total = segment_gas_liters([s for s in segs[:be] if s.gas == gas],
+                               gas_plan.sac, surface_p, msw_per_bar)
+    asc = segs[be:]
+    n_shared = 0                       # ascent prefix before the first switch
+    for s in asc:
+        if s.gas != asc[0].gas:
+            break
+        n_shared += 1
+    total += segment_gas_liters([s for s in asc[:n_shared] if s.gas == gas],
+                                sac_e * gas_plan.divers, surface_p, msw_per_bar)
+    total += segment_gas_liters([s for s in asc[n_shared:] if s.gas == gas],
+                                sac_e, surface_p, msw_per_bar)
+    if segs[:be]:
+        deepest = max(segs[:be],
+                      key=lambda s: max(s.depth_start, s.depth_end))
+        if deepest.gas == gas:
+            d_max = max(deepest.depth_start, deepest.depth_end)
+            total += (sac_e * gas_plan.divers * gas_plan.problem_minutes
+                      * depth_to_p_amb(d_max, surface_p, msw_per_bar))
+    return total
+
+
 def rock_bottom_liters(bottom_depth: float, gas_plan: GasPlan,
                        ascent_rate: float = 10.0, surface_p: float = P_ATM,
                        msw_per_bar: float = MSW_PER_BAR) -> float:
-    """Minimum gas ("rock bottom") in litres for a single diver to leave the worst
-    point (max depth) and reach the surface in an emergency, breathing at the
-    emergency SAC (`sac * sac_multiplier`): time solving the problem at depth plus
-    a **direct** ascent to the surface at `ascent_rate` (average ambient pressure
-    = the mid-depth value).
+    """Minimum gas ("rock bottom") in litres to leave the worst point (max depth)
+    and reach the surface in an emergency, breathing at the emergency SAC
+    (`sac * sac_multiplier`): time solving the problem at depth plus a **direct**
+    ascent to the surface at `ascent_rate` (average ambient pressure = the
+    mid-depth value), the whole reserve multiplied by `divers` when the team
+    shares the supply.
 
     This is the standard minimum-gas reserve. It deliberately does not bill the full
     decompression schedule to the back gas — in a lost-gas scenario the diver
     ascends and switches onto the deco gas — so the reserve stays realistic (a
     full-deco figure would be many hundreds of bar on a deep dive)."""
-    sac_emergency = gas_plan.sac * gas_plan.sac_multiplier
+    sac_emergency = gas_plan.sac * gas_plan.sac_multiplier * gas_plan.divers
     p_max = depth_to_p_amb(bottom_depth, surface_p, msw_per_bar)
     p_avg = surface_p + (bottom_depth / 2.0) / msw_per_bar
     ascent_min = bottom_depth / ascent_rate if ascent_rate > 0 else 0.0

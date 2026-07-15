@@ -83,12 +83,15 @@ class TestDiveConfig(unittest.TestCase):
         self.assertAlmostEqual(levels[0].gas.fHe, 0.70)
         self.assertIsNone(levels[1].gas)          # None = automatic
         # The legacy inline 10/70 was not in the stack: it must have been
-        # parked as a disabled entry and referenced by id — levels never keep
-        # separate mix definitions on disk.
+        # parked as an entry and referenced by id — levels never keep separate
+        # mix definitions on disk. Parked ENABLED: disabled gases are never
+        # planned (a level referencing one falls back to automatic), so a
+        # disabled park would silently change the migrated plan.
         self.assertNotIn("gas", back["levels"][0])
         self.assertEqual(back["levels"][0]["gas_id"], 3)  # after ids 1 and 2
         parked = next(g for g in back["gases"] if g["id"] == 3)
-        self.assertFalse(parked["enabled"])       # not part of the active plan
+        self.assertTrue(parked["enabled"])
+        self.assertEqual(parked["tank_l"], 0)     # carried mix, no cylinder yet
 
     def test_gas_ids_assigned_uniquely_when_defined(self):
         # A gas gets the next free plain number the moment it is defined —
@@ -268,6 +271,36 @@ class TestDiveConfig(unittest.TestCase):
             dc.save(cfg, path)
             back = dc.load(path)
         self.assertEqual(back["gases"][0]["role"], "Deco")
+
+    def test_level_referencing_disabled_gas_falls_back_to_auto(self):
+        # A disabled gas is not carried: planning a level on it would breathe
+        # a mix the diver doesn't have (and, being outside the deco stack, one
+        # with no switch-depth breaks — it rode far past its MOD). The GUI
+        # resets such a dropdown to "auto"; levels_of must match.
+        cfg = dc.default_config()
+        cfg["gases"] = [
+            {"id": 1, "role": "Bottom", "o2": 21, "he": 0, "tank_l": 24},
+            {"id": 3, "role": "Deco", "o2": 50, "he": 0, "tank_l": 11,
+             "enabled": False},
+        ]
+        cfg["levels"] = [{"depth_m": 30, "runtime_min": 25, "gas_id": 3}]
+        levels = dc.levels_of(cfg)
+        self.assertIsNone(levels[0].gas)
+        # ... while an ENABLED reference is still forced.
+        cfg["gases"][1]["enabled"] = True
+        self.assertAlmostEqual(dc.levels_of(cfg)[0].gas.fO2, 0.50)
+
+    def test_load_strict_raises_on_missing_and_invalid(self):
+        with self.assertRaises(FileNotFoundError):
+            dc.load("/no/such/dive_plan.json", strict=True)
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "broken.json")
+            with open(path, "w", encoding="utf-8") as fh:
+                fh.write("{not json")
+            with self.assertRaises(ValueError):   # json.JSONDecodeError
+                dc.load(path, strict=True)
+            # lenient mode (the GUI) still falls back to the default config
+            self.assertEqual(dc.load(path), dc.default_config())
 
 
 if __name__ == "__main__":

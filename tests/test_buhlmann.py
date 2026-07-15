@@ -130,6 +130,46 @@ class TestCLI(unittest.TestCase):
             with self.assertRaises(ValueError, msg=spec):
                 parse_contingency(spec)
 
+    def test_plan_json_carries_warnings_toxicity_and_disclaimer(self):
+        import contextlib
+        import io
+        import json
+        import cli
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = cli.main(["plan", "--depth", "70", "--time", "20",
+                           "--gas", "air", "--json"])
+        self.assertEqual(rc, 0)
+        out = json.loads(buf.getvalue())
+        self.assertIn("disclaimer", out)
+        self.assertTrue(any("ppO2" in w for w in out["warnings"]))
+        self.assertTrue(any("density" in w for w in out["warnings"]))
+        self.assertGreater(out["cns_pct"], 0)
+        self.assertGreater(out["otu"], 0)
+        self.assertAlmostEqual(out["end_m"], 70.0, places=1)
+
+    def test_plan_missing_config_is_an_error(self):
+        import contextlib
+        import io
+        import cli
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            rc = cli.main(["plan", "/no/such/dive_plan.json"])
+        self.assertEqual(rc, 2)
+        self.assertIn("not found", err.getvalue())
+
+    def test_plan_rejects_inverted_gradient_factors(self):
+        import contextlib
+        import io
+        import cli
+        err = io.StringIO()
+        with contextlib.redirect_stderr(err):
+            rc = cli.main(["plan", "--depth", "40", "--time", "20",
+                           "--gas", "air", "--gf-low", "0.9",
+                           "--gf-high", "0.4"])
+        self.assertEqual(rc, 2)
+        self.assertIn("gradient factors", err.getvalue())
+
     def test_plan_json_contingency_end_to_end(self):
         import contextlib
         import io
@@ -284,6 +324,95 @@ class TestTTSandRockBottom(unittest.TestCase):
         ata = b.depth_to_p_amb(20)
         self.assertAlmostEqual(b.segment_gas_liters([seg], 15),
                                15 * ata * 10.0, places=6)
+
+    def test_emergency_gas_hand_calc(self):
+        # Constructed profile: bottom phase on air, ascent + stop on EAN50.
+        # Emergency need = bottom at SAC, problem at max depth + ascent/deco
+        # at SAC × multiplier, problem billed to the max-depth (bottom) gas.
+        segs = [b.DiveSegment("descent", 0, 30, 2.0, b.AIR),
+                b.DiveSegment("bottom", 30, 30, 18.0, b.AIR),
+                b.DiveSegment("ascent", 30, 6, 2.4, b.EAN50),
+                b.DiveSegment("stop", 6, 6, 5.0, b.EAN50)]
+        gp = b.GasPlan(sac=20, sac_multiplier=1.5, problem_minutes=2.0)
+        sac_e = 20 * 1.5
+        air = (b.segment_gas_liters(segs[:2], 20)
+               + sac_e * b.depth_to_p_amb(30) * 2.0)
+        ean50 = b.segment_gas_liters(segs[2:], sac_e)
+        self.assertAlmostEqual(b.emergency_gas_liters(segs, b.AIR, gp),
+                               air, places=6)
+        self.assertAlmostEqual(b.emergency_gas_liters(segs, b.EAN50, gp),
+                               ean50, places=6)
+
+    def test_emergency_gas_reduces_to_normal_need(self):
+        # multiplier 1 + no problem time = the plain per-gas consumption
+        segs, _ = b.plan_dive(40, 25, b.AIR,
+                              b.DivePlan(deco_gases=(b.EAN50,)))
+        gp = b.GasPlan(sac=20, sac_multiplier=1.0, problem_minutes=0.0)
+        for gas in (b.AIR, b.EAN50):
+            self.assertAlmostEqual(
+                b.emergency_gas_liters(segs, gas, gp),
+                b.segment_gas_liters([s for s in segs if s.gas == gas], 20),
+                places=6)
+
+    def test_emergency_problem_minutes_bill_the_bottom_gas_only(self):
+        segs, _ = b.plan_dive(40, 25, b.AIR,
+                              b.DivePlan(deco_gases=(b.EAN50,)))
+        gp0 = b.GasPlan(sac=20, sac_multiplier=2.0, problem_minutes=0.0)
+        gp5 = b.GasPlan(sac=20, sac_multiplier=2.0, problem_minutes=5.0)
+        self.assertAlmostEqual(b.emergency_gas_liters(segs, b.EAN50, gp5),
+                               b.emergency_gas_liters(segs, b.EAN50, gp0),
+                               places=6)
+        self.assertAlmostEqual(b.emergency_gas_liters(segs, b.AIR, gp5)
+                               - b.emergency_gas_liters(segs, b.AIR, gp0),
+                               2.0 * 20 * b.depth_to_p_amb(40) * 5.0, places=6)
+
+    def test_emergency_two_divers_share_until_the_first_switch(self):
+        # Buddy out of gas: problem minutes + the ascent on the bottom gas
+        # (up to the EAN50 switch) are doubled; the deco gas after the switch
+        # is each diver's own, so its need does not change.
+        segs, _ = b.plan_dive(40, 25, b.AIR,
+                              b.DivePlan(deco_gases=(b.EAN50,)))
+        gp1 = b.GasPlan(sac=20, sac_multiplier=2.0, problem_minutes=2.0,
+                        divers=1)
+        gp2 = b.GasPlan(sac=20, sac_multiplier=2.0, problem_minutes=2.0,
+                        divers=2)
+        self.assertAlmostEqual(b.emergency_gas_liters(segs, b.EAN50, gp2),
+                               b.emergency_gas_liters(segs, b.EAN50, gp1),
+                               places=6)
+        be = b._bottom_phase_end(segs)
+        shared = b.segment_gas_liters(
+            [s for s in segs[be:] if s.gas == b.AIR], 40)
+        problem = 40 * b.depth_to_p_amb(40) * 2.0
+        self.assertAlmostEqual(b.emergency_gas_liters(segs, b.AIR, gp2)
+                               - b.emergency_gas_liters(segs, b.AIR, gp1),
+                               shared + problem, places=6)
+
+    def test_emergency_two_divers_no_switch_shares_to_the_surface(self):
+        segs, _ = b.plan_dive(40, 25, b.AIR, b.DivePlan())
+        gp1 = b.GasPlan(sac=20, sac_multiplier=2.0, problem_minutes=0.0,
+                        divers=1)
+        gp2 = b.GasPlan(sac=20, sac_multiplier=2.0, problem_minutes=0.0,
+                        divers=2)
+        be = b._bottom_phase_end(segs)
+        ascent_e = b.segment_gas_liters(segs[be:], 40)
+        self.assertAlmostEqual(b.emergency_gas_liters(segs, b.AIR, gp2)
+                               - b.emergency_gas_liters(segs, b.AIR, gp1),
+                               ascent_e, places=6)
+
+    def test_rock_bottom_scales_with_divers(self):
+        gp1 = b.GasPlan(sac=20, sac_multiplier=2.0, divers=1)
+        gp2 = b.GasPlan(sac=20, sac_multiplier=2.0, divers=2)
+        self.assertAlmostEqual(b.rock_bottom_liters(30, gp2),
+                               2 * b.rock_bottom_liters(30, gp1), places=6)
+
+    def test_emergency_gas_at_least_the_normal_need(self):
+        segs, _ = b.plan_dive(45, 25, b.AIR,
+                              b.DivePlan(deco_gases=(b.EAN50, b.O2)))
+        gp = b.GasPlan(sac=18, sac_multiplier=1.8, problem_minutes=1.0)
+        for gas in (b.AIR, b.EAN50, b.O2):
+            self.assertGreaterEqual(
+                b.emergency_gas_liters(segs, gas, gp),
+                b.segment_gas_liters([s for s in segs if s.gas == gas], 18))
 
 
 class TestMultilevel(unittest.TestCase):
@@ -619,6 +748,105 @@ class TestContingency(unittest.TestCase):
         real, _ = b.plan_multilevel(levels, b.AIR, self.PLAN)
         self.assertGreaterEqual(b.time_to_surface(cell.segments),
                                 b.time_to_surface(real))
+
+
+class TestDivePlanValidation(unittest.TestCase):
+    def test_gf_low_over_gf_high_rejected(self):
+        with self.assertRaises(ValueError):
+            b.DivePlan(gf_low=0.90, gf_high=0.40)
+
+    def test_gf_out_of_range_rejected(self):
+        for lo, hi in ((0.0, 0.7), (-0.1, 0.7), (0.3, 1.2)):
+            with self.assertRaises(ValueError, msg=f"{lo}/{hi}"):
+                b.DivePlan(gf_low=lo, gf_high=hi)
+
+    def test_equal_and_full_gfs_are_valid(self):
+        b.DivePlan(gf_low=0.85, gf_high=0.85)
+        b.DivePlan(gf_low=1.0, gf_high=1.0)
+
+
+class TestPpO2Violations(unittest.TestCase):
+    def test_air_below_its_mod_is_flagged_hyperoxic(self):
+        segs, _ = b.plan_dive(70, 20, b.AIR)          # ppO2 1.68 on the bottom
+        viol = b.ppo2_violations(segs)
+        highs = [v for v in viol if v.kind == "high"]
+        self.assertTrue(highs)
+        worst = max(highs, key=lambda v: v.ppo2)
+        self.assertAlmostEqual(worst.ppo2, b.AIR.ppo2(70), places=6)
+        self.assertAlmostEqual(worst.depth, 70.0)
+
+    def test_hypoxic_mix_without_travel_gas_is_flagged(self):
+        segs, _ = b.plan_dive(60, 15, b.Gas(0.10, 0.70))
+        lows = [v for v in b.ppo2_violations(segs) if v.kind == "low"]
+        self.assertTrue(lows)
+        self.assertLess(min(v.ppo2 for v in lows), 0.18)
+
+    def test_forced_level_gas_over_its_mod_is_flagged(self):
+        plan = b.DivePlan(gf_low=0.30, gf_high=0.80, deco_gases=(b.EAN50,))
+        segs, _ = b.plan_multilevel([b.Level(33, 25, b.EAN50)], b.AIR, plan)
+        bottom_viol = [v for v in b.ppo2_violations(segs, plan)
+                       if v.segment.kind == "bottom" and v.kind == "high"]
+        self.assertTrue(bottom_viol)
+        self.assertAlmostEqual(bottom_viol[0].ppo2, b.EAN50.ppo2(33), places=6)
+
+    def test_clean_multigas_dive_has_no_violations(self):
+        plan = b.DivePlan(gf_low=0.30, gf_high=0.80,
+                          deco_gases=(b.EAN50, b.O2))
+        segs, _ = b.plan_multilevel([b.Level(45, 25)], b.Gas(0.21, 0.35), plan)
+        self.assertEqual(b.ppo2_violations(segs, plan), [])
+
+    def test_worst_dedupes_to_one_line_per_gas_and_kind(self):
+        segs, _ = b.plan_dive(70, 20, b.AIR)          # descent AND bottom violate
+        worst = b.worst_ppo2_violations(segs)
+        self.assertEqual(len(worst), 1)
+        self.assertAlmostEqual(worst[0].ppo2, b.AIR.ppo2(70), places=6)
+
+
+class TestOxygenToxicity(unittest.TestCase):
+    @staticmethod
+    def _flat(depth, minutes, gas):
+        return [b.DiveSegment("bottom", depth, depth, minutes, gas)]
+
+    def test_cns_100pct_after_45min_at_1_6_bar(self):
+        depth = (1.6 - b.P_ATM) * 10.0                # ppO2 exactly 1.6 on O2
+        cns, _ = b.cns_otu(self._flat(depth, 45, b.O2))
+        self.assertAlmostEqual(cns, 100.0, places=6)
+
+    def test_cns_and_otu_at_1_bar(self):
+        depth = (2.0 - b.P_ATM) * 10.0                # ppO2 1.0 on EAN50
+        cns, otu = b.cns_otu(self._flat(depth, 60, b.EAN50))
+        self.assertAlmostEqual(cns, 20.0, places=6)   # 60 / 300 NOAA minutes
+        self.assertAlmostEqual(otu, 60.0, places=6)   # rate is exactly 1 /min
+
+    def test_no_dose_below_half_bar(self):
+        cns, otu = b.cns_otu(self._flat(10, 60, b.Gas(0.21, 0.60)))
+        self.assertEqual((cns, otu), (0.0, 0.0))      # ppO2 0.42 < 0.5
+
+    def test_deeper_is_worse(self):
+        shallow = b.cns_otu(self._flat(30, 30, b.EAN32))
+        deep = b.cns_otu(self._flat(40, 30, b.EAN32))
+        self.assertGreater(deep[0], shallow[0])
+        self.assertGreater(deep[1], shallow[1])
+
+
+class TestGasEndDensity(unittest.TestCase):
+    def test_end_o2_narcotic_hand_calc(self):
+        g = b.Gas(0.21, 0.35)
+        p_narc = b.depth_to_p_amb(45.0) * (1 - 0.35)
+        self.assertAlmostEqual(g.end(45.0), (p_narc - b.P_ATM) * 10.0, places=6)
+
+    def test_end_of_air_is_the_depth_itself(self):
+        self.assertAlmostEqual(b.AIR.end(40.0), 40.0, places=6)
+
+    def test_density_air_at_surface_about_1_3(self):
+        self.assertAlmostEqual(b.AIR.density(0.0), 1.29, delta=0.02)
+
+    def test_air_passes_6_2_g_l_around_39m(self):
+        self.assertLess(b.AIR.density(38.0), b.DENSITY_MAX_G_L)
+        self.assertGreater(b.AIR.density(40.0), b.DENSITY_MAX_G_L)
+
+    def test_helium_thins_the_mix(self):
+        self.assertLess(b.Gas(0.21, 0.35).density(45.0), b.AIR.density(45.0))
 
 
 if __name__ == "__main__":

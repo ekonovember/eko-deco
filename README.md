@@ -36,13 +36,24 @@ Erik Baker's gradient factors — a zero-dependency core, plus a CLI and a Tkint
 - Multi-gas support: bottom + multiple acceleration/deco gases + travel gases,
   switched automatically by ppO₂ window (MOD ceiling + hypoxia floor). Handles
   hypoxic trimixes (e.g. 10/70) that need a travel gas near the surface.
-- Rock-bottom / minimum-gas planning for a single diver: one basic SAC plus an
-  emergency SAC multiplier (e.g. 1.5) and a problem-solving time, plus
+- **Safety rails on every schedule**: segments breathed outside the ppO₂ window
+  (air below its MOD, a hypoxic mix with no travel gas, a level forcing a gas
+  too deep) are flagged, never silently planned; gas density over 6.2 g/L
+  (Anthony & Mitchell) warns too. Each plan reports **CNS%** (NOAA clock),
+  **OTU**, **END** and gas density, and swapped gradient factors
+  (GF-low > GF-high) are rejected as input errors.
+- Rock-bottom / minimum-gas planning: one basic SAC plus an emergency SAC
+  multiplier (e.g. 1.5), a problem-solving time and a diver count — with
+  2 divers the emergency assumes a buddy out of gas sharing your supply until
+  the first gas switch (to the surface if there is none) — plus
   Time-To-Surface (TTS).
 - Lost-deco-gas contingencies in the GUI: the schedule re-planned without each
   deco gas (and without all of them), with per-scenario gas usage showing what
   the dive **needs at the normal SAC against what you actually carry** (tank size
-  × fill pressure), the emergency-SAC need (SAC × multiplier) in parentheses, bar
+  × fill pressure), the emergency need in parentheses — the dive up to the worst
+  possible moment (end of the bottom phase, at max depth) at the normal SAC, then
+  the problem-solving minutes at max depth plus the whole planned ascent + deco
+  at the emergency SAC (SAC × multiplier) — bar
   remaining, and a `SHORT!` flag when a contingency outruns a cylinder — plus a
   second `SHORT!` inside the parens when even the emergency need is exceeded.
 - A contingency **cut table** for a bottom-timer (gauge) backup, MultiDeco/
@@ -75,7 +86,9 @@ Run `python app.py` for the visual planner shown above:
   breathes whatever is relevant at that depth) to plan a multi-level dive; an
   editable gas stack (bottom / travel / deco, each with its own O₂, He, tank and
   fill, and a **use** checkbox to leave a gas out of the plan without deleting
-  it); SAC and the emergency SAC multiplier; four **Contingency (cut table)**
+  it); SAC, the emergency SAC multiplier, the problem time (minutes solving
+  the problem at max depth before the emergency ascent) and a **2 divers**
+  checkbox (a buddy shares your gas until the first switch); four **Contingency (cut table)**
   sliders — bottom-time steps −/+ and depth steps −/+ on the fixed 3 min × 3 m
   grid (0 disables a direction); plus **Save / Reload** of the shared
   `dive_plan.json`.
@@ -172,8 +185,8 @@ GFDECO and Subsurface all take a profile.
 There are more knobs than shown above — ascent/descent/stop rates, the
 shallowest-stop depth (`--last-stop`), the ppO₂
 window (`--ppo2-bottom` / `--ppo2-deco` / `--ppo2-min`), the emergency SAC
-multiplier and problem time for rock bottom (`--sac-multiplier`,
-`--problem-time`) — see
+multiplier, problem time and diver count for rock bottom and the emergency gas
+need (`--sac-multiplier`, `--problem-time`, `--divers`) — see
 `python cli.py plan -h` (or `ndl -h`, …) for the full list. Ready-to-run
 command snippets live in [`examples/`](examples/).
 
@@ -189,16 +202,17 @@ python -m unittest discover -s tests -v
 
 The suite has two tiers:
 
-- **82 core tests** — constant counts, surface saturation, Haldane equivalence,
+- **119 core tests** — constant counts, surface saturation, Haldane equivalence,
   NDLs against published Bühlmann values (±5 min), multi-level profiles,
-  gas-switch and travel-gas behaviour, the last-stop option, TTS / rock-bottom
+  gas-switch and travel-gas behaviour, ppO₂-violation and oxygen-toxicity
+  (CNS/OTU) checks, END/density, the last-stop option, TTS / rock-bottom
   gas, the contingency cut-table matrix, the ceiling profile and config
   round-trips. Pure standard library: these run everywhere, including a bare
   Windows Python.
 - **26 cross-check tests** — these compile the reference implementations
   (Subsurface's `deco.cpp` with **g++**, Baker's `GFDECO` with **gfortran**) and
   run eko-deco against them. Without those compilers the two modules skip
-  themselves and you see `Ran 82 tests` — that is a *missing compiler*, not
+  themselves and you see `Ran 119 tests` — that is a *missing compiler*, not
   missing data; the skip message says so and tells you what to install. On
   Windows, install MSYS2/MinGW-w64 (or just run the suite under WSL) to get all
   108.

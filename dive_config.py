@@ -13,7 +13,7 @@ Schema::
         {"depth_m": 30, "runtime_min": 40, "gas_id": 2}
       ],
       "gf_low": 30, "gf_high": 70,
-      "sac_normal": 20, "sac_multiplier": 2.0, "problem_minutes": 1,
+      "sac_normal": 20, "sac_multiplier": 2.0, "problem_minutes": 1, "divers": 1,
       "ascent_rate": 10, "descent_rate": 18, "stop_interval": 3, "last_stop_m": 3,
       "ppo2_bottom": 1.4, "ppo2_deco": 1.6, "ppo2_min": 0.18,
       "contingency": {"time_before": 1, "time_after": 1,
@@ -41,13 +41,15 @@ entry (not a mix snapshot), editing a gas's mix carries every level that
 references it along automatically. ``gas_id: null`` — the default, also what a
 missing or stale id normalizes to — means **automatic** gas selection: the
 bottom gas while it is breathable, a travel mix where it is not. Any real id
-forces that stack gas for the level, and every calculation (planning,
-consumption) uses the referenced entry. A square profile is simply a
-single level. Migrations on load: pre-multilevel configs (``depth_m`` +
+of an **enabled** gas forces that stack gas for the level, and every
+calculation (planning, consumption) uses the referenced entry; a reference to
+a *disabled* gas plans as automatic — a disabled gas is not carried, and the
+GUI resets such a dropdown to "auto" the same way. A square profile is simply
+a single level. Migrations on load: pre-multilevel configs (``depth_m`` +
 ``bottom_time_min``) become one level; legacy inline level gases
-(``"gas": {"o2": .., "he": ..}``) are matched to the stack by mix — a mix the
-stack doesn't carry is parked as a disabled entry and referenced, so the plan
-doesn't change.
+(``"gas": {"o2": .., "he": ..}``) are matched to the stack by mix (enabled
+entries first) — a mix the stack doesn't carry is parked as an enabled
+tankless entry and referenced, so the plan doesn't change.
 
 ``contingency`` sizes the backup cut-table matrix as step counts on the fixed
 3 min × 3 m grid: ``time_before``/``time_after`` bottom-time rows shorter/longer
@@ -76,6 +78,7 @@ def default_config() -> dict:
         "sac_normal": 20.0,
         "sac_multiplier": 2.0,
         "problem_minutes": 1.0,
+        "divers": 1,
         "ascent_rate": 10.0,
         "descent_rate": 18.0,
         "stop_interval": 3.0,
@@ -94,12 +97,18 @@ def default_config() -> dict:
     }
 
 
-def load(path: str = DEFAULT_PATH) -> dict:
-    """Read a config, falling back to the default if it is missing or invalid."""
+def load(path: str = DEFAULT_PATH, strict: bool = False) -> dict:
+    """Read a config. Lenient by default: missing or invalid files fall back to
+    the default config (the GUI's first launch). ``strict=True`` raises instead
+    (FileNotFoundError / OSError / json.JSONDecodeError) — the CLI uses it so a
+    typo'd path or a broken hand-edit errors out rather than silently planning
+    the default dive."""
     try:
         with open(path, "r", encoding="utf-8") as fh:
             cfg = json.load(fh)
     except (OSError, json.JSONDecodeError):
+        if strict:
+            raise
         return default_config()
     return _merged(cfg)
 
@@ -175,8 +184,11 @@ def _assign_gas_ids(gases: List[dict]) -> None:
 
 def _merge_level(l: dict, gases: List[dict]) -> dict:
     """One level, its gas normalized to a ``gas_id`` into ``gases`` (None =
-    automatic). Legacy inline mixes are matched to the stack; a mix the stack
-    doesn't carry is parked as a disabled entry so the plan doesn't change."""
+    automatic). Legacy inline mixes are matched to the stack (enabled entries
+    first — a disabled twin of the mix must not capture the reference); a mix
+    the stack doesn't carry is parked as an ENABLED tankless entry, so the
+    migrated plan doesn't change — parking it disabled would plan it as
+    "auto" (disabled gases are never planned, see ``levels_of``)."""
     gid = l.get("gas_id")
     if isinstance(gid, (int, float)) and not isinstance(gid, bool):
         gid = int(gid)                         # 5000.0 from a hand-edit = 5000
@@ -184,12 +196,13 @@ def _merge_level(l: dict, gases: List[dict]) -> dict:
         gid, gas = None, l.get("gas")          # legacy inline {"o2", "he"}?
         if isinstance(gas, dict):
             o2, he = int(gas["o2"]), int(gas.get("he", 0))
-            gid = next((g["id"] for g in gases
-                        if int(g["o2"]) == o2 and int(g.get("he", 0)) == he),
-                       None)
+            matches = [g for g in gases
+                       if int(g["o2"]) == o2 and int(g.get("he", 0)) == he]
+            gid = next((g["id"] for g in matches if g.get("enabled", True)),
+                       matches[0]["id"] if matches else None)
             if gid is None:
                 parked = _merge_gas({"role": "Deco", "o2": o2, "he": he,
-                                     "tank_l": 0, "enabled": False})
+                                     "tank_l": 0})
                 gases.append(parked)
                 _assign_gas_ids(gases)
                 gid = parked["id"]
@@ -239,11 +252,14 @@ def gas_of(g: dict) -> b.Gas:
 def levels_of(cfg: dict) -> List[b.Level]:
     """The dive profile as ``buhlmann.Level`` objects (runtime is cumulative).
     ``gas_id: None`` becomes ``Level.gas None`` — automatic selection (bottom
-    gas while breathable, travel where not); a real id forces that stack gas."""
+    gas while breathable, travel where not); a real id forces that stack gas.
+    Only **enabled** gases can be forced: a level referencing a disabled entry
+    falls back to automatic (the diver isn't carrying that gas), matching the
+    GUI, which resets such a level's dropdown to "auto"."""
     cfg = _merged(cfg)
-    by_id = {g["id"]: g for g in cfg["gases"]}
+    by_id = {g["id"]: g for g in cfg["gases"] if g.get("enabled", True)}
     return [b.Level(l["depth_m"], l["runtime_min"],
-                    gas_of(by_id[l["gas_id"]]) if l["gas_id"] else None)
+                    gas_of(by_id[l["gas_id"]]) if l["gas_id"] in by_id else None)
             for l in cfg["levels"]]
 
 
@@ -269,5 +285,6 @@ def to_buhlmann(cfg: dict) -> Tuple[b.Gas, b.DivePlan, b.GasPlan, List[tuple]]:
                       travel_gases=travel, deco_gases=deco)
     gp = b.GasPlan(sac=cfg["sac_normal"],
                    sac_multiplier=cfg.get("sac_multiplier", 2.0),
-                   problem_minutes=cfg.get("problem_minutes", 1.0))
+                   problem_minutes=cfg.get("problem_minutes", 1.0),
+                   divers=int(cfg.get("divers", 1)))
     return bottom, plan, gp, gases

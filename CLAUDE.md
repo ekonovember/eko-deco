@@ -25,11 +25,11 @@ A small, dependency-free Python library (+ CLI and optional GUI) that computes:
 
 | File | Role | Deps |
 |------|------|------|
-| `buhlmann.py` | Core model: `Gas`/`Tissues`, Schreiner, `ceiling`, gradient factors, `Level`/`plan_multilevel` (multi-level; `plan_dive` = one level), `ndl`, `time_to_surface`, `max_depth`/`average_depth`/`ceiling_violations`, `ceiling_profile` (time-series of the GF ceiling for plotting), `GasPlan`/`rock_bottom_liters`, `contingency_schedules` (bottom-timer cut-table matrix: square @ max depth on a fixed 3 min × 3 m grid, rows = bottom-time variants × columns = depth variants, step counts before/after per axis; rectangular grid — unplannable cells stay as `segments=None` for column alignment, `ContingencyCell.text()` is the shared wetnotes cell format `depth:min … · TTS′`). **Keep dependency-free.** | stdlib only |
-| `cli.py` | CLI front end: `plan`, `ndl`, `tissues` (+ `--json`); `plan --load/--save` a config; `mix@tank@bar` gas suffix; per-cylinder gas; `plan --contingency [TB[:TA[:DB[:DA]]]]` (step counts) prints the cut-table matrix (and a `contingency` key in `--json`). | buhlmann, dive_config |
-| `dive_config.py` | Shared JSON dive config (`load`/`save`/`to_buhlmann`) read by the GUI and written by `plan --save`. | buhlmann |
-| `dive_plan.json` | The full dive: `levels` (depth + cumulative runtime + `gas_id` referencing the gas stack — `null` = automatic: bottom gas while breathable, travel where not; levels never carry their own mix definitions), GF, gas stack (per-gas tank + fill pressure + `enabled` toggle; each gas gets a unique plain-number `id` (1, 2, …) generated when it is defined and kept for the life of the entry — never shown in the UI, so it can't be mistaken for a label, and mix edits carry referencing levels along; stale/unknown `gas_id` normalizes to `null` = automatic; legacy inline level mixes migrate on load, unmatched ones get parked as disabled entries), SAC + emergency SAC multiplier, problem time, ascent/descent/stop rates + ppO2 window, `contingency` cut-table step counts on the fixed 3 min × 3 m grid (`time_before`/`time_after`/`depth_before`/`depth_after`, 0 disables a direction; legacy `time_delta_min`/`depth_delta_m` migrate on load). Agent-editable. | — |
-| `app.py` | Tkinter + matplotlib GUI: left settings (GF row + 'Last stop 6 m' switch on top, then an editable **Levels** list (depth/runtime/gas, + Add level) and the editable gas list w/ tank+bar, then SAC/multiplier, then four **Contingency (cut table)** sliders — bottom-time steps −/+ and depth steps −/+ on the fixed 3 min × 3 m grid, persisted in the config's `contingency` block, 0 disables a direction); the rest is a two-tab notebook — **Results** (stops + lost-deco-gas scenario table, per-scenario gas usage as **have / need (emergency)** — tank×bar carried vs litres required at the normal SAC, with the emergency-SAC need (SAC × multiplier) in parentheses; `SHORT!` flags a shortfall at the normal SAC and a second `SHORT!` inside the emergency parens when even that is exceeded — plus bar left at both the normal and emergency SAC, and the gas plan whose columns are **need / have / (emrg)**) + a printable **Runtime** wetnotes card — one framed card per lost-gas scenario, then the bottom-timer **CUT TABLE** matrix card from `buhlmann.contingency_schedules` (bottom-time rows × depth columns, each cell `ContingencyCell.text()` — stops + TTS rounded UP, `no deco`/`n/a`; `*` marks the planned row/column) — with PNG export, and **Profile** (the depth/time chart with the deco ceiling overlaid via `buhlmann.ceiling_profile`). Dark mode in the **Settings** menu. Loads/saves `dive_plan.json`; dark mode + window geometry (saved on close, restored on start; 1x1 unmapped geometries never persisted) live in `ui_settings.json` (per-user, git-ignored — never mix UI prefs into the dive config). `--install-launcher` registers a per-user Linux `.desktop` + icon so GNOME docks show the `<//>` tile (window icon alone is ignored there; keep iconphoto images ≤128 px — Tk 8.6 silently writes an empty `_NET_WM_ICON` above that). | matplotlib, tkinter, dive_config |
+| `buhlmann.py` | Core model: `Gas`/`Tissues`, Schreiner, `ceiling`, gradient factors, `Level`/`plan_multilevel` (multi-level; `plan_dive` = one level), `ndl`, `time_to_surface`, `max_depth`/`average_depth`/`ceiling_violations`, `ceiling_profile` (time-series of the GF ceiling for plotting), `GasPlan`/`rock_bottom_liters`/`emergency_gas_liters` (per-gas worst-moment need: bottom phase at the normal SAC, then `problem_minutes` at max depth — billed to the max-depth gas — plus the whole planned ascent + deco at SAC × multiplier; `GasPlan.divers` > 1 shares the supply — problem + ascent up to the first gas switch × divers, no switch = shared to the surface — and scales rock bottom), safety checks: `ppo2_violations`/`worst_ppo2_violations` (segments breathed outside the ppO₂ window — the planner plans what it is given, air below its MOD or a hypoxic mix without travel gas included, but never silently: front ends must surface these), `cns_otu` (NOAA CNS% clock + Repex OTU), `Gas.end` (equivalent narcotic depth, O₂-narcotic convention) and `Gas.density` (g/L, `DENSITY_MAX_G_L` = 6.2 Anthony & Mitchell ceiling), `DivePlan.__post_init__` rejects GF-low > GF-high / out-of-range GFs, `contingency_schedules` (bottom-timer cut-table matrix: square @ max depth on a fixed 3 min × 3 m grid, rows = bottom-time variants × columns = depth variants, step counts before/after per axis; rectangular grid — unplannable cells stay as `segments=None` for column alignment, `ContingencyCell.text()` is the shared wetnotes cell format `depth:min … · TTS′`). **Keep dependency-free.** | stdlib only |
+| `cli.py` | CLI front end: `plan`, `ndl`, `tissues` (+ `--json`); `plan --load/--save` a config; `mix@tank@bar` gas suffix; per-cylinder gas; `plan --contingency [TB[:TA[:DB[:DA]]]]` (step counts) prints the cut-table matrix (and a `contingency` key in `--json`). The schedule table has a cumulative `run` column; every plan prints ppO₂/density/ceiling warnings, CNS/OTU, END + density of the bottom gas, and the educational disclaimer (also `warnings`/`cns_pct`/`otu`/`end_m`/`gas_density_g_l`/`disclaimer` in `--json`). CLI GF default is 30/**70** (matches the config/GUI; the library `DivePlan` default stays 30/80). Loading a config is **strict** — missing/corrupt file = error exit 2, never a silent default plan — and other CLI flags are ignored with a stderr note. Same-mix cylinders aggregate (volumes add, volume-weighted fill). | buhlmann, dive_config |
+| `dive_config.py` | Shared JSON dive config (`load`/`save`/`to_buhlmann`) read by the GUI and written by `plan --save`. `load(strict=True)` raises on a missing/corrupt file (CLI); the lenient default falls back to `default_config()` (GUI first launch). | buhlmann |
+| `dive_plan.json` | The full dive: `levels` (depth + cumulative runtime + `gas_id` referencing the gas stack — `null` = automatic: bottom gas while breathable, travel where not; levels never carry their own mix definitions), GF, gas stack (per-gas tank + fill pressure + `enabled` toggle; each gas gets a unique plain-number `id` (1, 2, …) generated when it is defined and kept for the life of the entry — never shown in the UI, so it can't be mistaken for a label, and mix edits carry referencing levels along; stale/unknown `gas_id` normalizes to `null` = automatic, and a `gas_id` pointing at a **disabled** gas plans as automatic too — a disabled gas is never planned (the GUI resets such a dropdown to "auto"); legacy inline level mixes migrate on load, unmatched ones get parked as *enabled* tankless entries so the migrated plan doesn't change), SAC + emergency SAC multiplier, problem time + `divers` (emergency team size), ascent/descent/stop rates + ppO2 window, `contingency` cut-table step counts on the fixed 3 min × 3 m grid (`time_before`/`time_after`/`depth_before`/`depth_after`, 0 disables a direction; legacy `time_delta_min`/`depth_delta_m` migrate on load). Agent-editable. | — |
+| `app.py` | Tkinter + matplotlib GUI: left settings (GF row + 'Last stop 6 m' switch on top, then an editable **Levels** list (depth/runtime/gas, + Add level) and the editable gas list w/ tank+bar, then SAC/multiplier/problem minutes + a '2 divers' checkbox (stored as `divers` 1/2), then four **Contingency (cut table)** sliders — bottom-time steps −/+ and depth steps −/+ on the fixed 3 min × 3 m grid, persisted in the config's `contingency` block, 0 disables a direction); the rest is a two-tab notebook — **Results** (stops + lost-deco-gas scenario table, per-scenario gas usage as **have / need (emergency)** — tank×bar carried vs litres required at the normal SAC, with the worst-moment emergency need (`buhlmann.emergency_gas_liters`: bottom at the normal SAC, then problem minutes @ max depth + full ascent/deco at SAC × multiplier) in parentheses; `SHORT!` flags a shortfall at the normal SAC and a second `SHORT!` inside the emergency parens when even that is exceeded — plus bar left at both the normal and emergency need, and the gas plan whose columns are **need / have / (emrg)**) + a printable **Runtime** wetnotes card — one framed card per lost-gas scenario, then the bottom-timer **CUT TABLE** matrix card from `buhlmann.contingency_schedules` (bottom-time rows × depth columns, each cell `ContingencyCell.text()` — stops + TTS rounded UP, `no deco`/`n/a`; `*` marks the planned row/column) — with PNG export, and **Profile** (the depth/time chart with the deco ceiling overlaid via `buhlmann.ceiling_profile`). Dark mode in the **Settings** menu. Loads/saves `dive_plan.json`; dark mode + window geometry (saved on close, restored on start; 1x1 unmapped geometries never persisted) live in `ui_settings.json` (per-user, git-ignored — never mix UI prefs into the dive config). `--install-launcher` registers a per-user Linux `.desktop` + icon so GNOME docks show the `<//>` tile (window icon alone is ignored there; keep iconphoto images ≤128 px — Tk 8.6 silently writes an empty `_NET_WM_ICON` above that). Safety surfacing: ppO₂/ceiling/density warnings as ⚠ cards, CNS/OTU + END/density + the config-driven rates/ppO₂ limits in the DIVE/GAS cards, silent-fallback notices (no Bottom gas, invalid mix row), the educational disclaimer on the readout AND the wetnotes (it rides into the PNG export), gas-switch rows (`gas` in the stop column) on the wetnotes card, same-mix cylinders aggregated via `_cylinders_by_mix`, and a strict config load on startup (a corrupt file shows "⚠ config unreadable — defaults", never a silent default plan). | matplotlib, tkinter, dive_config |
 | `tests/` | `unittest` suites: `test_buhlmann.py`, `test_dive_config.py`, `test_subsurface_crosscheck.py`, `test_baker_crosscheck.py`, `test_shearwater_golden.py`. | stdlib |
 | `tests/subsurface_oracle/` | **GPL-2.0, test-only.** Unmodified Subsurface `core/deco.cpp` (pinned commit in `upstream/UPSTREAM.txt`) + stub headers; `build.sh` compiles `libsubsurface_deco.so`. Never import at runtime, never copy code out of it (license boundary — see its README). | g++ |
 | `tests/subsurface_deco.py` | ctypes wrapper around the oracle `.so` (auto-builds it); `SubsurfaceDeco.plan()` is a small planner-style schedule loop of ours, the model calls are native Subsurface code. | stdlib + oracle |
@@ -71,10 +71,10 @@ python cli.py plan --depth 45 --time 25 --gas 21/35 --deco-gas 50 --deco-gas 100
 # grid, time rows −TB/+TA steps × depth columns −DB/+DA steps
 python cli.py plan --depth 40 --time 25 --gas air --deco-gas 50 --contingency          # counts from config (1:1:1:1)
 python cli.py plan --depth 40 --time 25 --gas air --deco-gas 50 --contingency 0:2:0:1  # explicit TB[:TA[:DB[:DA]]]
-# Tests: 116 total = 90 core (stdlib only, run anywhere) + 26 cross-checks.
+# Tests: 145 total = 119 core (stdlib only, run anywhere) + 26 cross-checks.
 # The cross-checks COMPILE the reference implementations (g++ for Subsurface's
 # deco.cpp, gfortran for Baker's GFDECO) and skip when those are absent — so
-# "Ran 90 tests" on a machine without them is expected, not a data problem.
+# "Ran 119 tests" on a machine without them is expected, not a data problem.
 python -m unittest discover -s tests -v
 # Individual oracles: native Subsurface deco.cpp / Baker's GFDECO Fortran
 python -m unittest tests.test_subsurface_crosscheck -v
@@ -84,16 +84,24 @@ python -m unittest tests.test_baker_crosscheck -v
 Gas syntax: `air`, `o2`, `ean32` / `nx32` / `32`, trimix `21/35` (fO₂/fHe %).
 
 Gas planning: each cylinder has a tank size + fill pressure (`mix@tank@bar`, e.g.
-`air@24@232`). Planning is **single-diver**: one basic SAC plus an emergency SAC
-multiplier (`sac_multiplier`, e.g. 1.5). **Rock bottom** is standard *minimum
-gas* — problem time plus a direct ascent to the surface at the emergency SAC
-(SAC × multiplier) — **not** the whole deco billed to back gas (that would be
-hundreds of bar deep). The GUI also re-plans lost-deco-gas contingencies: one
-schedule per lost deco gas plus an all-lost worst case (any N of deco gases),
+`air@24@232`). One basic SAC plus an emergency SAC multiplier (`sac_multiplier`,
+e.g. 1.5), a problem time (`problem_minutes`) and a diver count (`divers`).
+The **emergency need** (`emergency_gas_liters`) assumes the problem strikes at
+the worst possible moment — the end of the bottom phase (deepest loading →
+longest deco): the bottom phase is billed at the normal SAC, then the problem
+minutes at max depth (to the gas breathed there, i.e. the bottom gas) plus the
+whole planned ascent + deco at the emergency SAC (SAC × multiplier). With
+`divers` = 2 the team shares the supply (buddy out of gas): the problem minutes
+and the ascent **up to the first gas switch** are doubled; from the switch each
+diver is back on their own cylinder (no switch = shared to the surface). **Rock
+bottom** is standard *minimum gas* — problem time plus a direct ascent to the
+surface at the emergency SAC, × divers — **not** the whole deco billed to back
+gas (that would be hundreds of bar deep). The GUI also re-plans lost-deco-gas contingencies:
+one schedule per lost deco gas plus an all-lost worst case (any N of deco gases),
 with per-scenario usage as have / need (emergency) — carried (tank × fill pressure)
-vs need at the normal SAC, with the emergency-SAC need in parentheses; SHORT!
+vs need at the normal SAC, with the worst-moment emergency need in parentheses; SHORT!
 flags a normal-SAC shortfall and a second SHORT! inside the parens an emergency one. The full dive
-(`levels`, GF, last stop, gas stack, SAC, multiplier, problem time,
+(`levels`, GF, last stop, gas stack, SAC, multiplier, problem time, divers,
 ascent/descent/stop rates + ppO2 window) lives in `dive_plan.json`, shared by the CLI (`plan dive_plan.json`
 / `--load` / `--save`) and the GUI (Save / Reload). Save / `--save` captures **every**
 value for an exact round-trip; the GUI preserves fields it has no control for.
@@ -110,11 +118,18 @@ value for an exact round-trip; the GUI preserves fields it has no control for.
   `bottom_time` always meant, and what MultiDeco/GFDECO/Subsurface take). `plan_dive`
   is `plan_multilevel` with one level; keep it that way so square dives can't drift.
   Travel between levels is bottom time, not TTS (`_bottom_phase_end`).
-- Defaults (see `DivePlan`): GF 30/80, descent 18 m/min, ascent 10 m/min, 3 m stops,
+- Defaults (see `DivePlan`): GF 30/80 (the **CLI and config/GUI default to
+  30/70** — the front ends must agree with each other; the library keeps 30/80),
+  descent 18 m/min, ascent 10 m/min, 3 m stops,
   last stop 3 m (`last_stop_depth`, 6 = Shearwater style), deco ppO₂ 1.6,
   P_atm 1.01325 bar, 10 msw/bar, P_H₂O 0.0627 bar. Ascent gas switches snap
   to stop depths (`switch_depth`, ppO₂ overshoot ≤ `ppo2_switch_tol` 0.05 bar
   — that's what puts O₂ at the 6 m stop despite its 5.9 m MOD).
+- **Warnings are load-bearing.** `ppo2_violations`, `ceiling_violations` and the
+  density ceiling exist because the planner deliberately plans whatever profile
+  it is given (GFDECO-style) instead of refusing — any new front end or output
+  path must surface them, plus the educational disclaimer, on anything that
+  looks like a schedule.
 - Comments only where the math is non-obvious — cite the equation/source, as done now.
 
 ## When you change things
