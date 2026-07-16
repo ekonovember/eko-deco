@@ -9,8 +9,8 @@ Schema::
 
     {
       "levels": [
-        {"depth_m": 45, "runtime_min": 25, "gas_id": null},
-        {"depth_m": 30, "runtime_min": 40, "gas_id": 2}
+        {"depth_m": 45, "runtime_min": 25},
+        {"depth_m": 30, "runtime_min": 40}
       ],
       "gf_low": 30, "gf_high": 70,
       "sac_normal": 20, "sac_multiplier": 2.0, "problem_minutes": 1, "divers": 1,
@@ -19,37 +19,28 @@ Schema::
       "contingency": {"time_before": 1, "time_after": 1,
                       "depth_before": 1, "depth_after": 1},
       "gases": [
-        {"id": 1, "role": "Bottom", "o2": 21, "he": 0, "tank_l": 24,
+        {"role": "Bottom", "o2": 21, "he": 0, "tank_l": 24,
          "pressure_bar": 232, "enabled": true},
-        {"id": 2, "role": "Deco",   "o2": 50, "he": 0, "tank_l": 11,
+        {"role": "Deco",   "o2": 50, "he": 0, "tank_l": 11,
          "pressure_bar": 200, "enabled": true}
       ]
     }
 
-Roles: ``Bottom`` (back gas), ``Travel`` (descent gas for hypoxic mixes), ``Deco``.
-``enabled: false`` keeps a gas in the list but leaves it out of the plan.
+Roles: ``Bottom`` (back gas), ``Travel`` (descent gas for hypoxic mixes) and
+``Deco``. Gas is chosen **automatically by role** — there is no per-level gas
+override: the bottom gas is breathed on the bottom phase, a travel mix is
+swapped in on descent where the bottom mix is hypoxic, and deco gases are
+switched to on the final ascent. ``enabled: false`` keeps a gas in the list but
+leaves it out of the plan.
 
-``levels`` is the dive profile, one entry per level. ``runtime_min`` is the
-runtime at the **end** of that level — cumulative minutes since leaving the
-surface, descent included — so the values must increase down the list. A level's
-``gas_id`` references a gas in ``gases`` — the stack is the single source of
-truth; levels never carry their own mix definitions. Gas ids are plain unique
-numbers (1, 2, …) generated dynamically when a gas is defined and kept for the
-life of the entry — deliberately numeric so an id can never be mistaken for a
-display label, and never shown in the UI. Because the id names the cylinder
-entry (not a mix snapshot), editing a gas's mix carries every level that
-references it along automatically. ``gas_id: null`` — the default, also what a
-missing or stale id normalizes to — means **automatic** gas selection: the
-bottom gas while it is breathable, a travel mix where it is not. Any real id
-of an **enabled** gas forces that stack gas for the level, and every
-calculation (planning, consumption) uses the referenced entry; a reference to
-a *disabled* gas plans as automatic — a disabled gas is not carried, and the
-GUI resets such a dropdown to "auto" the same way. A square profile is simply
-a single level. Migrations on load: pre-multilevel configs (``depth_m`` +
-``bottom_time_min``) become one level; legacy inline level gases
-(``"gas": {"o2": .., "he": ..}``) are matched to the stack by mix (enabled
-entries first) — a mix the stack doesn't carry is parked as an enabled
-tankless entry and referenced, so the plan doesn't change.
+``levels`` is the dive profile, one entry per level: just ``depth_m`` and
+``runtime_min``. ``runtime_min`` is the runtime at the **end** of that level —
+cumulative minutes since leaving the surface, descent included — so the values
+must increase down the list. A square profile is simply a single level.
+Migrations on load: pre-multilevel configs (``depth_m`` + ``bottom_time_min``)
+become one level; any legacy per-level gas reference (a level ``gas_id`` or an
+inline ``{"o2", "he"}`` mix) and any legacy ``Level``-role gas are dropped —
+gas is automatic-by-role now.
 
 ``contingency`` sizes the backup cut-table matrix as step counts on the fixed
 3 min × 3 m grid: ``time_before``/``time_after`` bottom-time rows shorter/longer
@@ -72,7 +63,7 @@ DEFAULT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dive_pl
 
 def default_config() -> dict:
     return {
-        "levels": [{"depth_m": 45.0, "runtime_min": 10.0, "gas_id": None}],
+        "levels": [{"depth_m": 45.0, "runtime_min": 10.0}],
         "gf_low": 30,
         "gf_high": 70,
         "sac_normal": 20.0,
@@ -89,20 +80,22 @@ def default_config() -> dict:
         "contingency": {"time_before": 1, "time_after": 1,
                         "depth_before": 1, "depth_after": 1},
         "gases": [
-            {"id": 1, "role": "Bottom", "o2": 21, "he": 0,
+            {"role": "Bottom", "o2": 21, "he": 0,
              "tank_l": 24, "pressure_bar": 232},
-            {"id": 2, "role": "Deco", "o2": 50, "he": 0,
+            {"role": "Deco", "o2": 50, "he": 0,
              "tank_l": 11, "pressure_bar": 200},
         ],
     }
 
 
 def load(path: str = DEFAULT_PATH, strict: bool = False) -> dict:
-    """Read a config. Lenient by default: missing or invalid files fall back to
-    the default config (the GUI's first launch). ``strict=True`` raises instead
-    (FileNotFoundError / OSError / json.JSONDecodeError) — the CLI uses it so a
-    typo'd path or a broken hand-edit errors out rather than silently planning
-    the default dive."""
+    """Read a config. Lenient by default: a missing, unparsable or semantically
+    invalid file falls back to the default config (the GUI's first launch).
+    ``strict=True`` raises instead — FileNotFoundError / OSError for file
+    problems, ValueError (json.JSONDecodeError is one) for broken JSON *or*
+    JSON whose values can't be normalized (e.g. ``"depth_m": "oops"``) — the
+    CLI uses it so a typo'd path or a broken hand-edit errors out rather than
+    silently planning the default dive."""
     try:
         with open(path, "r", encoding="utf-8") as fh:
             cfg = json.load(fh)
@@ -110,17 +103,46 @@ def load(path: str = DEFAULT_PATH, strict: bool = False) -> dict:
         if strict:
             raise
         return default_config()
-    return _merged(cfg)
+    try:
+        return _merged(cfg)
+    except (TypeError, ValueError, KeyError, AttributeError) as e:
+        # Valid JSON, invalid content: a string depth, a list where a dict
+        # belongs… normalization failures are config corruption too.
+        if strict:
+            raise ValueError(f"invalid dive config values: {e}") from e
+        return default_config()
 
 
 def save(cfg: dict, path: str = DEFAULT_PATH) -> str:
-    with open(path, "w", encoding="utf-8") as fh:
-        json.dump(_merged(cfg), fh, indent=2)
-        fh.write("\n")
+    """Write the (normalized) config atomically: a temp file in the same
+    directory replaced over ``path`` with ``os.replace``, so an interrupted
+    write can never leave a truncated shared plan behind."""
+    merged = _merged(cfg)                      # normalize BEFORE touching disk
+    tmp = f"{path}.tmp{os.getpid()}"
+    try:
+        with open(tmp, "w", encoding="utf-8") as fh:
+            json.dump(merged, fh, indent=2)
+            fh.write("\n")
+        os.replace(tmp, path)
+    finally:
+        if os.path.exists(tmp):
+            try:
+                os.remove(tmp)
+            except OSError:
+                pass
     return path
 
 
 LEGACY_KEYS = ("solo", "sac_stress", "depth_m", "bottom_time_min", "show_rd")
+
+
+def normalize(cfg: dict) -> dict:
+    """Normalize a raw config dict: fill defaults, run legacy migrations,
+    assign stable gas ids. This is what ``load`` applies to every file it
+    reads — front ends use this instead of reaching into module internals.
+    Raises TypeError/ValueError/KeyError on semantically corrupt input
+    (``load`` maps those per its strict/lenient contract)."""
+    return _merged(cfg)
 
 
 def _merged(cfg: dict) -> dict:
@@ -135,11 +157,13 @@ def _merged(cfg: dict) -> dict:
     if "sac_multiplier" not in cfg and "sac_stress" in cfg:
         sac = float(cfg.get("sac_normal", base["sac_normal"])) or 1.0
         base["sac_multiplier"] = round(float(cfg["sac_stress"]) / sac, 2)
-    # Gases before levels: a level's gas is an id into the gas stack.
+    # Gases: drop legacy "Level"-role entries entirely (they existed only to be
+    # force-breathed on a level; gas is automatic-by-role now).
     gases = cfg.get("gases")
     if gases:
-        base["gases"] = [_merge_gas(g) for g in gases]
-    _assign_gas_ids(base["gases"])
+        merged = [_merge_gas(g) for g in gases if g.get("role") != "Level"]
+        if merged:
+            base["gases"] = merged
     # Legacy configs were square-profile only: one depth + one bottom time.
     # That is a single level, and bottom_time_min already meant "runtime at the
     # end of the bottom", so it carries over unchanged.
@@ -148,9 +172,9 @@ def _merged(cfg: dict) -> dict:
             "depth_m": cfg["depth_m"],
             "runtime_min": cfg.get("bottom_time_min",
                                    default_config()["levels"][0]["runtime_min"]),
-        }, base["gases"])]
+        })]
     elif cfg.get("levels"):
-        base["levels"] = [_merge_level(l, base["gases"]) for l in cfg["levels"]]
+        base["levels"] = [_merge_level(l) for l in cfg["levels"]]
     # A dive always has at least one level: never let an empty list through
     # (it would leave the planner with no profile at all).
     if not base.get("levels"):
@@ -160,63 +184,19 @@ def _merged(cfg: dict) -> dict:
     return base
 
 
-def _assign_gas_ids(gases: List[dict]) -> None:
-    """Every gas gets a unique plain-number id (1, 2, …) the moment it is
-    defined; existing ids are kept, so a level's reference survives mix edits —
-    the id names the cylinder entry, not a mix snapshot. Blank, duplicate or
-    invalid ids get the next free number. Deliberately numeric so an id can
-    never be mistaken for a display label (it is never shown in the UI)."""
-    seen: set = set()
-    for g in gases:
-        gid = g.get("id")
-        ok = (isinstance(gid, (int, float)) and not isinstance(gid, bool)
-              and int(gid) > 0 and int(gid) not in seen)
-        g["id"] = int(gid) if ok else None
-        if ok:
-            seen.add(int(gid))
-    nxt = max(seen, default=0) + 1
-    for g in gases:
-        if g["id"] is None:
-            g["id"] = nxt
-            seen.add(nxt)
-            nxt += 1
-
-
-def _merge_level(l: dict, gases: List[dict]) -> dict:
-    """One level, its gas normalized to a ``gas_id`` into ``gases`` (None =
-    automatic). Legacy inline mixes are matched to the stack (enabled entries
-    first — a disabled twin of the mix must not capture the reference); a mix
-    the stack doesn't carry is parked as an ENABLED tankless entry, so the
-    migrated plan doesn't change — parking it disabled would plan it as
-    "auto" (disabled gases are never planned, see ``levels_of``)."""
-    gid = l.get("gas_id")
-    if isinstance(gid, (int, float)) and not isinstance(gid, bool):
-        gid = int(gid)                         # 5000.0 from a hand-edit = 5000
-    if gid not in {g["id"] for g in gases}:
-        gid, gas = None, l.get("gas")          # legacy inline {"o2", "he"}?
-        if isinstance(gas, dict):
-            o2, he = int(gas["o2"]), int(gas.get("he", 0))
-            matches = [g for g in gases
-                       if int(g["o2"]) == o2 and int(g.get("he", 0)) == he]
-            gid = next((g["id"] for g in matches if g.get("enabled", True)),
-                       matches[0]["id"] if matches else None)
-            if gid is None:
-                parked = _merge_gas({"role": "Deco", "o2": o2, "he": he,
-                                     "tank_l": 0})
-                gases.append(parked)
-                _assign_gas_ids(gases)
-                gid = parked["id"]
+def _merge_level(l: dict) -> dict:
+    """One level: just depth + cumulative end-runtime. Any legacy per-level gas
+    reference (``gas_id`` or a legacy inline ``{"o2", "he"}`` mix) is dropped —
+    gas is chosen automatically by role now, so levels never force a mix."""
     return {"depth_m": float(l.get("depth_m", 30.0)),
-            "runtime_min": float(l.get("runtime_min", 20.0)),
-            "gas_id": gid}
+            "runtime_min": float(l.get("runtime_min", 20.0))}
 
 
 def _merge_gas(g: dict) -> dict:
     role = g.get("role", "Deco")
     if role not in ROLES:
         role = "Deco"
-    return {"id": g.get("id"),
-            "role": role, "o2": g.get("o2", 21), "he": g.get("he", 0),
+    return {"role": role, "o2": g.get("o2", 21), "he": g.get("he", 0),
             "tank_l": g.get("tank_l", 0), "pressure_bar": g.get("pressure_bar", 232),
             "enabled": bool(g.get("enabled", True))}
 
@@ -251,21 +231,17 @@ def gas_of(g: dict) -> b.Gas:
 
 def levels_of(cfg: dict) -> List[b.Level]:
     """The dive profile as ``buhlmann.Level`` objects (runtime is cumulative).
-    ``gas_id: None`` becomes ``Level.gas None`` — automatic selection (bottom
-    gas while breathable, travel where not); a real id forces that stack gas.
-    Only **enabled** gases can be forced: a level referencing a disabled entry
-    falls back to automatic (the diver isn't carrying that gas), matching the
-    GUI, which resets such a level's dropdown to "auto"."""
+    Levels are pure depth/time periods — gas is always chosen automatically by
+    role (bottom gas while breathable, travel where not, deco on ascent)."""
     cfg = _merged(cfg)
-    by_id = {g["id"]: g for g in cfg["gases"] if g.get("enabled", True)}
-    return [b.Level(l["depth_m"], l["runtime_min"],
-                    gas_of(by_id[l["gas_id"]]) if l["gas_id"] in by_id else None)
-            for l in cfg["levels"]]
+    return [b.Level(l["depth_m"], l["runtime_min"]) for l in cfg["levels"]]
 
 
 def to_buhlmann(cfg: dict) -> Tuple[b.Gas, b.DivePlan, b.GasPlan, List[tuple]]:
     """Return ``(bottom_gas, DivePlan, GasPlan, gases)`` where ``gases`` is a list
-    of ``(role, Gas, tank_l, pressure_bar)`` tuples."""
+    of ``(role, Gas, tank_l, pressure_bar)`` tuples. Gas selection is automatic
+    by role: ``Bottom`` on the bottom phase, ``Travel`` swapped in on descent
+    where the bottom mix is hypoxic, ``Deco`` switched to on ascent."""
     cfg = _merged(cfg)
     gases = [(g["role"], gas_of(g), float(g.get("tank_l", 0)),
               float(g.get("pressure_bar", 232)))

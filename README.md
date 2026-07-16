@@ -37,25 +37,29 @@ Erik Baker's gradient factors — a zero-dependency core, plus a CLI and a Tkint
   switched automatically by ppO₂ window (MOD ceiling + hypoxia floor). Handles
   hypoxic trimixes (e.g. 10/70) that need a travel gas near the surface.
 - **Safety rails on every schedule**: segments breathed outside the ppO₂ window
-  (air below its MOD, a hypoxic mix with no travel gas, a level forcing a gas
-  too deep) are flagged, never silently planned; gas density over 6.2 g/L
+  (air below its MOD, a hypoxic mix with no travel gas) are flagged, never
+  silently planned; gas density over 6.2 g/L
   (Anthony & Mitchell) warns too. Each plan reports **CNS%** (NOAA clock),
   **OTU**, **END** and gas density, and swapped gradient factors
   (GF-low > GF-high) are rejected as input errors.
 - Rock-bottom / minimum-gas planning: one basic SAC plus an emergency SAC
-  multiplier (e.g. 1.5), a problem-solving time and a diver count — with
-  2 divers the emergency assumes a buddy out of gas sharing your supply until
-  the first gas switch (to the surface if there is none) — plus
+  multiplier (e.g. 1.5), a problem-solving time and a diver count. Rock bottom
+  is the back-gas reserve to survive a problem at the worst moment and follow
+  the real ascent/deco to the first gas switch (to the surface, through every
+  stop, if there is none); with 2 divers the emergency assumes a buddy out of
+  gas sharing your supply until that first switch — plus
   Time-To-Surface (TTS).
 - Lost-deco-gas contingencies in the GUI: the schedule re-planned without each
   deco gas (and without all of them), with per-scenario gas usage showing what
   the dive **needs at the normal SAC against what you actually carry** (tank size
-  × fill pressure), the emergency need in parentheses — the dive up to the worst
-  possible moment (end of the bottom phase, at max depth) at the normal SAC, then
-  the problem-solving minutes at max depth plus the whole planned ascent + deco
-  at the emergency SAC (SAC × multiplier) — bar
-  remaining, and a `SHORT!` flag when a contingency outruns a cylinder — plus a
-  second `SHORT!` inside the parens when even the emergency need is exceeded.
+  × fill pressure), and the **emergency total** in parentheses — that normal
+  need **plus the rock-bottom reserve held on top**: the problem-solving minutes
+  at the worst moment (end of the bottom phase, at max depth) plus the real
+  planned ascent + deco to the next gas switch (all the way to the surface if
+  there is none) at the emergency SAC (SAC × multiplier) — bar
+  remaining, and a `SHORT!` flag when a contingency outruns a cylinder at the
+  normal SAC — plus a second `SHORT!` inside the parens when even need-plus-reserve
+  is exceeded.
 - A contingency **cut table** for a bottom-timer (gauge) backup, MultiDeco/
   V-Planner range-plan style: the dive flattened to a square profile at max
   depth, re-planned on a fixed **3 min × 3 m grid** around the plan — rows are
@@ -68,10 +72,9 @@ Erik Baker's gradient factors — a zero-dependency core, plus a CLI and a Tkint
   line with a translucent curtain from the surface.
 - Shared JSON config (`dive_plan.json`): the GUI and the CLI read/write the same
   dive, so `cli.py plan --save` shows up in the app on Reload and vice-versa.
-  Levels reference the gas stack by a numeric `gas_id` — a unique plain number
-  each gas gets when it is defined (never a label, never shown in the UI), so
-  there is one source of truth and no duplicate mix definitions; `null` means
-  automatic gas selection (bottom gas while breathable, travel gas where not).
+  Levels are pure depth/time periods; gas is chosen **automatically by role**
+  (bottom gas while breathable, travel gas where not, deco gases on the ascent),
+  so there is one source of truth and no per-level gas overrides to reconcile.
 - Printable **runtime** (wetnotes card) in the GUI — depth / stop / runtime / gas
   plus TTS and minimum-gas / turn pressure — exportable to PNG to take in the water.
 - NDL calculator and tissue-loading report.
@@ -82,8 +85,11 @@ Run `python app.py` for the visual planner shown above:
 
 - **Left** — every input: gradient factors and a **Last stop 6 m** switch
   (Shearwater/MultiDeco style); an editable **Levels** list — add a level per
-  row (depth, runtime, and a gas picked from the gases below — or `auto`, which
-  breathes whatever is relevant at that depth) to plan a multi-level dive; an
+  row (depth, its **from → to** runtime window, and a gas picked from the gases
+  below — or `auto`, which breathes whatever is relevant at that depth) to plan
+  a multi-level dive. The first level runs from the surface (0) and adjacent
+  levels share a boundary, so the windows are always contiguous — editing one
+  level's end moves the next level's start with it; an
   editable gas stack (bottom / travel / deco, each with its own O₂, He, tank and
   fill, and a **use** checkbox to leave a gas out of the plan without deleting
   it); SAC, the emergency SAC multiplier, the problem time (minutes solving
@@ -94,7 +100,7 @@ Run `python app.py` for the visual planner shown above:
   `dive_plan.json`.
 - **Results tab** — results as framed cards (gas, dive summary, the
   MultiDeco-style stops + lost-deco-gas scenario table, per-scenario gas usage
-  (have / need per cylinder, emergency need in parens), per-cylinder gas + rock
+  (have / need per cylinder, emergency total — need + reserve — in parens), per-cylinder gas + rock
   bottom) and a printable **runtime** wetnotes card — one framed card per
   lost-gas scenario, then the **CUT TABLE** matrix card (bottom-time rows ×
   depth columns, each cell the stops + TTS; `*` marks the planned row and
@@ -139,8 +145,8 @@ python cli.py plan --depth 45 --time 25 --gas 21/35 \
 python cli.py plan --level 45:25 --level 30:40 --level 18:55 \
     --gas 21/35 --deco-gas 50 --deco-gas 100
 
-# ...with a gas forced on a level (deep bottom mix, then a shallower leg)
-python cli.py plan --level 120:20:10/70 --level 45:40 --gas 10/70 --travel-gas 35/25
+# Hypoxic trimix over several levels — gas is automatic by role (travel down, deco up)
+python cli.py plan --level 120:20 --level 45:40 --gas 10/70 --travel-gas 35/25 --deco-gas 50
 
 # Last stop at 6 m instead of 3 m (Shearwater/MultiDeco style)
 python cli.py plan --depth 45 --time 25 --gas 21/35 --deco-gas 50 --last-stop 6
@@ -177,10 +183,11 @@ at 21 m), the way dive computers plan them, with a small ppO₂ tolerance for
 the rounding.
 
 A dive is one or more **levels**. `--depth/--time` is the square-profile
-shorthand for a single level; `--level DEPTH:RUNTIME[:GAS]` (repeatable) plans a
-multi-level dive. **Runtime is cumulative** — minutes since leaving the surface,
-at the *end* of that level, descent included — which is how MultiDeco, Baker's
-GFDECO and Subsurface all take a profile.
+shorthand for a single level; `--level DEPTH:RUNTIME` (repeatable) plans a
+multi-level dive; gas is chosen automatically by role. **Runtime is cumulative**
+— minutes since leaving the surface, at the *end* of that level, descent
+included — which is how MultiDeco, Baker's GFDECO and Subsurface all take a
+profile.
 
 There are more knobs than shown above — ascent/descent/stop rates, the
 shallowest-stop depth (`--last-stop`), the ppO₂

@@ -2,10 +2,10 @@
 
 Left panel: dive settings (depth, bottom time, gradient factors, a fully editable
 gas list where every mix — bottom / travel / deco — has its own O2, He and tank,
-plus SAC and an emergency SAC multiplier; single diver). The rest of the window
-is a two-tab notebook: **Results** (schedule, TTS, per-cylinder gas + rock
-bottom, lost-deco-gas scenarios, wetnotes card) and **Profile** (the
-depth-vs-time chart with the deco-ceiling overlay).
+plus SAC, an emergency SAC multiplier and a one-or-two-diver team size). The rest
+of the window is a notebook: **Results** (schedule, TTS, per-cylinder gas + rock
+bottom, lost-deco-gas scenarios), a printable **Runtime** wetnotes card, and
+**Profile** (the depth-vs-time chart with the deco-ceiling overlay).
 
 The dive is loaded from and saved to ``dive_plan.json`` (see ``dive_config.py``),
 the same file the console planner reads/writes — so ``cli.py plan --save`` shows
@@ -20,7 +20,7 @@ from __future__ import annotations
 import json
 import os
 import sys
-from dataclasses import replace
+from dataclasses import dataclass, replace
 import tkinter as tk
 from tkinter import ttk
 from typing import List, Optional, Tuple
@@ -32,10 +32,21 @@ from matplotlib.figure import Figure
 
 import buhlmann as b
 import dive_config as dc
+import report as rp
 
 # The GUI ascends at a fixed rate; keep it in step with the CLI DivePlan default
 # (10 m/min) so the same inputs give the same schedule in both.
 ASCENT_RATE = 10.0
+
+
+@dataclass
+class _RowLevel:
+    """A level row exactly as typed, before it is validated into a
+    ``buhlmann.Level``. Kept unvalidated so a field blanked mid-edit (depth or
+    runtime 0) can still be persisted without tripping ``Level``'s invariants.
+    Levels are pure depth/time periods — gas is chosen automatically by role."""
+    depth: float
+    runtime: float
 
 # Branding: the eko-deco wordmark and its "<//>" logo mark.
 APP_NAME = "eko-deco"
@@ -176,6 +187,8 @@ class DecoApp:
 
         self._building = True
         self._base_cfg = dc.default_config()
+        self._plan_ok = False        # True only when a valid plan is on screen
+        self._boundary_syncing = False  # guards the from/to boundary coupling
         self._build_layout()
         self._apply_theme()
         # A missing config is a normal first launch; a *broken* one must not
@@ -202,11 +215,17 @@ class DecoApp:
             if sys.platform == "win32":
                 # The taskbar groups Tk windows under python.exe and shows ITS
                 # icon unless the process claims its own AppUserModelID; the
-                # .ico also gives Windows pre-rendered small sizes.
+                # .ico carries crisp pre-rendered small sizes (16/24/32/48…).
                 import ctypes
                 ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID(
                     "eko.deco")
                 self.root.iconbitmap(default=ICON_ICO)
+                # Do NOT also set iconphoto here: iconphoto's images would come
+                # from PhotoImage.subsample (nearest-neighbour decimation, no
+                # antialiasing) and Windows lets WM_SETICON override the crisp
+                # .ico — that is exactly the fuzzy taskbar icon. The .ico alone
+                # is sharp at every size.
+                return
             master = tk.PhotoImage(file=ICON_PNG)
             # Several sizes so the taskbar picks the closest instead of scaling
             # one down to a mush at 32 px. Keep every image ≤128 px: Tk 8.6's
@@ -258,7 +277,7 @@ class DecoApp:
         levels.pack(fill=tk.X, pady=(8, 0))
         self.level_list = ttk.Frame(levels)
         self.level_list.pack(fill=tk.X)
-        for col, text in enumerate(("depth m", "run min", "gas", "")):
+        for col, text in enumerate(("depth m", "from", "to", "")):
             ttk.Label(self.level_list, text=text, anchor="w").grid(
                 row=0, column=col, padx=1, sticky="w")
         self.level_rows = []
@@ -278,7 +297,7 @@ class DecoApp:
         ttk.Button(gases, text="+ Add gas", command=self._add_gas_row).pack(
             anchor="w", pady=(4, 0))
 
-        # --- gas planning (single diver: SAC + emergency multiplier) ---
+        # --- gas planning (SAC + emergency multiplier; 1–2 divers) ---
         gp = ttk.LabelFrame(left, text="Gas planning (rock bottom)", padding=6)
         gp.pack(fill=tk.X, pady=(8, 0))
         sacrow = ttk.Frame(gp)
@@ -503,76 +522,81 @@ class DecoApp:
         for v in (self.gf_lo, self.gf_hi, self.last_stop6):
             v.trace_add("write", lambda *_: None if self._building else self.recompute())
 
-    # A level's gas: "auto" = let the planner pick the gas that is relevant at
-    # that depth (the bottom mix while it is breathable, a travel mix where it
-    # is not) — drawn from the Gases panel like every other choice here.
-    AUTO_GAS = "auto"
-
-    @staticmethod
-    def _gas_label(g: b.Gas) -> str:
-        """Dropdown label for a mix: OXYGEN, AIR, EAN 50, TMX 18/40."""
-        o2 = int(round(g.fO2 * 100))
-        if g.fHe > 0:
-            return f"TMX {o2}/{int(round(g.fHe * 100))}"
-        if o2 == 100:
-            return "OXYGEN"
-        if o2 == 21:
-            return "AIR"
-        return f"EAN {o2}"
-
-    def _gas_choices(self) -> List[str]:
-        """The level gas dropdown: 'auto' plus every gas in the Gases panel that
-        is ticked for use. The panel is the single source of truth — a level can
-        only breathe a gas the diver actually carries."""
-        out = [self.AUTO_GAS]
-        for row in self.gas_rows:
-            g = self._row_gas(row)
-            if g is not None and self._gas_label(g) not in out:
-                out.append(self._gas_label(g))
-        return out
-
-    def _refresh_level_gas_choices(self) -> None:
-        """Keep each level's gas dropdown in step with the Gases panel: edited
-        mixes, added, removed and unticked gases all flow through — the boxes
-        resize to the longest label. A level pointing at a gas that is no longer
-        carried falls back to 'auto' rather than planning a gas the diver
-        doesn't have."""
-        choices = self._gas_choices()
-        width = max(len(c) for c in choices)
-        for row in self.level_rows:
-            row["gas_box"].configure(values=choices, width=width)
-            if row["gas"].get() not in choices:
-                row["gas"].set(self.AUTO_GAS)
-
     def _add_level_row(self, depth: float = 30, runtime: float = 40,
-                       gas: str = AUTO_GAS, recompute: bool = True) -> None:
+                       recompute: bool = True) -> None:
         depth_var = tk.StringVar(value=f"{depth:g}")
+        from_var = tk.StringVar(value="0")   # window start; filled by _resync_froms
         run_var = tk.StringVar(value=f"{runtime:g}")
-        gas_var = tk.StringVar(value=gas or self.AUTO_GAS)
 
-        choices = self._gas_choices()
-        gas_box = ttk.Combobox(self.level_list, textvariable=gas_var,
-                               width=max(len(c) for c in choices),
-                               state="readonly", values=choices)
+        # Columns: depth · from · to · delete. "from" and "to" are the two
+        # ends of this level's time window (cumulative minutes since the
+        # surface); adjacent levels SHARE a boundary, so editing one end moves
+        # the neighbour's end with it — windows can never gap or overlap.
         widgets = [
             ttk.Spinbox(self.level_list, from_=1, to=300, width=5,
                         textvariable=depth_var),
+            ttk.Spinbox(self.level_list, from_=0, to=999, width=5,
+                        textvariable=from_var),
             ttk.Spinbox(self.level_list, from_=1, to=999, width=5,
                         textvariable=run_var),
-            gas_box,
         ]
-        row = {"widgets": widgets, "depth": depth_var, "runtime": run_var,
-               "gas": gas_var, "gas_box": gas_box}
+        row = {"widgets": widgets, "depth": depth_var, "from": from_var,
+               "runtime": run_var}
         widgets.append(ttk.Button(self.level_list, text="✕", width=2,
                                   style="GasDel.TButton",
                                   command=lambda: self._remove_level_row(row)))
-        for var in (depth_var, run_var, gas_var):
-            var.trace_add("write",
-                          lambda *_: None if self._building else self.recompute())
+        # Depth trace recomputes on any edit; from/to edits also drag the shared
+        # boundary with their neighbour (see _on_level_edit).
+        depth_var.trace_add(
+            "write", lambda *_: None if self._building else self.recompute())
+        from_var.trace_add("write",
+                           lambda *_, r=row: self._on_level_edit(r, "from"))
+        run_var.trace_add("write",
+                          lambda *_, r=row: self._on_level_edit(r, "to"))
         self.level_rows.append(row)
+        self._resync_froms()
         self._regrid_level_rows()
         if recompute and not self._building:
             self.recompute()
+
+    def _resync_froms(self) -> None:
+        """Derive each level's window start from its neighbour: the first level
+        starts at 0 (the surface — "from the beginning"), every later level
+        starts where the previous one ended. Keeps the read of "from" honest
+        without the user having to retype adjacent boundaries."""
+        if self._boundary_syncing:
+            return
+        self._boundary_syncing = True
+        try:
+            prev_to = "0"
+            for row in self.level_rows:
+                if row["from"].get() != prev_to:
+                    row["from"].set(prev_to)
+                prev_to = row["runtime"].get()
+        finally:
+            self._boundary_syncing = False
+
+    def _on_level_edit(self, row, side: str) -> None:
+        """A level's window end was edited. Because adjacent levels share a
+        boundary, moving one end moves the neighbour's matching end too
+        (`side="to"` drags the next level's "from"; `side="from"` drags the
+        previous level's "to"), so windows stay contiguous and non-overlapping.
+        Then re-plan once."""
+        if self._boundary_syncing or self._building:
+            return
+        self._boundary_syncing = True
+        try:
+            idx = self.level_rows.index(row)
+            if side == "to" and idx + 1 < len(self.level_rows):
+                self.level_rows[idx + 1]["from"].set(row["runtime"].get())
+            elif side == "from":
+                if idx > 0:
+                    self.level_rows[idx - 1]["runtime"].set(row["from"].get())
+                elif row["from"].get() != "0":
+                    row["from"].set("0")    # the first level always starts at 0
+        finally:
+            self._boundary_syncing = False
+        self.recompute()
 
     def _regrid_level_rows(self) -> None:
         for i, row in enumerate(self.level_rows, start=1):
@@ -586,25 +610,24 @@ class DecoApp:
             self.level_rows.remove(row)
             for w in row["widgets"]:
                 w.destroy()
+            self._resync_froms()
             self._regrid_level_rows()
             if not self._building:
                 self.recompute()
 
-    def _row_levels(self) -> List[b.Level]:
+    def _row_levels(self) -> List[_RowLevel]:
         """Every level row exactly as typed — never drops one. This is what gets
         saved: a field left blank mid-edit must not silently delete the level."""
-        by_label = {self._gas_label(g): g for g in
-                    (self._row_gas(r) for r in self.gas_rows) if g is not None}
-        return [b.Level(self._num(row["depth"], 0.0, lo=0.0),
-                        self._num(row["runtime"], 0.0, lo=0.0),
-                        by_label.get(row["gas"].get()))
+        return [_RowLevel(self._num(row["depth"], 0.0, lo=0.0),
+                          self._num(row["runtime"], 0.0, lo=0.0))
                 for row in self.level_rows]
 
     def _levels(self) -> List[b.Level]:
         """The rows that can actually be planned — a row being edited (blank or
         zero depth/runtime) is skipped so the plan doesn't blow up mid-keystroke.
         Use `_row_levels` when persisting, so nothing is lost."""
-        return [l for l in self._row_levels() if l.depth > 0 and l.runtime > 0]
+        return [b.Level(r.depth, r.runtime)
+                for r in self._row_levels() if r.depth > 0 and r.runtime > 0]
 
     # The bare "use" checkbox is much narrower than its header, so left-aligning
     # both (like every other column) leaves it visibly adrift under the label.
@@ -614,8 +637,7 @@ class DecoApp:
 
     def _add_gas_row(self, role: str = "Deco", fo2: float = 50, fhe: float = 0,
                      tank: float = 11, pressure: float = 232,
-                     enabled: bool = True, recompute: bool = True,
-                     gas_id: Optional[int] = None) -> None:
+                     enabled: bool = True, recompute: bool = True) -> None:
         role_var = tk.StringVar(value=role)
         fo2_var = tk.StringVar(value=str(int(fo2)))
         fhe_var = tk.StringVar(value=str(int(fhe)))
@@ -632,12 +654,9 @@ class DecoApp:
             ttk.Spinbox(self.gas_list, from_=0, to=300, width=4, textvariable=press_var),
         ]
 
-        # The numeric config id rides along invisibly (levels reference gases
-        # by it); rows added in the UI leave it None and dive_config assigns
-        # the next free number on save.
         row = {"widgets": widgets, "role": role_var, "fo2": fo2_var,
                "fhe": fhe_var, "tank": tank_var, "pressure": press_var,
-               "use": use_var, "id": gas_id}
+               "use": use_var}
         widgets.append(ttk.Checkbutton(self.gas_list, variable=use_var,
                                        style="GasUse.TCheckbutton"))
         widgets.append(ttk.Button(self.gas_list, text="✕", width=2,
@@ -699,28 +718,30 @@ class DecoApp:
         except (ValueError, tk.TclError):
             return default
 
-    def _cylinders_by_mix(self) -> dict:
-        """{repr(gas): (total_tank_l, effective_bar, role)} across the gas rows.
-        Same-mix cylinders (twin bottom tanks, two identical stages) act as one
-        manifolded bank: volumes add, the fill pressure is volume-weighted —
-        without this a second cylinder of the same mix silently overwrote the
-        first and 'have' showed one tank while the diver carried two."""
-        out: dict = {}
-        for row in self.gas_rows:
-            g = self._row_gas(row)
-            if g is None:
-                continue
-            key = repr(g)
-            tank, pressure = self._row_tank(row), self._row_pressure(row)
-            if key in out:
-                t0, p0, role0 = out[key]
-                total = t0 + tank
-                out[key] = (total,
-                            (p0 * t0 + pressure * tank) / total if total > 0
-                            else 0.0, role0)
-            else:
-                out[key] = (tank, pressure, row["role"].get())
-        return out
+    def _gas_rows_raw(self) -> List[Tuple[str, b.Gas, float, float]]:
+        """(role, Gas, tank_l, pressure_bar) for every valid gas row — the raw
+        input the shared report layer (`rp.gas_report` / `rp.aggregate_banks`)
+        consumes. Keyed downstream by the frozen ``Gas`` value, never its rounded
+        display label — two mixes that render the same (e.g. 20.6% and 21.4%
+        both 'AIR') keep separate accounting."""
+        return [(row["role"].get(), g, self._row_tank(row),
+                 self._row_pressure(row))
+                for row in self.gas_rows
+                for g in (self._row_gas(row),) if g is not None]
+
+    def _banks_by_gas(self) -> dict:
+        """{Gas: rp.Bank} across the gas rows, same-mix cylinders aggregated
+        into one manifolded bank (`report.aggregate_banks`)."""
+        return {bank.gas: bank
+                for bank in rp.aggregate_banks(self._gas_rows_raw())}
+
+    def _gas_plan(self) -> b.GasPlan:
+        """Consumption inputs (SAC, emergency multiplier, problem minutes, team
+        size) from the UI as a ``buhlmann.GasPlan``."""
+        return b.GasPlan(sac=self._num(self.sac, 20.0, lo=1.0),
+                         sac_multiplier=self._num(self.sac_mult, 2.0, lo=1.0),
+                         problem_minutes=self._num(self.problem_min, 1.0, lo=0.0),
+                         divers=2 if self.two_divers.get() else 1)
 
     # ----------------------------------------------------------- compute ----
 
@@ -760,9 +781,10 @@ class DecoApp:
         )
 
     def recompute(self) -> None:
-        self._refresh_level_gas_choices()   # the Gases list may have changed
         levels = self._levels()
         if not levels:                      # every row mid-edit / emptied
+            self._error("⚠ profile incomplete — add a level with a depth and "
+                        "runtime")
             return
         gas = self._bottom_gas()
         depth = b.max_depth(levels)
@@ -771,7 +793,7 @@ class DecoApp:
         try:
             plan = self._make_plan()        # validates the gradient factors
             segs, tissues = b.plan_multilevel(levels, gas, plan)
-        except Exception as e:                # noqa: BLE001 - surface any input error
+        except (ValueError, RuntimeError) as e:
             self._error(f"Plan error: {e}")
             return
 
@@ -782,6 +804,7 @@ class DecoApp:
                             scenarios, levels)
         self._write_runtime(depth, gas, plan, bottom_time, segs, scenarios,
                             levels)
+        self._plan_ok = True                # a valid plan is now on every surface
 
     def _lost_gas_scenarios(self, levels, gas, plan,
                             segs) -> List[Tuple[str, list]]:
@@ -791,9 +814,8 @@ class DecoApp:
         Deco-role gases can be lost; bottom and travel gases always stay. Works
         for any number of deco gases (nothing assumes two).
 
-        A lost gas is stripped from BOTH the deco stack and any level that names
-        it (that level falls back to "auto"), so losing a mix truly removes it —
-        otherwise a level breathing it would keep the "lost" gas on the schedule."""
+        A lost gas is simply dropped from the deco stack; levels never name a
+        gas (selection is automatic by role), so nothing else needs rewriting."""
         scenarios: List[Tuple[str, list]] = [("OK", segs)]
         deco = plan.deco_gases
         losses = [(repr(g), (g,)) for g in deco]        # (label, gases lost)
@@ -801,14 +823,12 @@ class DecoApp:
             losses.append(("all", tuple(deco)))
         for label, lost in losses:
             remaining = tuple(d for d in deco if d not in lost)
-            lost_levels = [replace(lv, gas=None)
-                           if (lv.gas is not None and lv.gas in lost) else lv
-                           for lv in levels]
             try:
                 lost_segs, _ = b.plan_multilevel(
-                    lost_levels, gas, replace(plan, deco_gases=remaining))
-            except Exception:  # noqa: BLE001 - a scenario that can't be planned
-                continue       # (e.g. hypoxic gap) just drops its column
+                    levels, gas, replace(plan, deco_gases=remaining))
+            except (ValueError, RuntimeError):
+                continue       # a scenario that can't be planned (e.g. hypoxic
+                               # gap) just drops its column
             scenarios.append((label, lost_segs))
         return scenarios
 
@@ -821,22 +841,6 @@ class DecoApp:
             if s.kind == "stop" and s.duration > 0:
                 at[int(round(s.depth_start))] = (s.duration, run)
         return at, run
-
-    @staticmethod
-    def _liters_by_gas(segs, gp) -> List[Tuple[str, float, float]]:
-        """[(gas repr, litres at the normal SAC, emergency litres)] in order of
-        first use. Emergency = bottom phase at the normal SAC, then problem
-        minutes at max depth + the whole ascent/deco at SAC × multiplier."""
-        out, seen = [], []
-        for s in segs:
-            key = repr(s.gas)
-            if key in seen:
-                continue
-            seen.append(key)
-            out.append((key, b.segment_gas_liters(
-                [x for x in segs if repr(x.gas) == key], gp.sac),
-                b.emergency_gas_liters(segs, s.gas, gp)))
-        return out
 
     # -------------------------------------------------------------- draw ----
 
@@ -935,23 +939,11 @@ class DecoApp:
         else:
             cards.append([f"Dive {depth:.0f} m / {bottom_time:.0f} min{suffix}"])
 
-        # --- profile violates its own ceiling? (only possible multi-level) ---
-        for s in b.ceiling_violations(segs):
-            cards.append([f"⚠  level at {s.depth_start:.0f} m is ABOVE the "
-                          f"ceiling ({s.ceiling_m:.1f} m)",
-                          "the profile itself violates decompression"])
-
-        # --- ppO₂ outside the window? (air below its MOD, hypoxic mix with no
-        # travel gas, a level forcing a gas over its MOD) ---
-        for v in b.worst_ppo2_violations(segs, plan):
-            if v.kind == "high":
-                cards.append([f"⚠  ppO₂ {v.ppo2:.2f} bar on {v.segment.gas!r} "
-                              f"at {v.depth:.0f} m — over the "
-                              f"{v.limit:.2f} limit"])
-            else:
-                cards.append([f"⚠  ppO₂ {v.ppo2:.2f} bar on {v.segment.gas!r} "
-                              f"at {v.depth:.0f} m — hypoxic "
-                              f"(min {v.limit:.2f})"])
+        # --- model warnings (ceiling breach, ppO₂ window, gas density): the
+        # SAME wording as the CLI, from the shared report layer, one ⚠ card
+        # each — so the two front ends can never word a warning differently. ---
+        for w in rp.warning_lines(segs, plan, gas, depth):
+            cards.append([f"⚠  {w}"])
 
         # --- silent-fallback notices: things the planner papered over ---
         if not any(r["role"].get() == "Bottom" and self._row_gas(r) is not None
@@ -977,11 +969,9 @@ class DecoApp:
             ["fractions", f"O₂ {gas.fO2*100:.0f}% · He {gas.fHe*100:.0f}%"
                           f" · N₂ {gas.fN2*100:.0f}%"],
             [f"ppO₂ @ {depth:.0f} m", f"{gas.ppo2(depth):.2f} bar"],
-            ["MOD @ 1.4", f"{gas.mod(1.4):.0f} m"],
+            [f"MOD @ {plan.ppo2_bottom:g}", f"{gas.mod(plan.ppo2_bottom):.0f} m"],
             [f"END @ {depth:.0f} m", f"{gas.end(depth):.0f} m (O₂ narcotic)"],
-            [f"density @ {depth:.0f} m",
-             f"{density:.1f} g/L" + (" ⚠ over 6.2!"
-                                     if density > b.DENSITY_MAX_G_L else "")],
+            [f"density @ {depth:.0f} m", f"{density:.1f} g/L"],
         ]
         if gas.min_depth(plan.ppo2_min) > 0:
             note = "" if plan.travel_gases else " (need travel gas!)"
@@ -1013,58 +1003,46 @@ class DecoApp:
                             f" deco · {plan.ppo2_min:g} min"],
         ], aligns=["<", "<"]))
 
-        # --- GAS PLAN (per-cylinder + rock bottom) ---
-        sac = self._num(self.sac, 20.0, lo=1.0)
-        sac_mult = self._num(self.sac_mult, 2.0, lo=1.0)
-        gp = b.GasPlan(sac=sac, sac_multiplier=sac_mult,
-                       problem_minutes=self._num(self.problem_min, 1.0, lo=0.0),
-                       divers=2 if self.two_divers.get() else 1)
-        cylinders = self._cylinders_by_mix()
-        tanks = {k: t for k, (t, _p, _r) in cylinders.items()}
-        press = {k: p for k, (_t, p, _r) in cylinders.items()}
-        roles = {k: r for k, (_t, _p, r) in cylinders.items()}
-        back_tank, back_pressure, back_role = cylinders.get(
-            repr(gas), (0.0, 0.0, ""))
-        if back_role != "Bottom":
-            back_tank = back_pressure = 0.0
+        # --- GAS PLAN (per-cylinder + rock bottom) — every litre/bar/SHORT/turn
+        # figure comes from the shared report layer, the SAME accounting the CLI
+        # renders, so the two front ends can't diverge on the numbers. ---
+        gp = self._gas_plan()
+        sac, sac_mult = gp.sac, gp.sac_multiplier
+        cylinders = self._banks_by_gas()
+        gas_rows_raw = self._gas_rows_raw()
+        rep = rp.gas_report(segs, gas, gp, gas_rows_raw)
         plan_rows: List[List[str]] = []
-        seen: List[str] = []
-        for s in segs:
-            key = repr(s.gas)
-            if key in seen:
-                continue
-            seen.append(key)
-            liters = b.segment_gas_liters([x for x in segs if x.gas == s.gas], sac)
-            liters_e = b.emergency_gas_liters(segs, s.gas, gp)
-            tk_l = tanks.get(key, 0.0)
-            pr = press.get(key, 0.0)
-            label = roles.get(key, "stage")
-            if tk_l <= 0:
-                need, have = f"{liters:.0f} L", "set tank"
-                emrg = f"{liters_e:.0f} L"
-            elif pr > 0:
-                used, used_e = liters / tk_l, liters_e / tk_l
-                need = f"{used:.0f} bar" + (" SHORT!" if used > pr + 1e-9 else "")
-                have = f"{pr:.0f} bar"
-                emrg = f"{used_e:.0f} bar" + (" SHORT!" if used_e > pr + 1e-9 else "")
+        for c in rep.cylinders:
+            if c.tank_l <= 0:
+                need, have = f"{c.liters:.0f} L", "set tank"
+                emrg = f"{c.liters_emergency:.0f} L"
+            elif c.pressure_bar > 0:
+                need = f"{c.bar_used:.0f} bar" + (" SHORT!" if c.short else "")
+                have = f"{c.pressure_bar:.0f} bar"
+                emrg = (f"{c.bar_used_emergency:.0f} bar"
+                        + (" SHORT!" if c.short_emergency else ""))
             else:
-                need, have = f"{liters / tk_l:.0f} bar", f"{tk_l:.0f} L"
-                emrg = f"{liters_e / tk_l:.0f} bar"
-            plan_rows.append([label, key, need, have, emrg])
-        rock = b.rock_bottom_liters(depth, gp, plan.ascent_rate)
-        if back_tank > 0:
-            rock_bar = rock / back_tank
-            usable = back_pressure - rock_bar
-            if back_pressure <= 0:
+                need, have = f"{c.bar_used:.0f} bar", f"{c.tank_l:.0f} L"
+                emrg = f"{c.bar_used_emergency:.0f} bar"
+            plan_rows.append([c.role, repr(c.gas), need, have, emrg])
+        # Rock bottom is a back-gas reserve: show it in bar only when the bottom
+        # gas actually has a Bottom-role cylinder with a fill; else fall back to
+        # litres. All the math (rock_bottom_bar / turn_pressure_bar) is the
+        # report layer's.
+        back = cylinders.get(gas)
+        is_bottom = back is not None and back.role == "Bottom"
+        rock_bar = rep.rock_bottom_bar if is_bottom else None
+        if rock_bar is not None:
+            if rep.back_pressure_bar <= 0:
                 rb_line = f"rock bottom {rock_bar:.0f} bar reserve"
-            elif usable > 0:
-                rb_line = (f"rock bottom {rock_bar:.0f} bar · "
-                           f"turn ~{back_pressure - usable / 2.0:.0f} bar")
             else:
-                rb_line = (f"rock bottom {rock_bar:.0f} bar · "
-                           f"over {back_pressure:.0f} bar fill!")
+                turn = rep.turn_pressure_bar
+                rb_line = (f"rock bottom {rock_bar:.0f} bar · turn ~{turn:.0f} bar"
+                           if turn is not None else
+                           f"rock bottom {rock_bar:.0f} bar · over "
+                           f"{rep.back_pressure_bar:.0f} bar fill!")
         else:
-            rb_line = f"rock bottom {rock:.0f} L (set bottom tank)"
+            rb_line = f"rock bottom {rep.rock_bottom_l:.0f} L (set bottom tank)"
         gp_title = (f"GAS PLAN · SAC {sac:g} ×{sac_mult:.2f} emergency"
                     f" · problem {gp.problem_minutes:g} min"
                     + (f" · {gp.divers} divers" if gp.divers > 1 else ""))
@@ -1105,39 +1083,40 @@ class DecoApp:
                 aligns=[">"] * (len(per) + 1)))
 
             # Per scenario: what the dive NEEDS against what is actually in the
-            # cylinders (tank litres x fill pressure), so "SHORT!" is backed by
-            # the numbers it was judged on.
+            # cylinders (tank litres × fill pressure). Litres, SHORT flags and
+            # bar-left all come from the shared report layer — the same figures
+            # the per-cylinder card above and the CLI show.
             usage_rows: List[List[str]] = []
             for label, ss in scenarios:
                 if usage_rows:
                     usage_rows.append([""] * 6)   # blank row between scenarios
                 scen = ("OK" if label == "OK"
                         else "All" if label == "all" else label)
+                srep = rp.gas_report(ss, gas, gp, gas_rows_raw)
                 tot_need = tot_emrg = tot_have = 0.0
-                for i, (key, liters, liters_e) in enumerate(
-                        self._liters_by_gas(ss, gp)):
-                    tk_l, pr = tanks.get(key, 0.0), press.get(key, 0.0)
-                    have = tk_l * pr
-                    tot_need += liters
-                    tot_emrg += liters_e
+                for i, c in enumerate(srep.cylinders):
+                    have = c.tank_l * c.pressure_bar
+                    tot_need += c.liters
+                    tot_emrg += c.liters_emergency
                     tot_have += have
                     if have <= 0:
-                        usage_rows.append([scen if i == 0 else "", key,
-                                           "set tank", f"{liters:.0f}",
-                                           f"({liters_e:.0f})", ""])
+                        usage_rows.append([scen if i == 0 else "", repr(c.gas),
+                                           "set tank", f"{c.liters:.0f}",
+                                           f"({c.liters_emergency:.0f})", ""])
                         continue
-                    short = " SHORT!" if have < liters else ""
-                    short_e = " SHORT!" if have < liters_e else ""
+                    short = " SHORT!" if c.short else ""
+                    short_e = " SHORT!" if c.short_emergency else ""
                     usage_rows.append(
-                        [scen if i == 0 else "", key, f"{have:.0f}",
-                         f"{liters:.0f}{short}", f"({liters_e:.0f}{short_e})",
-                         f"{max(have - liters, 0) / tk_l:.0f} / "
-                         f"{max(have - liters_e, 0) / tk_l:.0f}"])
+                        [scen if i == 0 else "", repr(c.gas), f"{have:.0f}",
+                         f"{c.liters:.0f}{short}",
+                         f"({c.liters_emergency:.0f}{short_e})",
+                         f"{max(c.bar_left, 0.0):.0f} / "
+                         f"{max(c.bar_left_emergency, 0.0):.0f}"])
                 usage_rows.append(["", "TOTAL", f"{tot_have:.0f}",
                                    f"{tot_need:.0f}", f"({tot_emrg:.0f})", ""])
             stop_cards.append(format_card(
                 ["GAS USAGE · litres have / need (emergency)",
-                 "bar left at the normal / emergency SAC"], usage_rows,
+                 "(emergency) = need + rock-bottom reserve · bar left at normal / emrg"], usage_rows,
                 headers=["scenario", "gas", "have", "need", "(emrg)",
                          "bar left"],
                 aligns=["<", "<", ">", ">", ">", ">"]))
@@ -1155,7 +1134,7 @@ class DecoApp:
         cards[1:1] = stop_cards               # right under the header line
         cards.append(gas_plan_card)
 
-        cards.append(["Educational model — NOT validated for real dives."])
+        cards.append([rp.DISCLAIMER])
 
         lines: List[str] = []
         for i, card in enumerate(cards):
@@ -1166,8 +1145,21 @@ class DecoApp:
         self.readout.insert(tk.END, "\n".join(lines))
 
     def _error(self, msg: str) -> None:
+        """No valid plan: replace every derived surface (Results text, the
+        Runtime wetnotes card, and the Profile chart) with the reason, and mark
+        the plan invalid so a stale schedule can never be printed or exported."""
+        self._plan_ok = False
         self.readout.delete("1.0", tk.END)
         self.readout.insert(tk.END, msg)
+        self.runtime_text.delete("1.0", tk.END)
+        self.runtime_text.insert(tk.END, msg)
+        self.ax.clear()
+        self.ax.text(0.5, 0.5, msg, ha="center", va="center",
+                     color=self._pal["chart_fg"], wrap=True,
+                     transform=self.ax.transAxes)
+        self.ax.set_axis_off()
+        self.fig.patch.set_facecolor(self._pal["chart_bg"])
+        self.canvas.draw_idle()
 
     # ----------------------------------------------------------- runtime ----
 
@@ -1182,22 +1174,18 @@ class DecoApp:
         # Minimum ("rock bottom") gas / turn pressure — the same reserve on every
         # card, driven by the back gas cylinder.
         sac = self._num(self.sac, 20.0, lo=1.0)
-        gp = b.GasPlan(sac=sac, sac_multiplier=self._num(self.sac_mult, 2.0, lo=1.0),
-                       problem_minutes=self._num(self.problem_min, 1.0, lo=0.0),
-                       divers=2 if self.two_divers.get() else 1)
-        rock = b.rock_bottom_liters(depth, gp, plan.ascent_rate)
-        back_tank, back_pressure, back_role = self._cylinders_by_mix().get(
-            repr(gas), (0.0, 0.0, ""))
-        if back_role != "Bottom":
-            back_tank = back_pressure = 0.0
-        if back_tank > 0:
-            rb = rock / back_tank
-            min_gas = f"MIN GAS {rb:.0f} bar"
-            if back_pressure > rb:
-                min_gas += (f" · TURN "
-                            f"{back_pressure - (back_pressure - rb) / 2:.0f} bar")
+        gp = self._gas_plan()
+        rep = rp.gas_report(segs, gas, gp, self._gas_rows_raw())
+        back = self._banks_by_gas().get(gas)
+        is_bottom = back is not None and back.role == "Bottom"
+        rock_bar = rep.rock_bottom_bar if is_bottom else None
+        if rock_bar is not None:
+            min_gas = f"MIN GAS {rock_bar:.0f} bar"
+            turn = rep.turn_pressure_bar
+            if turn is not None:
+                min_gas += f" · TURN {turn:.0f} bar"
         else:
-            min_gas = f"MIN GAS {rock:.0f} L"
+            min_gas = f"MIN GAS {rep.rock_bottom_l:.0f} L"
 
         # Square dive: "max depth / bottom time". Multi-level: the whole profile
         # as depth@runtime steps (runtime is cumulative min at the end of each
@@ -1262,7 +1250,7 @@ class DecoApp:
 
         # The disclaimer must travel with the card: this text is printed / PNG
         # exported and taken on dives, exactly where "educational" matters most.
-        cards.append("educational — NOT validated for real dives")
+        cards.append(rp.DISCLAIMER)
         self.runtime_text.delete("1.0", tk.END)
         self.runtime_text.insert(tk.END, "\n\n".join(cards))
 
@@ -1307,6 +1295,9 @@ class DecoApp:
         return path
 
     def _export_runtime(self, path: str = None) -> None:
+        if not self._plan_ok:
+            self.runtime_status.config(text="⚠ no valid plan to export")
+            return
         if path is None:
             from tkinter import filedialog
             path = filedialog.asksaveasfilename(
@@ -1314,7 +1305,11 @@ class DecoApp:
                 filetypes=[("PNG image", "*.png")])
             if not path:
                 return
-        self._render_runtime_png(path)
+        try:
+            self._render_runtime_png(path)
+        except (OSError, ValueError) as e:
+            self.runtime_status.config(text=f"⚠ export failed: {e}")
+            return
         self.runtime_status.config(text=f"saved {os.path.basename(path)}")
 
     def _copy_runtime(self) -> None:
@@ -1327,7 +1322,7 @@ class DecoApp:
     def _apply_config(self, cfg: dict) -> None:
         was_building, self._building = self._building, True
         try:
-            cfg = dc._merged(cfg)      # migrate legacy depth_m/bottom_time_min
+            cfg = dc.normalize(cfg)    # migrate legacy keys, assign stable ids
             self._base_cfg = dict(cfg)
             self.gf_lo.set(str(cfg["gf_low"]))
             self.gf_hi.set(str(cfg["gf_high"]))
@@ -1347,19 +1342,14 @@ class DecoApp:
                 self._add_gas_row(g["role"], g["o2"], g.get("he", 0),
                                   g.get("tank_l", 0), g.get("pressure_bar", 232),
                                   enabled=g.get("enabled", True),
-                                  recompute=False, gas_id=g.get("id"))
-            # levels after the gases, so the gas dropdowns can be populated;
-            # a level's gas is an id into the stack (None = automatic)
-            by_id = {g["id"]: g for g in cfg["gases"] if g.get("id")}
+                                  recompute=False)
+            # Levels are pure depth/time periods — gas is automatic by role.
             self.level_rows.clear()
             for w in self.level_list.winfo_children():
                 if int(w.grid_info().get("row", 0)) > 0:
                     w.destroy()
             for lv in cfg["levels"]:
-                gid = lv.get("gas_id")
-                label = (self._gas_label(dc.gas_of(by_id[gid])) if gid in by_id
-                         else self.AUTO_GAS)
-                self._add_level_row(lv["depth_m"], lv["runtime_min"], label,
+                self._add_level_row(lv["depth_m"], lv["runtime_min"],
                                     recompute=False)
         finally:
             self._building = was_building
@@ -1370,15 +1360,15 @@ class DecoApp:
         cfg = dict(self._base_cfg)               # preserve fields the GUI can't edit
         cfg.pop("depth_m", None)                 # legacy square-profile keys
         cfg.pop("bottom_time_min", None)
+        gases = [{"role": r["role"].get(),
+                  "o2": int(float(r["fo2"].get() or 0)),
+                  "he": int(float(r["fhe"].get() or 0)),
+                  "tank_l": self._row_tank(r),
+                  "pressure_bar": self._row_pressure(r),
+                  "enabled": bool(r["use"].get())} for r in self.gas_rows]
         cfg.update({
-            # Levels write the legacy inline mix; dive_config.save normalizes
-            # it to a gas_id referencing the stack (None = automatic), so the
-            # file on disk never carries a separate mix definition.
-            "levels": [{"depth_m": l.depth, "runtime_min": l.runtime,
-                        "gas": (None if l.gas is None
-                                else {"o2": round(l.gas.fO2 * 100),
-                                      "he": round(l.gas.fHe * 100)})}
-                       for l in self._row_levels()],   # as typed: lose nothing
+            "levels": [{"depth_m": rl.depth, "runtime_min": rl.runtime}
+                       for rl in self._row_levels()],   # as typed: lose nothing
             "gf_low": int(round(self._pct(self.gf_lo, 0.30) * 100)),
             "gf_high": int(round(self._pct(self.gf_hi, 0.70) * 100)),
             "last_stop_m": 6.0 if self.last_stop6.get() else 3.0,
@@ -1391,21 +1381,28 @@ class DecoApp:
                                      int(self.cont_ta.get()),
                                      int(self.cont_db.get()),
                                      int(self.cont_da.get())))),
-            "gases": [{"id": r["id"], "role": r["role"].get(),
-                       "o2": int(float(r["fo2"].get() or 0)),
-                       "he": int(float(r["fhe"].get() or 0)),
-                       "tank_l": self._row_tank(r),
-                       "pressure_bar": self._row_pressure(r),
-                       "enabled": bool(r["use"].get())} for r in self.gas_rows],
+            "gases": gases,
         })
         return cfg
 
     def _save_config(self) -> None:
-        dc.save(self._collect_config())
+        try:
+            dc.save(self._collect_config())
+        except (OSError, ValueError, tk.TclError) as e:
+            self.cfg_status.config(text=f"⚠ save failed: {e}")
+            return
         self.cfg_status.config(text="saved ✓")
 
     def _reload_config(self) -> None:
-        self._apply_config(dc.load())
+        # Strict load, non-destructive on failure: a corrupt or missing file
+        # must not wipe the dive the user is looking at — report it and keep the
+        # current settings in place.
+        try:
+            cfg = dc.load(strict=True)
+        except (OSError, ValueError) as e:
+            self.cfg_status.config(text=f"⚠ reload failed: {e}")
+            return
+        self._apply_config(cfg)
         self.cfg_status.config(text="reloaded")
 
 

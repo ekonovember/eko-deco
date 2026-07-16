@@ -105,16 +105,13 @@ class TestCLI(unittest.TestCase):
         lv = parse_level("45:25")
         self.assertAlmostEqual(lv.depth, 45)
         self.assertAlmostEqual(lv.runtime, 25)
-        self.assertIsNone(lv.gas)                 # no gas = "auto"
-        lv = parse_level("120:20:10/70")
+        lv = parse_level("120:20")
         self.assertAlmostEqual(lv.depth, 120)
         self.assertAlmostEqual(lv.runtime, 20)
-        self.assertAlmostEqual(lv.gas.fHe, 0.70)
-        self.assertAlmostEqual(parse_level("18:55:ean50").gas.fO2, 0.50)
 
     def test_parse_level_rejects_junk(self):
         from cli import parse_level
-        for spec in ("45", "45:25:50:9", "deep:25", "45:soon"):
+        for spec in ("45", "45:25:50", "45:25:50:9", "deep:25", "45:soon"):
             with self.assertRaises(ValueError, msg=spec):
                 parse_level(spec)
 
@@ -287,35 +284,49 @@ class TestTTSandRockBottom(unittest.TestCase):
         self.assertAlmostEqual(b.time_to_surface(segs), 18 / 10.0, places=6)
 
     def test_rock_bottom_scales_linearly_with_multiplier(self):
+        segs, _ = b.plan_dive(30, 20, b.AIR, b.DivePlan())
         gp1 = b.GasPlan(sac=20, sac_multiplier=1.0)
         gp2 = b.GasPlan(sac=20, sac_multiplier=2.0)
-        self.assertAlmostEqual(b.rock_bottom_liters(30, gp2),
-                               2 * b.rock_bottom_liters(30, gp1), places=6)
+        self.assertAlmostEqual(b.rock_bottom_liters(segs, b.AIR, gp2),
+                               2 * b.rock_bottom_liters(segs, b.AIR, gp1),
+                               places=6)
 
     def test_rock_bottom_grows_with_multiplier(self):
-        lo = b.rock_bottom_liters(30, b.GasPlan(sac=20, sac_multiplier=1.5))
-        hi = b.rock_bottom_liters(30, b.GasPlan(sac=20, sac_multiplier=3.0))
+        segs, _ = b.plan_dive(30, 20, b.AIR, b.DivePlan())
+        lo = b.rock_bottom_liters(segs, b.AIR,
+                                  b.GasPlan(sac=20, sac_multiplier=1.5))
+        hi = b.rock_bottom_liters(segs, b.AIR,
+                                  b.GasPlan(sac=20, sac_multiplier=3.0))
         self.assertGreater(hi, lo)
 
-    def test_rock_bottom_is_problem_plus_direct_ascent(self):
+    def test_rock_bottom_is_problem_plus_real_ascent(self):
+        # No-deco dive: rock bottom = problem at max depth + the real ascent,
+        # all on the bottom gas at the emergency SAC (no switch, so no divers
+        # split here).
+        segs, _ = b.plan_dive(18, 20, b.AIR, b.DivePlan())
         gp = b.GasPlan(sac=20, sac_multiplier=2.0, problem_minutes=2.0)
-        emergency = 20 * 2.0                                # sac * multiplier
-        problem = emergency * b.depth_to_p_amb(30) * 2.0
-        p_avg = b.P_ATM + 15.0 / 10.0                       # mid-depth of 30 m
-        ascent = emergency * p_avg * (30 / 10.0)
-        self.assertAlmostEqual(b.rock_bottom_liters(30, gp, 10.0),
+        sac_e = 20 * 2.0
+        be = b._bottom_phase_end(segs)
+        ascent = b.segment_gas_liters(segs[be:], sac_e)
+        problem = sac_e * b.depth_to_p_amb(18) * 2.0
+        self.assertAlmostEqual(b.rock_bottom_liters(segs, b.AIR, gp),
                                problem + ascent, places=6)
 
     def test_rock_bottom_grows_with_depth(self):
         gp = b.GasPlan(sac=20, sac_multiplier=2.0)
-        self.assertGreater(b.rock_bottom_liters(45, gp),
-                           b.rock_bottom_liters(30, gp))
+        deep, _ = b.plan_dive(45, 20, b.AIR, b.DivePlan())
+        shallow, _ = b.plan_dive(30, 20, b.AIR, b.DivePlan())
+        self.assertGreater(b.rock_bottom_liters(deep, b.AIR, gp),
+                           b.rock_bottom_liters(shallow, b.AIR, gp))
 
     def test_rock_bottom_is_a_practical_reserve(self):
         # 45 m single-diver min gas on a 24 L twinset is a realistic reserve —
-        # tens of bar, not the hundreds the old full-deco method produced.
+        # tens of bar (back gas only to the first switch), not the hundreds the
+        # old full-deco method produced.
+        segs, _ = b.plan_dive(45, 25, b.AIR,
+                              b.DivePlan(deco_gases=(b.EAN50,)))
         gp = b.GasPlan(sac=20, sac_multiplier=2.0)
-        bar = b.rock_bottom_liters(45, gp) / 24.0
+        bar = b.rock_bottom_liters(segs, b.AIR, gp) / 24.0
         self.assertGreater(bar, 15)
         self.assertLess(bar, 120)
 
@@ -327,31 +338,34 @@ class TestTTSandRockBottom(unittest.TestCase):
 
     def test_emergency_gas_hand_calc(self):
         # Constructed profile: bottom phase on air, ascent + stop on EAN50.
-        # Emergency need = bottom at SAC, problem at max depth + ascent/deco
-        # at SAC × multiplier, problem billed to the max-depth (bottom) gas.
+        # Rock-bottom reserve: problem at max depth billed to the bottom gas +
+        # the ascent/deco at SAC × multiplier. The gas already breathed on the
+        # bottom is NOT part of the reserve.
         segs = [b.DiveSegment("descent", 0, 30, 2.0, b.AIR),
                 b.DiveSegment("bottom", 30, 30, 18.0, b.AIR),
                 b.DiveSegment("ascent", 30, 6, 2.4, b.EAN50),
                 b.DiveSegment("stop", 6, 6, 5.0, b.EAN50)]
         gp = b.GasPlan(sac=20, sac_multiplier=1.5, problem_minutes=2.0)
         sac_e = 20 * 1.5
-        air = (b.segment_gas_liters(segs[:2], 20)
-               + sac_e * b.depth_to_p_amb(30) * 2.0)
+        air = sac_e * b.depth_to_p_amb(30) * 2.0            # problem only
         ean50 = b.segment_gas_liters(segs[2:], sac_e)
         self.assertAlmostEqual(b.emergency_gas_liters(segs, b.AIR, gp),
                                air, places=6)
         self.assertAlmostEqual(b.emergency_gas_liters(segs, b.EAN50, gp),
                                ean50, places=6)
 
-    def test_emergency_gas_reduces_to_normal_need(self):
-        # multiplier 1 + no problem time = the plain per-gas consumption
+    def test_emergency_reserve_is_ascent_only_at_base_sac(self):
+        # multiplier 1 + no problem time = just the ascent/deco consumption of
+        # each gas (the bottom phase is not part of the reserve).
         segs, _ = b.plan_dive(40, 25, b.AIR,
                               b.DivePlan(deco_gases=(b.EAN50,)))
         gp = b.GasPlan(sac=20, sac_multiplier=1.0, problem_minutes=0.0)
+        be = b._bottom_phase_end(segs)
         for gas in (b.AIR, b.EAN50):
             self.assertAlmostEqual(
                 b.emergency_gas_liters(segs, gas, gp),
-                b.segment_gas_liters([s for s in segs if s.gas == gas], 20),
+                b.segment_gas_liters([s for s in segs[be:] if s.gas == gas],
+                                     20),
                 places=6)
 
     def test_emergency_problem_minutes_bill_the_bottom_gas_only(self):
@@ -400,19 +414,22 @@ class TestTTSandRockBottom(unittest.TestCase):
                                ascent_e, places=6)
 
     def test_rock_bottom_scales_with_divers(self):
+        segs, _ = b.plan_dive(30, 20, b.AIR, b.DivePlan())
         gp1 = b.GasPlan(sac=20, sac_multiplier=2.0, divers=1)
         gp2 = b.GasPlan(sac=20, sac_multiplier=2.0, divers=2)
-        self.assertAlmostEqual(b.rock_bottom_liters(30, gp2),
-                               2 * b.rock_bottom_liters(30, gp1), places=6)
+        self.assertAlmostEqual(b.rock_bottom_liters(segs, b.AIR, gp2),
+                               2 * b.rock_bottom_liters(segs, b.AIR, gp1),
+                               places=6)
 
-    def test_emergency_gas_at_least_the_normal_need(self):
+    def test_rock_bottom_equals_bottom_gas_emergency(self):
+        # Rock bottom and the emergency column must always agree for the back
+        # gas — the user-facing invariant the rock-bottom column relies on.
         segs, _ = b.plan_dive(45, 25, b.AIR,
                               b.DivePlan(deco_gases=(b.EAN50, b.O2)))
         gp = b.GasPlan(sac=18, sac_multiplier=1.8, problem_minutes=1.0)
-        for gas in (b.AIR, b.EAN50, b.O2):
-            self.assertGreaterEqual(
-                b.emergency_gas_liters(segs, gas, gp),
-                b.segment_gas_liters([s for s in segs if s.gas == gas], 18))
+        self.assertAlmostEqual(b.rock_bottom_liters(segs, b.AIR, gp),
+                               b.emergency_gas_liters(segs, b.AIR, gp),
+                               places=6)
 
 
 class TestMultilevel(unittest.TestCase):
@@ -466,33 +483,6 @@ class TestMultilevel(unittest.TestCase):
                         and s.depth_start <= 18 + 1e-9)
         self.assertAlmostEqual(b.time_to_surface(segs), deco_only, places=6)
 
-    def test_per_level_gas_is_breathed(self):
-        levels = [b.Level(45, 25, b.Gas(0.21, 0.35)), b.Level(21, 40, b.EAN50)]
-        segs, _ = b.plan_multilevel(levels, b.Gas(0.21, 0.35), self.PLAN)
-        bottoms = [s for s in segs if s.kind == "bottom"]
-        self.assertAlmostEqual(bottoms[0].gas.fHe, 0.35)
-        self.assertAlmostEqual(bottoms[1].gas.fO2, 0.50)
-
-    def test_named_level_gas_not_breathed_over_ppo2_on_the_travel_up(self):
-        """Ascending to a shallow level on a rich named mix must not breathe it at
-        the deep end of the travel: the switch waits for the mix's MOD. Regression
-        for the chart showing EAN50 back at the bottom depth."""
-        levels = [b.Level(36, 20, b.EAN32), b.Level(20, 30, b.EAN50)]
-        segs, _ = b.plan_multilevel(levels, b.EAN32, self.PLAN)
-        for s in segs:
-            deep = max(s.depth_start, s.depth_end)
-            self.assertLessEqual(
-                s.gas.ppo2(deep),
-                self.PLAN.ppo2_deco + self.PLAN.ppo2_switch_tol + 1e-6,
-                f"{s.gas!r} over ppO2 at {deep:.1f} m")
-        # the flat 20 m level is still the mix the user asked for
-        bottoms = [s for s in segs if s.kind == "bottom"]
-        self.assertAlmostEqual(bottoms[-1].gas.fO2, 0.50)
-        # and EAN50 first appears no deeper than its switch depth
-        first_ean50 = next(max(s.depth_start, s.depth_end)
-                           for s in segs if s.gas == b.EAN50)
-        self.assertLessEqual(first_ean50, self.PLAN.switch_depth(b.EAN50) + 1e-6)
-
     def test_auto_level_breathes_the_bottom_gas_when_it_is_breathable(self):
         segs, _ = b.plan_multilevel([b.Level(40, 20), b.Level(20, 35)],
                                     b.EAN32, self.PLAN)
@@ -516,23 +506,6 @@ class TestMultilevel(unittest.TestCase):
             shallow = min(s.depth_start, s.depth_end)
             self.assertGreaterEqual(s.gas.ppo2(shallow), plan.ppo2_min - 1e-6,
                                     f"{s.gas!r} hypoxic at {shallow:.1f} m")
-
-    def test_level_gas_is_billed_to_its_own_cylinder(self):
-        """Gas planning is segment-driven, so a level's gas has to show up in
-        that gas's consumption — not the bottom gas's."""
-        levels = [b.Level(40, 20), b.Level(21, 40, b.EAN50)]
-        segs, _ = b.plan_multilevel(levels, b.AIR, self.PLAN)
-        air = b.segment_gas_liters([s for s in segs if s.gas == b.AIR], 20)
-        ean50 = b.segment_gas_liters([s for s in segs if s.gas == b.EAN50], 20)
-
-        auto, _ = b.plan_multilevel([b.Level(40, 20), b.Level(21, 40)],
-                                    b.AIR, self.PLAN)
-        air_auto = b.segment_gas_liters([s for s in auto if s.gas == b.AIR], 20)
-        ean50_auto = b.segment_gas_liters([s for s in auto if s.gas == b.EAN50], 20)
-
-        # forcing the level onto EAN50 moves that level's litres off the back gas
-        self.assertLess(air, air_auto)
-        self.assertGreater(ean50, ean50_auto)
 
     def test_level_above_the_ceiling_is_flagged_but_still_planned(self):
         # 45 m for 30 min then straight to 6 m: the 6 m level is well above the
@@ -781,14 +754,6 @@ class TestPpO2Violations(unittest.TestCase):
         self.assertTrue(lows)
         self.assertLess(min(v.ppo2 for v in lows), 0.18)
 
-    def test_forced_level_gas_over_its_mod_is_flagged(self):
-        plan = b.DivePlan(gf_low=0.30, gf_high=0.80, deco_gases=(b.EAN50,))
-        segs, _ = b.plan_multilevel([b.Level(33, 25, b.EAN50)], b.AIR, plan)
-        bottom_viol = [v for v in b.ppo2_violations(segs, plan)
-                       if v.segment.kind == "bottom" and v.kind == "high"]
-        self.assertTrue(bottom_viol)
-        self.assertAlmostEqual(bottom_viol[0].ppo2, b.EAN50.ppo2(33), places=6)
-
     def test_clean_multigas_dive_has_no_violations(self):
         plan = b.DivePlan(gf_low=0.30, gf_high=0.80,
                           deco_gases=(b.EAN50, b.O2))
@@ -847,6 +812,82 @@ class TestGasEndDensity(unittest.TestCase):
 
     def test_helium_thins_the_mix(self):
         self.assertLess(b.Gas(0.21, 0.35).density(45.0), b.AIR.density(45.0))
+
+
+class TestDomainValidation(unittest.TestCase):
+    """Invariants enforced at construction time (crash-free boundaries)."""
+
+    def test_level_rejects_negative_depth(self):
+        with self.assertRaises(ValueError):
+            b.Level(-30.0, 20.0)
+
+    def test_level_rejects_nonpositive_runtime(self):
+        for rt in (0.0, -5.0):
+            with self.assertRaises(ValueError):
+                b.Level(30.0, rt)
+
+    def test_level_surface_depth_allowed(self):
+        b.Level(0.0, 5.0)                      # safety stop at the surface: fine
+
+    def test_plan_rejects_nonpositive_rates_and_intervals(self):
+        for kw in ({"ascent_rate": 0.0}, {"descent_rate": 0.0},
+                   {"stop_interval": 0.0}, {"ascent_rate": -10.0},
+                   {"msw_per_bar": 0.0}, {"surface_p": 0.0}):
+            with self.assertRaises(ValueError, msg=kw):
+                b.DivePlan(**kw)
+
+    def test_plan_rejects_negative_last_stop(self):
+        with self.assertRaises(ValueError):
+            b.DivePlan(last_stop_depth=-3.0)
+
+    def test_plan_rejects_ppo2_ceiling_below_floor(self):
+        with self.assertRaises(ValueError):
+            b.DivePlan(ppo2_bottom=0.1)        # below ppo2_min 0.18
+        with self.assertRaises(ValueError):
+            b.DivePlan(ppo2_min=-0.1)
+
+    def test_gasplan_rejects_nonsense_inputs(self):
+        for kw in ({"sac": 0.0}, {"sac": -20.0},
+                   {"sac": 20.0, "sac_multiplier": 0.5},
+                   {"sac": 20.0, "problem_minutes": -1.0},
+                   {"sac": 20.0, "divers": 0},
+                   {"sac": 20.0, "tank_liters": 0.0}):
+            with self.assertRaises(ValueError, msg=kw):
+                b.GasPlan(**kw)
+
+    def test_gasplan_accepts_sane_inputs(self):
+        b.GasPlan(sac=20.0, sac_multiplier=1.0, problem_minutes=0.0,
+                  divers=2, tank_liters=24.0)
+
+
+class TestGasFractionClamp(unittest.TestCase):
+    """fN2 never leaks a tiny negative value into the model (R2-L1)."""
+
+    def test_fn2_never_negative(self):
+        # A 79% helium mix: fO2 + fHe rounds to just over 1.0 in float.
+        g = b.Gas(0.21, 0.79)
+        self.assertGreaterEqual(g.fN2, 0.0)
+        self.assertEqual(g.fN2, 0.0)
+
+    def test_fn2_normal_mix(self):
+        self.assertAlmostEqual(b.Gas(0.32).fN2, 0.68)
+
+
+class TestNonePlanDefaults(unittest.TestCase):
+    """Public functions build a fresh DivePlan when passed None, so no mutable
+    default instance is shared across calls (R1-M1/R2-M6)."""
+
+    def test_plan_multilevel_none_plan(self):
+        segs, _ = b.plan_multilevel([b.Level(30.0, 20.0)], b.AIR)
+        self.assertTrue(segs)
+
+    def test_ndl_none_plan(self):
+        self.assertIsInstance(b.ndl(30.0, b.AIR), (int, type(None)))
+
+    def test_ceiling_profile_and_ppo2_none_plan(self):
+        segs, _ = b.plan_dive(40.0, 20.0, b.AIR)
+        self.assertTrue(b.ceiling_profile(segs))
+        self.assertIsInstance(b.worst_ppo2_violations(segs), list)
 
 
 if __name__ == "__main__":

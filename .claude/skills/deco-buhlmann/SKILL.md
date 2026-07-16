@@ -45,7 +45,7 @@ python cli.py plan --depth 45 --time 10 --gas air@24 --deco-gas 50@11 --sac 20 -
 python cli.py plan dive_plan.json                                                        # replan the saved dive
 python cli.py plan --depth 45 --time 25 --gas 21/35 --deco-gas 50 --last-stop 6   # Shearwater-style last stop
 python cli.py plan --level 45:25 --level 30:40 --level 18:55 --gas 21/35 --deco-gas 50   # multi-level
-python cli.py plan --level 120:20:10/70 --level 45:40 --gas 10/70 --travel-gas 35/25     # gas per level
+python cli.py plan --level 120:20 --level 45:40 --gas 10/70 --travel-gas 35/25            # gas auto by role
 python cli.py plan --depth 40 --time 25 --gas air --deco-gas 50 --contingency 0:2:0:1    # cut table +2 time steps, +1 depth step
 ```
 

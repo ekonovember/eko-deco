@@ -66,82 +66,34 @@ class TestDiveConfig(unittest.TestCase):
         self.assertEqual(dc.load(missing)["levels"],
                          dc.default_config()["levels"])
 
-    def test_levels_round_trip_with_per_level_gas(self):
+    def test_levels_round_trip_drops_legacy_per_level_gas(self):
         cfg = dc.default_config()
         cfg["levels"] = [
             {"depth_m": 120, "runtime_min": 20, "gas": {"o2": 10, "he": 70}},
-            {"depth_m": 45, "runtime_min": 40, "gas": None},
+            {"depth_m": 45, "runtime_min": 40, "gas_id": 2},
         ]
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "c.json")
             dc.save(cfg, path)
             back = dc.load(path)
+        # Levels are pure depth/time periods now: any legacy gas reference is
+        # dropped, and the stack is untouched (no parked entries).
+        for lvl in back["levels"]:
+            self.assertEqual(set(lvl), {"depth_m", "runtime_min"})
+        self.assertEqual(len(back["gases"]), 2)
         levels = dc.levels_of(back)
         self.assertEqual(len(levels), 2)
         self.assertAlmostEqual(levels[0].depth, 120)
         self.assertAlmostEqual(levels[0].runtime, 20)
-        self.assertAlmostEqual(levels[0].gas.fHe, 0.70)
-        self.assertIsNone(levels[1].gas)          # None = automatic
-        # The legacy inline 10/70 was not in the stack: it must have been
-        # parked as an entry and referenced by id — levels never keep separate
-        # mix definitions on disk. Parked ENABLED: disabled gases are never
-        # planned (a level referencing one falls back to automatic), so a
-        # disabled park would silently change the migrated plan.
-        self.assertNotIn("gas", back["levels"][0])
-        self.assertEqual(back["levels"][0]["gas_id"], 3)  # after ids 1 and 2
-        parked = next(g for g in back["gases"] if g["id"] == 3)
-        self.assertTrue(parked["enabled"])
-        self.assertEqual(parked["tank_l"], 0)     # carried mix, no cylinder yet
 
-    def test_gas_ids_assigned_uniquely_when_defined(self):
-        # A gas gets the next free plain number the moment it is defined —
-        # unique per entry (twin cylinders of one mix get their own ids),
-        # never confusable with a display label.
-        cfg = dc._merged({"gases": [
-            {"role": "Bottom", "o2": 21, "he": 0},
-            {"role": "Travel", "o2": 35, "he": 25},
-            {"role": "Deco", "o2": 50, "he": 0},
-            {"role": "Deco", "o2": 50, "he": 0},   # twin cylinder, same mix
-            {"role": "Deco", "o2": 100, "he": 0},
-        ]})
-        self.assertEqual([g["id"] for g in cfg["gases"]], [1, 2, 3, 4, 5])
-
-    def test_gas_ids_stick_to_the_entry_across_mix_edits(self):
-        # The id names the cylinder entry, not a mix snapshot: existing ids
-        # are kept (new entries fill in above the highest), so a level's
-        # reference follows a mix edit instead of going stale.
-        cfg = dc._merged({
-            "gases": [{"id": 7, "role": "Bottom", "o2": 32, "he": 0},
-                      {"role": "Deco", "o2": 50, "he": 0}],
-            "levels": [{"depth_m": 30, "runtime_min": 20, "gas_id": 7}],
-        })
-        self.assertEqual([g["id"] for g in cfg["gases"]], [7, 8])
-        self.assertEqual(cfg["levels"][0]["gas_id"], 7)
-        self.assertAlmostEqual(dc.levels_of(cfg)[0].gas.fO2, 0.32)
-
-    def test_level_gas_id_resolves_or_falls_back_to_automatic(self):
-        base = {"gases": [{"role": "Bottom", "o2": 21, "he": 0},
-                          {"role": "Deco", "o2": 50, "he": 0}]}
-        cfg = dc._merged({**base, "levels": [
-            {"depth_m": 30, "runtime_min": 20, "gas_id": 2.0},   # float ok
-            {"depth_m": 30, "runtime_min": 30, "gas_id": None},
-            {"depth_m": 30, "runtime_min": 40, "gas_id": 99},    # stale
-        ]})
-        self.assertEqual([l["gas_id"] for l in cfg["levels"]],
-                         [2, None, None])
-        levels = dc.levels_of(cfg)
-        self.assertAlmostEqual(levels[0].gas.fO2, 0.50)  # forced from the stack
-        self.assertIsNone(levels[1].gas)                 # automatic
-        self.assertIsNone(levels[2].gas)                 # stale id -> automatic
-
-    def test_legacy_inline_gas_matches_stack_without_new_entry(self):
+    def test_legacy_inline_gas_is_dropped_not_parked(self):
         cfg = dc._merged({
             "gases": [{"role": "Bottom", "o2": 21, "he": 0},
                       {"role": "Deco", "o2": 50, "he": 0}],
             "levels": [{"depth_m": 21, "runtime_min": 30,
                         "gas": {"o2": 50, "he": 0}}],
         })
-        self.assertEqual(cfg["levels"][0]["gas_id"], 2)
+        self.assertEqual(set(cfg["levels"][0]), {"depth_m", "runtime_min"})
         self.assertEqual(len(cfg["gases"]), 2)           # nothing parked
 
     def test_empty_levels_never_leaves_the_planner_without_a_dive(self):
@@ -158,8 +110,7 @@ class TestDiveConfig(unittest.TestCase):
         # already meant "runtime at the end of the bottom" — so it carries over.
         cfg = dc._merged({"depth_m": 40, "bottom_time_min": 22})
         self.assertEqual(cfg["levels"],
-                         [{"depth_m": 40.0, "runtime_min": 22.0,
-                           "gas_id": None}])
+                         [{"depth_m": 40.0, "runtime_min": 22.0}])
         self.assertNotIn("depth_m", cfg)
         self.assertNotIn("bottom_time_min", cfg)
         level = dc.levels_of(cfg)[0]
@@ -272,23 +223,21 @@ class TestDiveConfig(unittest.TestCase):
             back = dc.load(path)
         self.assertEqual(back["gases"][0]["role"], "Deco")
 
-    def test_level_referencing_disabled_gas_falls_back_to_auto(self):
-        # A disabled gas is not carried: planning a level on it would breathe
-        # a mix the diver doesn't have (and, being outside the deco stack, one
-        # with no switch-depth breaks — it rode far past its MOD). The GUI
-        # resets such a dropdown to "auto"; levels_of must match.
-        cfg = dc.default_config()
-        cfg["gases"] = [
-            {"id": 1, "role": "Bottom", "o2": 21, "he": 0, "tank_l": 24},
-            {"id": 3, "role": "Deco", "o2": 50, "he": 0, "tank_l": 11,
-             "enabled": False},
-        ]
-        cfg["levels"] = [{"depth_m": 30, "runtime_min": 25, "gas_id": 3}]
-        levels = dc.levels_of(cfg)
-        self.assertIsNone(levels[0].gas)
-        # ... while an ENABLED reference is still forced.
-        cfg["gases"][1]["enabled"] = True
-        self.assertAlmostEqual(dc.levels_of(cfg)[0].gas.fO2, 0.50)
+    def test_legacy_level_role_gas_is_dropped_on_migration(self):
+        # The old "Level" role (a mix breathed only on a level that named it)
+        # is gone: gas is automatic-by-role now, so such an entry is dropped.
+        cfg = dc.normalize({
+            "levels": [{"depth_m": 35, "runtime_min": 25, "gas_id": 2}],
+            "gases": [
+                {"role": "Bottom", "o2": 21, "he": 0, "tank_l": 24},
+                {"role": "Level", "o2": 28, "he": 0, "tank_l": 11},
+            ],
+        })
+        self.assertEqual([g["role"] for g in cfg["gases"]], ["Bottom"])
+        _bottom, plan, _gp, gases = dc.to_buhlmann(cfg)
+        self.assertEqual(plan.travel_gases, ())
+        self.assertEqual(plan.deco_gases, ())
+        self.assertNotIn("Level", [role for role, *_ in gases])
 
     def test_load_strict_raises_on_missing_and_invalid(self):
         with self.assertRaises(FileNotFoundError):
@@ -305,3 +254,46 @@ class TestDiveConfig(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestLoadBoundary(unittest.TestCase):
+    """Strict/lenient contract for semantically corrupt (valid-JSON) configs."""
+
+    CORRUPT = '{"levels": [{"depth_m": "oops", "runtime_min": 20}]}'
+
+    def _write(self, d, text):
+        path = os.path.join(d, "cfg.json")
+        with open(path, "w", encoding="utf-8") as fh:
+            fh.write(text)
+        return path
+
+    def test_lenient_semantic_corruption_falls_back_to_defaults(self):
+        with tempfile.TemporaryDirectory() as d:
+            cfg = dc.load(self._write(d, self.CORRUPT))
+        self.assertEqual(cfg, dc.default_config())
+
+    def test_strict_semantic_corruption_raises_valueerror(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = self._write(d, self.CORRUPT)
+            with self.assertRaises(ValueError):
+                dc.load(path, strict=True)
+
+    def test_lenient_non_dict_json_falls_back(self):
+        with tempfile.TemporaryDirectory() as d:
+            cfg = dc.load(self._write(d, '[1, 2, 3]'))
+        self.assertEqual(cfg, dc.default_config())
+
+    def test_normalize_is_public_and_merges(self):
+        cfg = dc.normalize({"gf_high": 85})
+        self.assertEqual(cfg["gf_high"], 85)
+        self.assertTrue(cfg["levels"])         # defaults filled in
+
+
+class TestAtomicSave(unittest.TestCase):
+    def test_save_leaves_no_temp_file(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "cfg.json")
+            dc.save(dc.default_config(), path)
+            self.assertEqual(os.listdir(d), ["cfg.json"])
+            self.assertEqual(dc.load(path), dc.normalize(dc.default_config()))
+
