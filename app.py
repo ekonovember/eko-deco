@@ -19,6 +19,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import sys
 from dataclasses import dataclass, replace
 import tkinter as tk
@@ -47,6 +48,7 @@ class _RowLevel:
     Levels are pure depth/time periods — gas is chosen automatically by role."""
     depth: float
     runtime: float
+    start: Optional[float] = None
 
 # Branding: the eko-deco wordmark and its "<//>" logo mark.
 APP_NAME = "eko-deco"
@@ -70,6 +72,94 @@ DARK = {"bg": "#2b2b2b", "fg": "#e6e6e6", "field": "#3c3f41",
         "trough": "#1f1f1f", "border": "#555555", "active": "#3a3d3f",
         "chart_bg": "#1e1e1e", "chart_fg": "#d0d0d0", "grid": "#666666",
         "ceiling": "#ff6b5e"}
+
+
+def _monitor_workareas(root) -> List[Tuple[int, int, int, int]]:
+    """Per-monitor work areas as ``(left, top, right, bottom)``, primary first. On
+    Windows these are the *real* rectangles of each attached monitor (honouring
+    monitors placed left of / above the primary, i.e. negative coords, and the
+    taskbar); elsewhere a single primary-screen rect. The bounding box of every
+    monitor can contain gaps not covered by any screen (offset/mismatched
+    monitors), which is why we track each rect and not just the overall span."""
+    if sys.platform == "win32":
+        try:
+            import ctypes
+            from ctypes import wintypes
+
+            class MONITORINFO(ctypes.Structure):
+                _fields_ = [("cbSize", wintypes.DWORD),
+                            ("rcMonitor", wintypes.RECT),
+                            ("rcWork", wintypes.RECT),
+                            ("dwFlags", wintypes.DWORD)]
+
+            mons: List[Tuple[int, int, int, int]] = []
+            primary: List[Tuple[int, int, int, int]] = []
+            proc = ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_ulong,
+                                      ctypes.c_ulong,
+                                      ctypes.POINTER(wintypes.RECT),
+                                      ctypes.c_double)
+
+            def _cb(h_mon, _hdc, _lprc, _data):
+                mi = MONITORINFO()
+                mi.cbSize = ctypes.sizeof(MONITORINFO)
+                ctypes.windll.user32.GetMonitorInfoW(h_mon, ctypes.byref(mi))
+                wk = mi.rcWork
+                rect = (wk.left, wk.top, wk.right, wk.bottom)
+                (primary if mi.dwFlags & 1 else mons).append(rect)
+                return 1
+
+            ctypes.windll.user32.EnumDisplayMonitors(0, 0, proc(_cb), 0)
+            rects = primary + mons
+            if rects:
+                return rects
+        except Exception:
+            pass
+    return [(0, 0, root.winfo_screenwidth(), root.winfo_screenheight())]
+
+
+def _overlap_area(a: Tuple[int, int, int, int],
+                  b: Tuple[int, int, int, int]) -> int:
+    """Area of the intersection of two ``(l, t, r, b)`` rectangles (0 if disjoint)."""
+    l, t = max(a[0], b[0]), max(a[1], b[1])
+    r, btm = min(a[2], b[2]), min(a[3], b[3])
+    return max(0, r - l) * max(0, btm - t)
+
+
+def clamp_geometry(root, geom: str) -> str:
+    """Keep a restored ``WxH+X+Y`` on a real, attached monitor, so a window saved
+    on a screen that is gone (or that falls in a gap between offset monitors)
+    can't reopen with its title bar unreachable. The window is snapped onto the
+    monitor it most overlaps — or, if it overlaps none, the nearest one — and
+    clamped inside that monitor's work area. Size-only or unparseable strings
+    pass through untouched."""
+    m = re.fullmatch(r"(\d+)x(\d+)([+-])(-?\d+)([+-])(-?\d+)", geom.strip())
+    if not m:
+        return geom
+    w, h = int(m.group(1)), int(m.group(2))
+    sx, xv, sy, yv = m.group(3), int(m.group(4)), m.group(5), int(m.group(6))
+    mons = _monitor_workareas(root)
+    maxr = max(r for _l, _t, r, _b in mons)
+    maxb = max(b for _l, _t, _r, b in mons)
+    # Tk offsets carry a gravity sign: '+' = from the left/top (value may itself
+    # be negative, e.g. Tk's own "+-2557"), '-' = from the right/bottom of the
+    # whole desktop. Resolve to an absolute top-left first.
+    x = xv if sx == "+" else (maxr - w - xv)
+    y = yv if sy == "+" else (maxb - h - yv)
+    # Pick the monitor the window most overlaps; if it touches none (its monitor
+    # was detached, or it landed in a gap between offset monitors) fall back to
+    # the monitor nearest the window's centre, so the title bar is always on a
+    # real screen.
+    want = (x, y, x + w, y + h)
+    best = max(mons, key=lambda mo: _overlap_area(want, mo))
+    if _overlap_area(want, best) == 0:
+        cx, cy = x + w / 2, y + h / 2
+        best = min(mons, key=lambda mo: (max(mo[0] - cx, 0, cx - mo[2]) ** 2 +
+                                         max(mo[1] - cy, 0, cy - mo[3]) ** 2))
+    ml, mt, mr, mb = best
+    w, h = min(w, mr - ml), min(h, mb - mt)
+    x = min(max(x, ml), mr - w)
+    y = min(max(y, mt), mb - h)
+    return f"{w}x{h}+{x}+{y}"
 
 
 def load_ui_settings() -> dict:
@@ -179,7 +269,8 @@ class DecoApp:
                    "+ rock bottom")
         self._ui_settings = load_ui_settings()
         try:                       # last session's size/position (ui_settings)
-            root.geometry(str(self._ui_settings.get("geometry") or "1500x900"))
+            geom = str(self._ui_settings.get("geometry") or "1500x900")
+            root.geometry(clamp_geometry(root, geom))
         except tk.TclError:
             root.geometry("1500x900")
         root.protocol("WM_DELETE_WINDOW", self._on_close)
@@ -188,7 +279,6 @@ class DecoApp:
         self._building = True
         self._base_cfg = dc.default_config()
         self._plan_ok = False        # True only when a valid plan is on screen
-        self._boundary_syncing = False  # guards the from/to boundary coupling
         self._build_layout()
         self._apply_theme()
         # A missing config is a normal first launch; a *broken* one must not
@@ -523,15 +613,19 @@ class DecoApp:
             v.trace_add("write", lambda *_: None if self._building else self.recompute())
 
     def _add_level_row(self, depth: float = 30, runtime: float = 40,
+                       start: Optional[float] = None,
                        recompute: bool = True) -> None:
         depth_var = tk.StringVar(value=f"{depth:g}")
-        from_var = tk.StringVar(value="0")   # window start; filled by _resync_froms
+        # "from" is the runtime the diver ARRIVES at this depth. Blank means
+        # "auto" — arrive as soon as the standard-rate descent/ascent allows
+        # (contiguous with the previous level, the historical behaviour). A
+        # value makes it explicit: the transit lands exactly on it, the diver
+        # waiting at the previous depth (the surface for level 1) until then.
+        from_var = tk.StringVar(value="" if start is None else f"{start:g}")
         run_var = tk.StringVar(value=f"{runtime:g}")
 
-        # Columns: depth · from · to · delete. "from" and "to" are the two
-        # ends of this level's time window (cumulative minutes since the
-        # surface); adjacent levels SHARE a boundary, so editing one end moves
-        # the neighbour's end with it — windows can never gap or overlap.
+        # Columns: depth · from · to · delete. "from"/"to" are this level's time
+        # window (cumulative minutes since the surface); "from" blank = auto.
         widgets = [
             ttk.Spinbox(self.level_list, from_=1, to=300, width=5,
                         textvariable=depth_var),
@@ -545,58 +639,14 @@ class DecoApp:
         widgets.append(ttk.Button(self.level_list, text="✕", width=2,
                                   style="GasDel.TButton",
                                   command=lambda: self._remove_level_row(row)))
-        # Depth trace recomputes on any edit; from/to edits also drag the shared
-        # boundary with their neighbour (see _on_level_edit).
-        depth_var.trace_add(
-            "write", lambda *_: None if self._building else self.recompute())
-        from_var.trace_add("write",
-                           lambda *_, r=row: self._on_level_edit(r, "from"))
-        run_var.trace_add("write",
-                          lambda *_, r=row: self._on_level_edit(r, "to"))
+        # Any edit re-plans; the fields are independent now (no boundary drag).
+        for var in (depth_var, from_var, run_var):
+            var.trace_add(
+                "write", lambda *_: None if self._building else self.recompute())
         self.level_rows.append(row)
-        self._resync_froms()
         self._regrid_level_rows()
         if recompute and not self._building:
             self.recompute()
-
-    def _resync_froms(self) -> None:
-        """Derive each level's window start from its neighbour: the first level
-        starts at 0 (the surface — "from the beginning"), every later level
-        starts where the previous one ended. Keeps the read of "from" honest
-        without the user having to retype adjacent boundaries."""
-        if self._boundary_syncing:
-            return
-        self._boundary_syncing = True
-        try:
-            prev_to = "0"
-            for row in self.level_rows:
-                if row["from"].get() != prev_to:
-                    row["from"].set(prev_to)
-                prev_to = row["runtime"].get()
-        finally:
-            self._boundary_syncing = False
-
-    def _on_level_edit(self, row, side: str) -> None:
-        """A level's window end was edited. Because adjacent levels share a
-        boundary, moving one end moves the neighbour's matching end too
-        (`side="to"` drags the next level's "from"; `side="from"` drags the
-        previous level's "to"), so windows stay contiguous and non-overlapping.
-        Then re-plan once."""
-        if self._boundary_syncing or self._building:
-            return
-        self._boundary_syncing = True
-        try:
-            idx = self.level_rows.index(row)
-            if side == "to" and idx + 1 < len(self.level_rows):
-                self.level_rows[idx + 1]["from"].set(row["runtime"].get())
-            elif side == "from":
-                if idx > 0:
-                    self.level_rows[idx - 1]["runtime"].set(row["from"].get())
-                elif row["from"].get() != "0":
-                    row["from"].set("0")    # the first level always starts at 0
-        finally:
-            self._boundary_syncing = False
-        self.recompute()
 
     def _regrid_level_rows(self) -> None:
         for i, row in enumerate(self.level_rows, start=1):
@@ -610,23 +660,39 @@ class DecoApp:
             self.level_rows.remove(row)
             for w in row["widgets"]:
                 w.destroy()
-            self._resync_froms()
             self._regrid_level_rows()
             if not self._building:
                 self.recompute()
 
     def _row_levels(self) -> List[_RowLevel]:
         """Every level row exactly as typed — never drops one. This is what gets
-        saved: a field left blank mid-edit must not silently delete the level."""
-        return [_RowLevel(self._num(row["depth"], 0.0, lo=0.0),
-                          self._num(row["runtime"], 0.0, lo=0.0))
-                for row in self.level_rows]
+        saved: a field left blank mid-edit must not silently delete the level. A
+        blank "from" means "auto" (contiguous), carried as ``start=None``."""
+        out = []
+        for row in self.level_rows:
+            raw = row["from"].get().strip()
+            try:
+                start = float(raw) if raw else None
+            except ValueError:
+                start = None
+            out.append(_RowLevel(self._num(row["depth"], 0.0, lo=0.0),
+                                 self._num(row["runtime"], 0.0, lo=0.0),
+                                 start))
+        return out
+
+    @staticmethod
+    def _level_row_dict(rl: _RowLevel) -> dict:
+        """Serialize a row to the config shape, omitting an unset (auto) start."""
+        d = {"depth_m": rl.depth, "runtime_min": rl.runtime}
+        if rl.start is not None:
+            d["start_min"] = rl.start
+        return d
 
     def _levels(self) -> List[b.Level]:
         """The rows that can actually be planned — a row being edited (blank or
         zero depth/runtime) is skipped so the plan doesn't blow up mid-keystroke.
         Use `_row_levels` when persisting, so nothing is lost."""
-        return [b.Level(r.depth, r.runtime)
+        return [b.Level(r.depth, r.runtime, start=r.start)
                 for r in self._row_levels() if r.depth > 0 and r.runtime > 0]
 
     # The bare "use" checkbox is much narrower than its header, so left-aligning
@@ -781,7 +847,11 @@ class DecoApp:
         )
 
     def recompute(self) -> None:
-        levels = self._levels()
+        try:
+            levels = self._levels()
+        except ValueError as e:             # e.g. a level start past its runtime
+            self._error(f"Plan error: {e}")
+            return
         if not levels:                      # every row mid-edit / emptied
             self._error("⚠ profile incomplete — add a level with a depth and "
                         "runtime")
@@ -1350,7 +1420,7 @@ class DecoApp:
                     w.destroy()
             for lv in cfg["levels"]:
                 self._add_level_row(lv["depth_m"], lv["runtime_min"],
-                                    recompute=False)
+                                    lv.get("start_min"), recompute=False)
         finally:
             self._building = was_building
         if not self._building:
@@ -1367,7 +1437,7 @@ class DecoApp:
                   "pressure_bar": self._row_pressure(r),
                   "enabled": bool(r["use"].get())} for r in self.gas_rows]
         cfg.update({
-            "levels": [{"depth_m": rl.depth, "runtime_min": rl.runtime}
+            "levels": [self._level_row_dict(rl)
                        for rl in self._row_levels()],   # as typed: lose nothing
             "gf_low": int(round(self._pct(self.gf_lo, 0.30) * 100)),
             "gf_high": int(round(self._pct(self.gf_hi, 0.70) * 100)),

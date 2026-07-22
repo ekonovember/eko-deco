@@ -15,7 +15,7 @@ import argparse
 import json
 import os
 import sys
-from typing import List
+from typing import List, Optional
 
 import buhlmann as b
 import dive_config as dc
@@ -73,19 +73,42 @@ def parse_gas_spec(spec: str):
 
 
 def parse_level(spec: str) -> b.Level:
-    """Parse a level as 'DEPTH:RUNTIME', e.g. '45:25'.
+    """Parse a level as 'DEPTH:RUNTIME' or 'DEPTH:START-RUNTIME'.
+
+    e.g. '45:25' (arrive as soon as the descent allows, hold to runtime 25) or
+    '16:4-17' (arrive at 16 m at minute 4, hold there until minute 17 — the
+    descent runs at the standard rate and lands exactly at minute 4, the diver
+    waiting at the previous depth until then).
 
     RUNTIME is the runtime in minutes at the END of the level (cumulative,
-    descent included). Gas is chosen automatically by role — levels are pure
-    depth/time periods."""
+    descent included); the optional START is the runtime the diver arrives at
+    the depth. Gas is chosen automatically by role — levels are pure depth/time
+    periods."""
     parts = spec.split(":")
     if len(parts) != 2:
-        raise ValueError(f"level '{spec}': expected DEPTH:RUNTIME, e.g. 45:25")
+        raise ValueError(
+            f"level '{spec}': expected DEPTH:RUNTIME or DEPTH:START-RUNTIME, "
+            f"e.g. 45:25 or 16:4-17")
+    start: Optional[float] = None
     try:
-        depth, runtime = float(parts[0]), float(parts[1])
+        depth = float(parts[0])
+        if "-" in parts[1]:
+            s, e = parts[1].split("-", 1)
+            start, runtime = float(s), float(e)
+        else:
+            runtime = float(parts[1])
     except ValueError:
-        raise ValueError(f"level '{spec}': depth and runtime must be numbers")
-    return b.Level(depth, runtime)
+        raise ValueError(
+            f"level '{spec}': depth, start and runtime must be numbers")
+    return b.Level(depth, runtime, start=start)
+
+
+def _level_dict(l: b.Level) -> dict:
+    """Serialize a Level to the config/JSON shape, omitting an unset start."""
+    d = {"depth_m": l.depth, "runtime_min": l.runtime}
+    if l.start is not None:
+        d["start_min"] = l.start
+    return d
 
 
 def parse_contingency(spec: str):
@@ -171,8 +194,7 @@ def _config_from_args(args) -> dict:
                     "tank_l": tk, "pressure_bar": pr}
                    for role, g, tk, pr in gases]
 
-    levels = [{"depth_m": l.depth, "runtime_min": l.runtime}
-              for l in _args_levels(args)]
+    levels = [_level_dict(l) for l in _args_levels(args)]
     return {
         "levels": levels,
         "gf_low": round(args.gf_low * 100), "gf_high": round(args.gf_high * 100),
@@ -381,8 +403,7 @@ def _plan_json(res: rp.PlanResult, model_label: str, gas_data, cont_data,
     """The --json projection of a PlanResult."""
     out = {
         "model": model_label,
-        "input": {"levels": [{"depth_m": l.depth, "runtime_min": l.runtime}
-                             for l in res.levels],
+        "input": {"levels": [_level_dict(l) for l in res.levels],
                   "max_depth_m": round(res.max_depth_m, 2),
                   "avg_depth_m": round(res.avg_depth_m, 2),
                   "gas": repr(res.bottom_gas),
@@ -412,11 +433,16 @@ def _plan_text(res: rp.PlanResult, model_label: str, gas_lines, cont_lines,
                saved_to) -> List[str]:
     """The human-readable projection of a PlanResult, one line per entry."""
     levels, plan, depth = res.levels, res.plan, res.max_depth_m
-    if len(levels) == 1:
+    if len(levels) == 1 and levels[0].start is None:
         profile = f"bottom {depth:g} m for {levels[0].runtime:g} min"
     else:
-        profile = " → ".join(f"{l.depth:g} m @ {l.runtime:g} min" for l in levels)
-        profile = f"{len(levels)} levels: {profile}"
+        def _leg(l):
+            window = (f"{l.start:g}–{l.runtime:g}" if l.start is not None
+                      else f"{l.runtime:g}")
+            return f"{l.depth:g} m @ {window} min"
+        profile = " → ".join(_leg(l) for l in levels)
+        if len(levels) > 1:
+            profile = f"{len(levels)} levels: {profile}"
     lines = [f"\nDive plan  {model_label}  {profile} on {res.bottom_gas!r}"]
     if len(levels) > 1:
         lines.append(f"Max depth {depth:g} m · average depth "
@@ -548,10 +574,13 @@ def main(argv: List[str] | None = None) -> int:
     sp.add_argument("--time", type=_positive_float,
                     help="bottom time (min); runtime at the end of the bottom")
     sp.add_argument("--level", action="append",
-                    help="multi-level dive: DEPTH:RUNTIME, e.g. 45:25. RUNTIME "
-                         "is cumulative (minutes since the surface, at the END "
-                         "of the level); gas is chosen automatically by role. "
-                         "Repeatable; replaces --depth/--time.")
+                    help="multi-level dive: DEPTH:RUNTIME, e.g. 45:25 (RUNTIME "
+                         "is cumulative minutes since the surface, at the END of "
+                         "the level), or DEPTH:START-RUNTIME, e.g. 16:4-17 to "
+                         "arrive at 16 m at minute 4 and hold until minute 17 "
+                         "(descent at the standard rate, waiting at the previous "
+                         "depth until then). Gas is chosen automatically by "
+                         "role. Repeatable; replaces --depth/--time.")
     sp.add_argument("--gas", default="air",
                     help="bottom gas, optional @tank e.g. air@24, 21/35@24")
     sp.add_argument("--sac", type=_positive_float,

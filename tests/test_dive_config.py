@@ -86,6 +86,21 @@ class TestDiveConfig(unittest.TestCase):
         self.assertAlmostEqual(levels[0].depth, 120)
         self.assertAlmostEqual(levels[0].runtime, 20)
 
+    def test_level_start_min_round_trips(self):
+        cfg = dc.default_config()
+        cfg["levels"] = [{"depth_m": 16, "runtime_min": 17, "start_min": 4}]
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "c.json")
+            dc.save(cfg, path)
+            back = dc.load(path)
+        self.assertEqual(back["levels"][0]["start_min"], 4.0)
+        self.assertAlmostEqual(dc.levels_of(back)[0].start, 4.0)
+        # a level without start_min stays contiguous (Level.start is None)
+        cfg2 = dc.default_config()
+        cfg2["levels"] = [{"depth_m": 30, "runtime_min": 20}]
+        self.assertNotIn("start_min", dc.normalize(cfg2)["levels"][0])
+        self.assertIsNone(dc.levels_of(cfg2)[0].start)
+
     def test_legacy_inline_gas_is_dropped_not_parked(self):
         cfg = dc._merged({
             "gases": [{"role": "Bottom", "o2": 21, "he": 0},

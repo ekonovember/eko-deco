@@ -306,6 +306,13 @@ class Level:
     runtime  minutes since leaving the surface, at the END of this level
              (descent included — the same meaning `bottom_time` has always had,
              and what MultiDeco / Baker's GFDECO / Subsurface take as input)
+    start    minutes since leaving the surface at which the diver ARRIVES at
+             `depth` (the flat time at this level is then `runtime - start`).
+             The descent/ascent to `depth` runs at the plan's standard rate and
+             finishes exactly at `start`; the diver holds at the PREVIOUS depth
+             (the surface for the first level) until it is time to leave. `None`
+             (the default) means "arrive as soon as the standard-rate transit
+             allows" — i.e. levels are contiguous, the historical behaviour.
 
     Gas is always chosen automatically by role: the bottom mix while it is
     breathable, a travel mix where it is not (`DivePlan.descent_gas`). Levels
@@ -313,6 +320,7 @@ class Level:
     """
     depth: float
     runtime: float
+    start: Optional[float] = None
 
     def __post_init__(self) -> None:
         if self.depth < 0:
@@ -320,6 +328,14 @@ class Level:
         if self.runtime <= 0:
             raise ValueError(
                 f"level runtime must be > 0 min (got {self.runtime:g})")
+        if self.start is not None:
+            if self.start < 0:
+                raise ValueError(
+                    f"level start must be >= 0 min (got {self.start:g})")
+            if self.start > self.runtime + 1e-9:
+                raise ValueError(
+                    f"level start ({self.start:g} min) must be <= its runtime "
+                    f"({self.runtime:g} min)")
 
 
 @dataclass
@@ -504,6 +520,12 @@ def plan_multilevel(levels: Sequence[Level], bottom_gas: Gas,
     diver travels between levels at the plan's descent/ascent rate; the travel
     time is part of the runtime, exactly as on the initial descent.
 
+    A level may also carry an explicit `start` (arrival runtime): the transit to
+    its depth then runs at the standard rate and finishes exactly at `start`,
+    and the diver holds at the PREVIOUS depth (the surface for the first level)
+    until it is time to leave — so `[start, runtime]` is the true flat time at
+    that depth. `start=None` arrives as soon as the transit allows (contiguous).
+
     Gas during the bottom phase is always automatic: the bottom gas, with
     travel mixes substituted where the bottom mix is not breathable — deco
     gases are only switched to on the final ascent.
@@ -536,14 +558,36 @@ def plan_multilevel(levels: Sequence[Level], bottom_gas: Gas,
     depth = 0.0
     for i, level in enumerate(levels, start=1):
         going_down = level.depth > depth
+        # Time the standard-rate transit to this level's depth. `start` (if
+        # given) is when the diver ARRIVES here; otherwise arrive as soon as the
+        # transit allows (contiguous, the historical behaviour).
+        rate = plan.descent_rate if going_down else plan.ascent_rate
+        transit_t = abs(level.depth - depth) / rate
+        earliest_arrival = run + transit_t
+        arrival = earliest_arrival if level.start is None else level.start
+        if arrival < earliest_arrival - 1e-9:
+            raise ValueError(
+                f"level {i} start ({level.start:g} min) is before the diver can "
+                f"reach {level.depth:g} m at the standard rate "
+                f"(earliest {earliest_arrival:.1f} min)")
+
+        # Hold at the PREVIOUS depth (the surface for level 1) until it is time
+        # to leave, so the transit lands exactly at `start`. With start=None the
+        # wait is zero and this is a no-op — levels stay contiguous.
+        wait = arrival - earliest_arrival
+        if wait > 1e-9:
+            gas_wait = descent_gas_for(depth)
+            p_wait = depth_to_p_amb(depth, plan.surface_p, plan.msw_per_bar)
+            update_tissues(tissues, gas_wait, p_wait, p_wait, wait)
+            segs.append(DiveSegment("bottom", depth, depth, wait, gas_wait))
+            run += wait
+
         # Bottom-phase gas is always automatic: the bottom gas, with a travel
         # mix swapped in where the bottom mix is hypoxic (descent_gas). Deco
         # gases are only switched to on the final ascent.
-        gas_for = descent_gas_for
-        _move(tissues, segs, plan, bottom_gas, depth, level.depth, gas_for,
+        _move(tissues, segs, plan, bottom_gas, depth, level.depth, descent_gas_for,
               "descent" if going_down else "ascent", None)
-        run += abs(level.depth - depth) / (plan.descent_rate if going_down
-                                           else plan.ascent_rate)
+        run += transit_t
         depth = level.depth
 
         # Shallower than the ceiling? Worst right on arrival, before off-gassing.

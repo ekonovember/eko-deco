@@ -87,9 +87,11 @@ Run `python app.py` for the visual planner shown above:
   (Shearwater/MultiDeco style); an editable **Levels** list — add a level per
   row (depth, its **from → to** runtime window, and a gas picked from the gases
   below — or `auto`, which breathes whatever is relevant at that depth) to plan
-  a multi-level dive. The first level runs from the surface (0) and adjacent
-  levels share a boundary, so the windows are always contiguous — editing one
-  level's end moves the next level's start with it; an
+  a multi-level dive. Each level's **from** is the runtime the diver arrives at
+  that depth: leave it blank to arrive as soon as the standard descent/ascent
+  allows (contiguous with the previous level), or set it to hold a window at that
+  depth — e.g. *from 4 to 17* at 16 m, where the descent runs at the standard
+  rate and lands on minute 4 (waiting at the previous depth until then); an
   editable gas stack (bottom / travel / deco, each with its own O₂, He, tank and
   fill, and a **use** checkbox to leave a gas out of the plan without deleting
   it); SAC, the emergency SAC multiplier, the problem time (minutes solving
@@ -148,6 +150,10 @@ python cli.py plan --level 45:25 --level 30:40 --level 18:55 \
 # Hypoxic trimix over several levels — gas is automatic by role (travel down, deco up)
 python cli.py plan --level 120:20 --level 45:40 --gas 10/70 --travel-gas 35/25 --deco-gas 50
 
+# A level with a START-RUNTIME window: arrive at 16 m at minute 4, hold until 17
+# (descent at the standard rate lands on minute 4, waiting deep until then)
+python cli.py plan --level 40:20 --level 16:30-45 --gas air --deco-gas 50
+
 # Last stop at 6 m instead of 3 m (Shearwater/MultiDeco style)
 python cli.py plan --depth 45 --time 25 --gas 21/35 --deco-gas 50 --last-stop 6
 
@@ -184,7 +190,10 @@ the rounding.
 
 A dive is one or more **levels**. `--depth/--time` is the square-profile
 shorthand for a single level; `--level DEPTH:RUNTIME` (repeatable) plans a
-multi-level dive; gas is chosen automatically by role. **Runtime is cumulative**
+multi-level dive, or `--level DEPTH:START-RUNTIME` (e.g. `16:4-17`) to give the
+level an explicit arrival runtime — the flat time is then `[start, runtime]`, the
+descent lands on `start` at the standard rate, and the diver waits at the previous
+depth until then. Gas is chosen automatically by role. **Runtime is cumulative**
 — minutes since leaving the surface, at the *end* of that level, descent
 included — which is how MultiDeco, Baker's GFDECO and Subsurface all take a
 profile.

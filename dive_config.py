@@ -33,10 +33,15 @@ swapped in on descent where the bottom mix is hypoxic, and deco gases are
 switched to on the final ascent. ``enabled: false`` keeps a gas in the list but
 leaves it out of the plan.
 
-``levels`` is the dive profile, one entry per level: just ``depth_m`` and
-``runtime_min``. ``runtime_min`` is the runtime at the **end** of that level —
-cumulative minutes since leaving the surface, descent included — so the values
-must increase down the list. A square profile is simply a single level.
+``levels`` is the dive profile, one entry per level: ``depth_m``, cumulative
+``runtime_min`` and an optional ``start_min``. ``runtime_min`` is the runtime at
+the **end** of that level — cumulative minutes since leaving the surface,
+descent included — so the values must increase down the list. ``start_min`` (if
+present) is the runtime the diver arrives at that depth: the transit runs at the
+standard rate and lands exactly on it, the diver waiting at the previous depth
+(the surface for the first level) until then, so ``[start_min, runtime_min]`` is
+the true flat time at that depth. Omit ``start_min`` to arrive as soon as the
+transit allows (contiguous levels). A square profile is simply a single level.
 Migrations on load: pre-multilevel configs (``depth_m`` + ``bottom_time_min``)
 become one level; any legacy per-level gas reference (a level ``gas_id`` or an
 inline ``{"o2", "he"}`` mix) and any legacy ``Level``-role gas are dropped —
@@ -185,11 +190,17 @@ def _merged(cfg: dict) -> dict:
 
 
 def _merge_level(l: dict) -> dict:
-    """One level: just depth + cumulative end-runtime. Any legacy per-level gas
+    """One level: depth + cumulative end-runtime, and an optional ``start_min``
+    (the runtime the diver arrives at the depth — the flat time is then
+    ``runtime_min - start_min``, descent at the standard rate lands on it, and
+    the diver waits at the previous depth until then). Any legacy per-level gas
     reference (``gas_id`` or a legacy inline ``{"o2", "he"}`` mix) is dropped —
     gas is chosen automatically by role now, so levels never force a mix."""
-    return {"depth_m": float(l.get("depth_m", 30.0)),
-            "runtime_min": float(l.get("runtime_min", 20.0))}
+    out = {"depth_m": float(l.get("depth_m", 30.0)),
+           "runtime_min": float(l.get("runtime_min", 20.0))}
+    if l.get("start_min") is not None:
+        out["start_min"] = float(l["start_min"])
+    return out
 
 
 def _merge_gas(g: dict) -> dict:
@@ -234,7 +245,8 @@ def levels_of(cfg: dict) -> List[b.Level]:
     Levels are pure depth/time periods — gas is always chosen automatically by
     role (bottom gas while breathable, travel where not, deco on ascent)."""
     cfg = _merged(cfg)
-    return [b.Level(l["depth_m"], l["runtime_min"]) for l in cfg["levels"]]
+    return [b.Level(l["depth_m"], l["runtime_min"], start=l.get("start_min"))
+            for l in cfg["levels"]]
 
 
 def to_buhlmann(cfg: dict) -> Tuple[b.Gas, b.DivePlan, b.GasPlan, List[tuple]]:

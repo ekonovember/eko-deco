@@ -109,9 +109,19 @@ class TestCLI(unittest.TestCase):
         self.assertAlmostEqual(lv.depth, 120)
         self.assertAlmostEqual(lv.runtime, 20)
 
+    def test_parse_level_with_start_window(self):
+        from cli import parse_level
+        lv = parse_level("16:4-17")
+        self.assertAlmostEqual(lv.depth, 16)
+        self.assertAlmostEqual(lv.start, 4)
+        self.assertAlmostEqual(lv.runtime, 17)
+        # no dash -> contiguous, start is unset
+        self.assertIsNone(parse_level("45:25").start)
+
     def test_parse_level_rejects_junk(self):
         from cli import parse_level
-        for spec in ("45", "45:25:50", "45:25:50:9", "deep:25", "45:soon"):
+        for spec in ("45", "45:25:50", "45:25:50:9", "deep:25", "45:soon",
+                     "16:soon-17", "16:4-late"):
             with self.assertRaises(ValueError, msg=spec):
                 parse_level(spec)
 
@@ -466,6 +476,53 @@ class TestMultilevel(unittest.TestCase):
         self.assertAlmostEqual(bottom_end, 55.0, places=6)
         # descent (2.5 min) is inside level 1's 25 min, not added to it
         self.assertAlmostEqual(bottoms[0].duration, 25.0 - 45 / 18.0, places=6)
+
+    def test_explicit_start_holds_at_previous_depth_then_transits(self):
+        """A level with an explicit start arrives exactly at `start`: the diver
+        waits at the previous depth (the surface here), the descent runs at the
+        standard rate and lands on `start`, and [start, runtime] is the flat
+        time at the depth."""
+        segs, _ = b.plan_multilevel([b.Level(16, 17, start=4)], b.AIR, self.PLAN)
+        wait = segs[0]
+        self.assertEqual((wait.kind, wait.depth_start, wait.depth_end), ("bottom", 0, 0))
+        self.assertAlmostEqual(wait.duration, 4 - 16 / 18.0, places=6)  # surface hold
+        descent = segs[1]
+        self.assertEqual(descent.kind, "descent")
+        self.assertAlmostEqual(descent.duration, 16 / 18.0, places=6)
+        flat = segs[2]
+        self.assertEqual((flat.kind, flat.depth_start), ("bottom", 16))
+        self.assertAlmostEqual(flat.duration, 13.0, places=6)   # minutes 4 -> 17
+
+    def test_explicit_start_waits_at_the_real_previous_depth(self):
+        """Between two levels the wait happens at the PREVIOUS level's depth, not
+        the surface: an extended stay deep before ascending to the next leg."""
+        levels = [b.Level(40, 20), b.Level(20, 40, start=30)]
+        segs, _ = b.plan_multilevel(levels, b.EAN32, self.PLAN)
+        bottoms = [s for s in segs if s.kind == "bottom"]
+        # 40 m level, then a hold still at 40 m, then the 20 m level
+        self.assertEqual([s.depth_start for s in bottoms[:2]], [40, 40])
+        # arrival at 20 m == start (30): transit 20 m / 10 m/min = 2 min before it
+        run = 0.0
+        for s in segs:
+            if s.depth_start == 20 and s.kind == "bottom":
+                break
+            run += s.duration
+        self.assertAlmostEqual(run, 30.0, places=6)
+
+    def test_start_none_matches_contiguous(self):
+        """Setting start to the earliest possible arrival is identical to leaving
+        it unset (contiguous)."""
+        auto, _ = b.plan_multilevel([b.Level(45, 25), b.Level(30, 40)],
+                                    b.AIR, self.PLAN)
+        # earliest arrival at 30 m: 25 + (45-30)/10 = 26.5 min
+        explicit, _ = b.plan_multilevel(
+            [b.Level(45, 25), b.Level(30, 40, start=26.5)], b.AIR, self.PLAN)
+        self.assertEqual([s.as_dict() for s in auto],
+                         [s.as_dict() for s in explicit])
+
+    def test_start_before_reachable_is_rejected(self):
+        with self.assertRaises(ValueError):   # 16 m needs 0.9 min to reach
+            b.plan_multilevel([b.Level(16, 17, start=0.5)], b.AIR, self.PLAN)
 
     def test_going_shallow_shortens_the_deco(self):
         deep, _ = b.plan_multilevel([b.Level(45, 55)], b.AIR, self.PLAN)
@@ -828,6 +885,14 @@ class TestDomainValidation(unittest.TestCase):
 
     def test_level_surface_depth_allowed(self):
         b.Level(0.0, 5.0)                      # safety stop at the surface: fine
+
+    def test_level_rejects_start_after_runtime(self):
+        with self.assertRaises(ValueError):
+            b.Level(16.0, 17.0, start=20.0)
+
+    def test_level_rejects_negative_start(self):
+        with self.assertRaises(ValueError):
+            b.Level(16.0, 17.0, start=-1.0)
 
     def test_plan_rejects_nonpositive_rates_and_intervals(self):
         for kw in ({"ascent_rate": 0.0}, {"descent_rate": 0.0},
