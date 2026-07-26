@@ -1,9 +1,11 @@
 """Shared dive-plan configuration (JSON) for the CLI and the GUI.
 
-The same file (``dive_plan.json`` next to this module) is read by the Tkinter app
-on startup and written by ``cli.py plan --save``, so a dive planned in the console
-shows up in the GUI, and vice-versa. It is plain JSON — safe to edit by hand or by
-an agent.
+The same file is read by the Tkinter app on startup and written by ``deco plan
+--save``, so a dive planned in the console shows up in the GUI, and vice-versa.
+It is plain JSON — safe to edit by hand or by an agent. Where it lives is
+:func:`default_path`: ``$DECO_CONFIG``, else ``./dive_plan.json`` when the
+working directory has one (a checkout, or any folder you keep dives in), else
+the per-user config directory.
 
 Schema::
 
@@ -33,19 +35,17 @@ swapped in on descent where the bottom mix is hypoxic, and deco gases are
 switched to on the final ascent. ``enabled: false`` keeps a gas in the list but
 leaves it out of the plan.
 
-``levels`` is the dive profile, one entry per level: ``depth_m``, cumulative
-``runtime_min`` and an optional ``start_min``. ``runtime_min`` is the runtime at
-the **end** of that level — cumulative minutes since leaving the surface,
-descent included — so the values must increase down the list. ``start_min`` (if
-present) is the runtime the diver arrives at that depth: the transit runs at the
-standard rate and lands exactly on it, the diver waiting at the previous depth
-(the surface for the first level) until then, so ``[start_min, runtime_min]`` is
-the true flat time at that depth. Omit ``start_min`` to arrive as soon as the
-transit allows (contiguous levels). A square profile is simply a single level.
+``levels`` is the dive profile, one entry per level: ``depth_m`` and cumulative
+``runtime_min``. ``runtime_min`` is the runtime at the **end** of that level —
+cumulative minutes since leaving the surface, descent included — so the values
+must increase down the list. Levels are contiguous, as in every planner: the
+transit to a level runs at the standard rate and its time is part of that
+level's runtime. A square profile is simply a single level.
 Migrations on load: pre-multilevel configs (``depth_m`` + ``bottom_time_min``)
 become one level; any legacy per-level gas reference (a level ``gas_id`` or an
-inline ``{"o2", "he"}`` mix) and any legacy ``Level``-role gas are dropped —
-gas is automatic-by-role now.
+inline ``{"o2", "he"}`` mix), any legacy ``Level``-role gas and any legacy
+``start_min`` arrival time are dropped — gas is automatic-by-role now, and
+levels no longer carry an arrival time.
 
 ``contingency`` sizes the backup cut-table matrix as step counts on the fixed
 3 min × 3 m grid: ``time_before``/``time_after`` bottom-time rows shorter/longer
@@ -56,14 +56,45 @@ deltas are migrated on load (delta → round(delta/3) steps; depth only deeper).
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
-from typing import List, Tuple
 
-import buhlmann as b
+from deco import buhlmann as b
 
 ROLES = ("Bottom", "Travel", "Deco")
-DEFAULT_PATH = os.path.join(os.path.dirname(os.path.abspath(__file__)), "dive_plan.json")
+
+CONFIG_NAME = "dive_plan.json"
+CONFIG_ENV = "DECO_CONFIG"
+
+
+def user_config_path() -> str:
+    """Where a dive lives when you are not standing in a project directory:
+    ``$XDG_CONFIG_HOME/eko-deco/dive_plan.json`` (``%APPDATA%`` on Windows)."""
+    if os.name == "nt":
+        base = os.environ.get("APPDATA") or os.path.expanduser("~")
+    else:
+        base = (os.environ.get("XDG_CONFIG_HOME")
+                or os.path.join(os.path.expanduser("~"), ".config"))
+    return os.path.join(base, "eko-deco", CONFIG_NAME)
+
+
+def default_path() -> str:
+    """The config the CLI and GUI reach for when no path is given.
+
+    ``$DECO_CONFIG`` wins; otherwise ``./dive_plan.json`` when it exists, so
+    running either front end from a checkout (or any dive folder) shares that
+    dive between them; otherwise the per-user config path, so an installed
+    ``deco`` run from an arbitrary directory does not scatter plans around.
+    Resolved per call — never cached — because the working directory is the
+    input and may change between calls."""
+    env = os.environ.get(CONFIG_ENV)
+    if env:
+        return env
+    local = os.path.join(os.getcwd(), CONFIG_NAME)
+    if os.path.exists(local):
+        return local
+    return user_config_path()
 
 
 def default_config() -> dict:
@@ -93,16 +124,18 @@ def default_config() -> dict:
     }
 
 
-def load(path: str = DEFAULT_PATH, strict: bool = False) -> dict:
-    """Read a config. Lenient by default: a missing, unparsable or semantically
+def load(path: str | None = None, strict: bool = False) -> dict:
+    """Read a config (``default_path()`` when none is given). Lenient by
+    default: a missing, unparsable or semantically
     invalid file falls back to the default config (the GUI's first launch).
     ``strict=True`` raises instead — FileNotFoundError / OSError for file
     problems, ValueError (json.JSONDecodeError is one) for broken JSON *or*
     JSON whose values can't be normalized (e.g. ``"depth_m": "oops"``) — the
     CLI uses it so a typo'd path or a broken hand-edit errors out rather than
     silently planning the default dive."""
+    path = path or default_path()
     try:
-        with open(path, "r", encoding="utf-8") as fh:
+        with open(path, encoding="utf-8") as fh:
             cfg = json.load(fh)
     except (OSError, json.JSONDecodeError):
         if strict:
@@ -118,11 +151,13 @@ def load(path: str = DEFAULT_PATH, strict: bool = False) -> dict:
         return default_config()
 
 
-def save(cfg: dict, path: str = DEFAULT_PATH) -> str:
+def save(cfg: dict, path: str | None = None) -> str:
     """Write the (normalized) config atomically: a temp file in the same
     directory replaced over ``path`` with ``os.replace``, so an interrupted
     write can never leave a truncated shared plan behind."""
+    path = path or default_path()
     merged = _merged(cfg)                      # normalize BEFORE touching disk
+    os.makedirs(os.path.dirname(os.path.abspath(path)), exist_ok=True)
     tmp = f"{path}.tmp{os.getpid()}"
     try:
         with open(tmp, "w", encoding="utf-8") as fh:
@@ -131,10 +166,8 @@ def save(cfg: dict, path: str = DEFAULT_PATH) -> str:
         os.replace(tmp, path)
     finally:
         if os.path.exists(tmp):
-            try:
+            with contextlib.suppress(OSError):
                 os.remove(tmp)
-            except OSError:
-                pass
     return path
 
 
@@ -190,17 +223,13 @@ def _merged(cfg: dict) -> dict:
 
 
 def _merge_level(l: dict) -> dict:
-    """One level: depth + cumulative end-runtime, and an optional ``start_min``
-    (the runtime the diver arrives at the depth — the flat time is then
-    ``runtime_min - start_min``, descent at the standard rate lands on it, and
-    the diver waits at the previous depth until then). Any legacy per-level gas
-    reference (``gas_id`` or a legacy inline ``{"o2", "he"}`` mix) is dropped —
-    gas is chosen automatically by role now, so levels never force a mix."""
-    out = {"depth_m": float(l.get("depth_m", 30.0)),
-           "runtime_min": float(l.get("runtime_min", 20.0))}
-    if l.get("start_min") is not None:
-        out["start_min"] = float(l["start_min"])
-    return out
+    """One level: depth + cumulative end-runtime, nothing else. Legacy keys are
+    dropped — a per-level gas reference (``gas_id`` or an inline ``{"o2", "he"}``
+    mix), because gas is chosen automatically by role now, and ``start_min``,
+    because levels are contiguous and the transit is part of the runtime (no
+    planner has an arrival time; see the module docstring)."""
+    return {"depth_m": float(l.get("depth_m", 30.0)),
+            "runtime_min": float(l.get("runtime_min", 20.0))}
 
 
 def _merge_gas(g: dict) -> dict:
@@ -220,16 +249,16 @@ def _merge_contingency(c: dict) -> dict:
     # Legacy delta blocks (time ±DT min / depth +DD m) become step counts on
     # the fixed 3 min × 3 m grid: DT → round(DT/3) rows both ways, DD →
     # round(DD/3) deeper columns (the old matrix never went shallower).
-    if not any(k in c for k in CONTINGENCY_KEYS):
-        if "time_delta_min" in c or "depth_delta_m" in c:
-            t = round(float(c.get("time_delta_min", 0)) / 3)
-            c = {"time_before": t, "time_after": t, "depth_before": 0,
-                 "depth_after": round(float(c.get("depth_delta_m", 0)) / 3)}
-    return {k: max(0, int(round(float(c.get(k, default[k])))))
+    if (not any(k in c for k in CONTINGENCY_KEYS)
+            and ("time_delta_min" in c or "depth_delta_m" in c)):
+        t = round(float(c.get("time_delta_min", 0)) / 3)
+        c = {"time_before": t, "time_after": t, "depth_before": 0,
+             "depth_after": round(float(c.get("depth_delta_m", 0)) / 3)}
+    return {k: max(0, round(float(c.get(k, default[k]))))
             for k in CONTINGENCY_KEYS}
 
 
-def contingency_of(cfg: dict) -> Tuple[int, int, int, int]:
+def contingency_of(cfg: dict) -> tuple[int, int, int, int]:
     """The cut-table step counts as ``(time_before, time_after, depth_before,
     depth_after)`` — 3-min / 3-m steps around the planned dive."""
     c = _merged(cfg)["contingency"]
@@ -240,16 +269,15 @@ def gas_of(g: dict) -> b.Gas:
     return b.Gas(g["o2"] / 100.0, g.get("he", 0) / 100.0)
 
 
-def levels_of(cfg: dict) -> List[b.Level]:
+def levels_of(cfg: dict) -> list[b.Level]:
     """The dive profile as ``buhlmann.Level`` objects (runtime is cumulative).
     Levels are pure depth/time periods — gas is always chosen automatically by
     role (bottom gas while breathable, travel where not, deco on ascent)."""
     cfg = _merged(cfg)
-    return [b.Level(l["depth_m"], l["runtime_min"], start=l.get("start_min"))
-            for l in cfg["levels"]]
+    return [b.Level(l["depth_m"], l["runtime_min"]) for l in cfg["levels"]]
 
 
-def to_buhlmann(cfg: dict) -> Tuple[b.Gas, b.DivePlan, b.GasPlan, List[tuple]]:
+def to_buhlmann(cfg: dict) -> tuple[b.Gas, b.DivePlan, b.GasPlan, list[tuple]]:
     """Return ``(bottom_gas, DivePlan, GasPlan, gases)`` where ``gases`` is a list
     of ``(role, Gas, tank_l, pressure_bar)`` tuples. Gas selection is automatic
     by role: ``Bottom`` on the bottom phase, ``Travel`` swapped in on descent

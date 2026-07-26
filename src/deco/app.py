@@ -7,33 +7,37 @@ of the window is a notebook: **Results** (schedule, TTS, per-cylinder gas + rock
 bottom, lost-deco-gas scenarios), a printable **Runtime** wetnotes card, and
 **Profile** (the depth-vs-time chart with the deco-ceiling overlay).
 
-The dive is loaded from and saved to ``dive_plan.json`` (see ``dive_config.py``),
-the same file the console planner reads/writes — so ``cli.py plan --save`` shows
-up here on Reload, and vice-versa.
+The dive is loaded from and saved to ``dive_plan.json`` (see
+:mod:`deco.dive_config`), the same file the console planner reads/writes — so
+``deco plan --save`` shows up here on Reload, and vice-versa.
 
-Run:
-    python app.py
+Run::
+
+    deco-gui              # or: python -m deco.app
 """
 
 from __future__ import annotations
 
+import contextlib
 import json
+import math
 import os
 import re
 import sys
-from dataclasses import dataclass, replace
 import tkinter as tk
+from dataclasses import dataclass, replace
 from tkinter import ttk
-from typing import List, Optional, Tuple
+from typing import Any, Literal
 
 import matplotlib
-matplotlib.use("TkAgg")
+
+matplotlib.use("TkAgg")                    # must precede the backend imports
 from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 
-import buhlmann as b
-import dive_config as dc
-import report as rp
+from deco import buhlmann as b
+from deco import dive_config as dc
+from deco import report as rp
 
 # The GUI ascends at a fixed rate; keep it in step with the CLI DivePlan default
 # (10 m/min) so the same inputs give the same schedule in both.
@@ -48,20 +52,20 @@ class _RowLevel:
     Levels are pure depth/time periods — gas is chosen automatically by role."""
     depth: float
     runtime: float
-    start: Optional[float] = None
 
 # Branding: the eko-deco wordmark and its "<//>" logo mark.
 APP_NAME = "eko-deco"
 LOGO_MARK = "<//>"
 LOGO_COLOR = "#0a84ff"
-_PICTURES = os.path.join(os.path.dirname(os.path.abspath(__file__)), "pictures")
-ICON_PNG = os.path.join(_PICTURES, "icon.png")
-ICON_ICO = os.path.join(_PICTURES, "icon.ico")
+_ASSETS = os.path.join(os.path.dirname(os.path.abspath(__file__)), "assets")
+ICON_PNG = os.path.join(_ASSETS, "icon.png")
+ICON_ICO = os.path.join(_ASSETS, "icon.ico")
 
-# UI preferences (dark mode, …) live in their own file so they never mix with
-# the dive itself: dive_plan.json stays shareable between CLI/GUI and machines.
+# UI preferences (dark mode, window geometry) live in their own file, per user,
+# so they never mix with the dive itself: dive_plan.json stays shareable
+# between CLI/GUI and machines, and it is the dive you hand a buddy.
 UI_SETTINGS_PATH = os.path.join(
-    os.path.dirname(os.path.abspath(__file__)), "ui_settings.json")
+    os.path.dirname(dc.user_config_path()), "ui_settings.json")
 
 # Widget + chart palettes for the clam ttk theme.
 LIGHT = {"bg": "#dcdad5", "fg": "#000000", "field": "#ffffff",
@@ -74,7 +78,7 @@ DARK = {"bg": "#2b2b2b", "fg": "#e6e6e6", "field": "#3c3f41",
         "ceiling": "#ff6b5e"}
 
 
-def _monitor_workareas(root) -> List[Tuple[int, int, int, int]]:
+def _monitor_workareas(root) -> list[tuple[int, int, int, int]]:
     """Per-monitor work areas as ``(left, top, right, bottom)``, primary first. On
     Windows these are the *real* rectangles of each attached monitor (honouring
     monitors placed left of / above the primary, i.e. negative coords, and the
@@ -92,8 +96,8 @@ def _monitor_workareas(root) -> List[Tuple[int, int, int, int]]:
                             ("rcWork", wintypes.RECT),
                             ("dwFlags", wintypes.DWORD)]
 
-            mons: List[Tuple[int, int, int, int]] = []
-            primary: List[Tuple[int, int, int, int]] = []
+            mons: list[tuple[int, int, int, int]] = []
+            primary: list[tuple[int, int, int, int]] = []
             proc = ctypes.WINFUNCTYPE(ctypes.c_int, ctypes.c_ulong,
                                       ctypes.c_ulong,
                                       ctypes.POINTER(wintypes.RECT),
@@ -117,8 +121,8 @@ def _monitor_workareas(root) -> List[Tuple[int, int, int, int]]:
     return [(0, 0, root.winfo_screenwidth(), root.winfo_screenheight())]
 
 
-def _overlap_area(a: Tuple[int, int, int, int],
-                  b: Tuple[int, int, int, int]) -> int:
+def _overlap_area(a: tuple[int, int, int, int],
+                  b: tuple[int, int, int, int]) -> int:
     """Area of the intersection of two ``(l, t, r, b)`` rectangles (0 if disjoint)."""
     l, t = max(a[0], b[0]), max(a[1], b[1])
     r, btm = min(a[2], b[2]), min(a[3], b[3])
@@ -172,6 +176,7 @@ def load_ui_settings() -> dict:
 
 def save_ui_settings(settings: dict) -> None:
     try:
+        os.makedirs(os.path.dirname(UI_SETTINGS_PATH), exist_ok=True)
         with open(UI_SETTINGS_PATH, "w", encoding="utf-8") as f:
             json.dump(settings, f, indent=2)
             f.write("\n")
@@ -179,7 +184,7 @@ def save_ui_settings(settings: dict) -> None:
         pass                                   # cosmetic preference; never fatal
 
 
-def build_profile_points(segs) -> Tuple[List[float], List[float]]:
+def build_profile_points(segs) -> tuple[list[float], list[float]]:
     """Concatenate segment endpoints into a (time, depth) polyline."""
     t, d, run = [0.0], [0.0], 0.0
     for s in segs:
@@ -189,11 +194,11 @@ def build_profile_points(segs) -> Tuple[List[float], List[float]]:
     return t, d
 
 
-def format_card(title_lines: List[str], rows: List[List[str]],
-                headers: Optional[List[str]] = None,
-                footer_lines: Optional[List[str]] = None,
-                aligns: Optional[List[str]] = None,
-                widen: int = -1) -> List[str]:
+def format_card(title_lines: list[str], rows: list[list[str]],
+                headers: list[str] | None = None,
+                footer_lines: list[str] | None = None,
+                aligns: list[str] | None = None,
+                widen: int = -1) -> list[str]:
     """Render a monospace box-drawing "slate" and return its lines. Every section
     is optional: full-width ``title_lines`` on top, an optional column ``headers``
     row, the ``rows`` grid, then optional full-width ``footer_lines`` — all framed
@@ -224,7 +229,7 @@ def format_card(title_lines: List[str], rows: List[List[str]],
     def full(s: str) -> str:                       # a full-width (spanning) row
         return "│ " + f"{s:<{inner - 2}}" + " │"
 
-    def grid(cells: List[str]) -> str:
+    def grid(cells: list[str]) -> str:
         return "│ " + " │ ".join(
             f"{cells[i]:{aligns[i]}{widths[i]}}" for i in range(cols)) + " │"
 
@@ -256,9 +261,9 @@ def format_card(title_lines: List[str], rows: List[List[str]],
 # any framed card in a PNG export (the on-screen Tk Text widget is fine). Fold
 # them to ASCII so every cell stays exactly one fixed-width character wide.
 _BOX_TO_ASCII = str.maketrans({
-    **{c: "-" for c in "─"},
-    **{c: "|" for c in "│"},
-    **{c: "+" for c in "┌┐└┘├┤┬┴┼"},
+    **dict.fromkeys("─", "-"),
+    **dict.fromkeys("│", "|"),
+    **dict.fromkeys("┌┐└┘├┤┬┴┼", "+"),
 })
 
 
@@ -367,10 +372,10 @@ class DecoApp:
         levels.pack(fill=tk.X, pady=(8, 0))
         self.level_list = ttk.Frame(levels)
         self.level_list.pack(fill=tk.X)
-        for col, text in enumerate(("depth m", "from", "to", "")):
+        for col, text in enumerate(("depth m", "runtime", "")):
             ttk.Label(self.level_list, text=text, anchor="w").grid(
                 row=0, column=col, padx=1, sticky="w")
-        self.level_rows = []
+        self.level_rows: list[dict] = []
         ttk.Button(levels, text="+ Add level", command=self._add_level_row).pack(
             anchor="w", pady=(4, 0))
 
@@ -383,7 +388,7 @@ class DecoApp:
             ttk.Label(self.gas_list, text=text,
                       anchor="center" if col == self.GAS_USE_COL else "w").grid(
                 row=0, column=col, padx=1, sticky=self.GAS_STICKY[col])
-        self.gas_rows = []
+        self.gas_rows: list[dict] = []
         ttk.Button(gases, text="+ Add gas", command=self._add_gas_row).pack(
             anchor="w", pady=(4, 0))
 
@@ -447,7 +452,7 @@ class DecoApp:
         ttk.Button(cfgrow, text="Save", command=self._save_config).pack(side=tk.LEFT)
         ttk.Button(cfgrow, text="Reload", command=self._reload_config).pack(
             side=tk.LEFT, padx=4)
-        self.cfg_status = ttk.Label(cfgrow, text=os.path.basename(dc.DEFAULT_PATH))
+        self.cfg_status = ttk.Label(cfgrow, text=os.path.basename(dc.default_path()))
         self.cfg_status.pack(side=tk.LEFT, padx=4)
 
         # --- results panel (scrollable) ---
@@ -565,15 +570,16 @@ class DecoApp:
             self.recompute()               # restyle the chart with the new palette
 
     def _add_spin(self, row, label, lo, hi, increment, init,
-                  width: int = 5, fmt: Optional[str] = None, unit: str = "",
-                  label_width: Optional[int] = None,
-                  unit_width: Optional[int] = None) -> tk.StringVar:
+                  width: int = 5, fmt: str | None = None, unit: str = "",
+                  label_width: int | Literal[""] = "",
+                  unit_width: int | Literal[""] = "") -> tk.StringVar:
         """Labelled numeric up/down packed onto `row` (several fit one line).
         `unit` goes after the input; `label_width`/`unit_width` align the
-        inputs and whatever follows them across rows."""
+        inputs and whatever follows them across rows (Tk's own "unset" for a
+        width is the empty string, not 0)."""
         ttk.Label(row, text=label, width=label_width).pack(side=tk.LEFT)
         var = tk.StringVar(value=(fmt % init) if fmt else f"{init:g}")
-        kwargs = {"format": fmt} if fmt else {}
+        kwargs: dict[str, Any] = {"format": fmt} if fmt else {}
         ttk.Spinbox(row, from_=lo, to=hi, increment=increment, width=width,
                     textvariable=var, **kwargs).pack(
             side=tk.LEFT, padx=(4, 2 if unit else 10))
@@ -586,7 +592,7 @@ class DecoApp:
                       lambda *_: None if self._building else self.recompute())
         return var
 
-    def _num(self, var, default: float, lo: Optional[float] = None) -> float:
+    def _num(self, var, default: float, lo: float | None = None) -> float:
         """Float value of a spinbox var; `default` while the entry is mid-edit."""
         try:
             v = float(var.get())
@@ -613,34 +619,24 @@ class DecoApp:
             v.trace_add("write", lambda *_: None if self._building else self.recompute())
 
     def _add_level_row(self, depth: float = 30, runtime: float = 40,
-                       start: Optional[float] = None,
                        recompute: bool = True) -> None:
         depth_var = tk.StringVar(value=f"{depth:g}")
-        # "from" is the runtime the diver ARRIVES at this depth. Blank means
-        # "auto" — arrive as soon as the standard-rate descent/ascent allows
-        # (contiguous with the previous level, the historical behaviour). A
-        # value makes it explicit: the transit lands exactly on it, the diver
-        # waiting at the previous depth (the surface for level 1) until then.
-        from_var = tk.StringVar(value="" if start is None else f"{start:g}")
         run_var = tk.StringVar(value=f"{runtime:g}")
 
-        # Columns: depth · from · to · delete. "from"/"to" are this level's time
-        # window (cumulative minutes since the surface); "from" blank = auto.
-        widgets = [
+        # Columns: depth · runtime · delete. "runtime" is cumulative minutes
+        # since the surface at the END of the level, transit included — levels
+        # are contiguous, exactly as MultiDeco/GFDECO/Subsurface define them.
+        widgets: list[tk.Widget] = [
             ttk.Spinbox(self.level_list, from_=1, to=300, width=5,
                         textvariable=depth_var),
-            ttk.Spinbox(self.level_list, from_=0, to=999, width=5,
-                        textvariable=from_var),
             ttk.Spinbox(self.level_list, from_=1, to=999, width=5,
                         textvariable=run_var),
         ]
-        row = {"widgets": widgets, "depth": depth_var, "from": from_var,
-               "runtime": run_var}
+        row = {"widgets": widgets, "depth": depth_var, "runtime": run_var}
         widgets.append(ttk.Button(self.level_list, text="✕", width=2,
                                   style="GasDel.TButton",
                                   command=lambda: self._remove_level_row(row)))
-        # Any edit re-plans; the fields are independent now (no boundary drag).
-        for var in (depth_var, from_var, run_var):
+        for var in (depth_var, run_var):
             var.trace_add(
                 "write", lambda *_: None if self._building else self.recompute())
         self.level_rows.append(row)
@@ -664,35 +660,23 @@ class DecoApp:
             if not self._building:
                 self.recompute()
 
-    def _row_levels(self) -> List[_RowLevel]:
+    def _row_levels(self) -> list[_RowLevel]:
         """Every level row exactly as typed — never drops one. This is what gets
-        saved: a field left blank mid-edit must not silently delete the level. A
-        blank "from" means "auto" (contiguous), carried as ``start=None``."""
-        out = []
-        for row in self.level_rows:
-            raw = row["from"].get().strip()
-            try:
-                start = float(raw) if raw else None
-            except ValueError:
-                start = None
-            out.append(_RowLevel(self._num(row["depth"], 0.0, lo=0.0),
-                                 self._num(row["runtime"], 0.0, lo=0.0),
-                                 start))
-        return out
+        saved: a field left blank mid-edit must not silently delete the level."""
+        return [_RowLevel(self._num(row["depth"], 0.0, lo=0.0),
+                          self._num(row["runtime"], 0.0, lo=0.0))
+                for row in self.level_rows]
 
     @staticmethod
     def _level_row_dict(rl: _RowLevel) -> dict:
-        """Serialize a row to the config shape, omitting an unset (auto) start."""
-        d = {"depth_m": rl.depth, "runtime_min": rl.runtime}
-        if rl.start is not None:
-            d["start_min"] = rl.start
-        return d
+        """Serialize a row to the config shape."""
+        return {"depth_m": rl.depth, "runtime_min": rl.runtime}
 
-    def _levels(self) -> List[b.Level]:
+    def _levels(self) -> list[b.Level]:
         """The rows that can actually be planned — a row being edited (blank or
         zero depth/runtime) is skipped so the plan doesn't blow up mid-keystroke.
         Use `_row_levels` when persisting, so nothing is lost."""
-        return [b.Level(r.depth, r.runtime, start=r.start)
+        return [b.Level(r.depth, r.runtime)
                 for r in self._row_levels() if r.depth > 0 and r.runtime > 0]
 
     # The bare "use" checkbox is much narrower than its header, so left-aligning
@@ -711,7 +695,7 @@ class DecoApp:
         press_var = tk.StringVar(value=str(int(pressure)))
         use_var = tk.BooleanVar(value=enabled)     # unticked = don't count
 
-        widgets = [
+        widgets: list[tk.Widget] = [
             ttk.Combobox(self.gas_list, textvariable=role_var, width=6,
                          state="readonly", values=dc.ROLES),
             ttk.Spinbox(self.gas_list, from_=5, to=100, width=4, textvariable=fo2_var),
@@ -784,7 +768,7 @@ class DecoApp:
         except (ValueError, tk.TclError):
             return default
 
-    def _gas_rows_raw(self) -> List[Tuple[str, b.Gas, float, float]]:
+    def _gas_rows_raw(self) -> list[tuple[str, b.Gas, float, float]]:
         """(role, Gas, tank_l, pressure_bar) for every valid gas row — the raw
         input the shared report layer (`rp.gas_report` / `rp.aggregate_banks`)
         consumes. Keyed downstream by the frozen ``Gas`` value, never its rounded
@@ -824,7 +808,8 @@ class DecoApp:
         return b.AIR
 
     def _make_plan(self) -> b.DivePlan:
-        travel, deco = [], []
+        travel: list[b.Gas] = []
+        deco: list[b.Gas] = []
         for row in self.gas_rows:
             g = self._row_gas(row)
             role = row["role"].get()
@@ -877,7 +862,7 @@ class DecoApp:
         self._plan_ok = True                # a valid plan is now on every surface
 
     def _lost_gas_scenarios(self, levels, gas, plan,
-                            segs) -> List[Tuple[str, list]]:
+                            segs) -> list[tuple[str, list]]:
         """Contingency schedules for losing deco gas, MultiDeco-style: the normal
         dive ("OK"), then one re-plan per deco gas without it, and — with two or
         more deco gases — an "all" worst case with every deco gas gone. Only
@@ -886,7 +871,7 @@ class DecoApp:
 
         A lost gas is simply dropped from the deco stack; levels never name a
         gas (selection is automatic by role), so nothing else needs rewriting."""
-        scenarios: List[Tuple[str, list]] = [("OK", segs)]
+        scenarios: list[tuple[str, list]] = [("OK", segs)]
         deco = plan.deco_gases
         losses = [(repr(g), (g,)) for g in deco]        # (label, gases lost)
         if len(deco) > 1:
@@ -903,13 +888,16 @@ class DecoApp:
         return scenarios
 
     @staticmethod
-    def _stops_by_depth(segs) -> Tuple[dict, float]:
-        """{stop depth (m, int): (minutes, runtime at end of stop)} + total RT."""
+    def _stops_by_depth(segs) -> tuple[dict, float]:
+        """{stop depth (m, int): (minutes, runtime at end of stop)} + total RT.
+        Runtimes are truncated to whole minutes via ``report.runtime_min`` —
+        MultiDeco's convention, which this table's `min (runtime)` cells copy."""
         run, at = 0.0, {}
         for s in segs:
             run += s.duration
             if s.kind == "stop" and s.duration > 0:
-                at[int(round(s.depth_start))] = (s.duration, run)
+                at[round(s.depth_start)] = (s.duration,
+                                                 rp.runtime_min(run))
         return at, run
 
     # -------------------------------------------------------------- draw ----
@@ -946,7 +934,7 @@ class DecoApp:
                 self.ax.plot([run_t, run_t + s.duration], [s.depth_start, s.depth_end],
                              color="#d62728", linewidth=3)
                 self.ax.annotate(
-                    f"{int(round(s.duration))}′ @ {s.depth_start:.0f} m",
+                    f"{round(s.duration)}′ @ {s.depth_start:.0f} m",
                     xy=(run_t + s.duration / 2, s.depth_start),
                     xytext=(0, -14), textcoords="offset points",
                     ha="center", fontsize=8, color="#d62728")
@@ -995,7 +983,7 @@ class DecoApp:
         ndl_min = b.ndl(depth, gas, plan)
         ndl_label = ">10 h" if ndl_min is None else f"{ndl_min} min"
 
-        cards: List[List[str]] = []
+        cards: list[list[str]] = []
 
         # --- header line, MultiDeco-style ---
         suffix = (" with unusable deco mix scenario"
@@ -1039,7 +1027,11 @@ class DecoApp:
             ["fractions", f"O₂ {gas.fO2*100:.0f}% · He {gas.fHe*100:.0f}%"
                           f" · N₂ {gas.fN2*100:.0f}%"],
             [f"ppO₂ @ {depth:.0f} m", f"{gas.ppo2(depth):.2f} bar"],
-            [f"MOD @ {plan.ppo2_bottom:g}", f"{gas.mod(plan.ppo2_bottom):.0f} m"],
+            # A MOD is a limit, so it is truncated, never rounded: EAN30 at
+            # ppO2 1.4 is 36.5 m, and printing "37 m" invents half a metre of
+            # margin that does not exist.
+            [f"MOD @ {plan.ppo2_bottom:g}",
+             f"{math.floor(gas.mod(plan.ppo2_bottom)):.0f} m"],
             [f"END @ {depth:.0f} m", f"{gas.end(depth):.0f} m (O₂ narcotic)"],
             [f"density @ {depth:.0f} m", f"{density:.1f} g/L"],
         ]
@@ -1062,7 +1054,7 @@ class DecoApp:
             ["GF low / high", f"{plan.gf_low*100:.0f} / {plan.gf_high*100:.0f}"],
             [f"NDL @ {depth:.0f} m", f"{ndl_label} (square, fresh tissues)"],
             ["bottom time", f"{bottom_time:.0f} min"],
-            ["runtime", f"{total:.0f} min"],
+            ["runtime", f"{rp.runtime_min(total):d} min"],
             ["TTS", f"{tts:.0f} min"],
             ["deco total", f"{deco_total:.0f} min · {len(stops)} stops"],
             ["CNS / OTU", f"{cns:.0f}% / {otu:.0f}"],
@@ -1081,7 +1073,7 @@ class DecoApp:
         cylinders = self._banks_by_gas()
         gas_rows_raw = self._gas_rows_raw()
         rep = rp.gas_report(segs, gas, gp, gas_rows_raw)
-        plan_rows: List[List[str]] = []
+        plan_rows: list[list[str]] = []
         for c in rep.cylinders:
             if c.tank_l <= 0:
                 need, have = f"{c.liters:.0f} L", "set tank"
@@ -1129,7 +1121,7 @@ class DecoApp:
         # like every other results card: the stops table with one column per
         # scenario (cells "stop (runtime)", the bottom row first), then a
         # per-scenario gas-usage card in litres. ---
-        stop_cards: List[List[str]] = []
+        stop_cards: list[list[str]] = []
         if scenarios and len(scenarios) > 1:
             per = [(label, *self._stops_by_depth(ss)) for label, ss in scenarios]
             depths_u = sorted({d for _l, at, _t in per for d in at}, reverse=True)
@@ -1137,11 +1129,12 @@ class DecoApp:
             # multi-level dive stopping at the FIRST bottom segment would pair
             # the max depth with the runtime of the first (maybe shallower)
             # level.
-            run_bottom = b.total_runtime(segs) - b.time_to_surface(segs)
+            run_bottom = rp.runtime_min(
+                b.total_runtime(segs) - b.time_to_surface(segs))
             labels = ["All" if l == "all" else l for l, _at, _t in per]
-            body = [[f"{depth:.0f} m"] + [f"({run_bottom:.0f})"] * len(per)]
+            body = [[f"{depth:.0f} m"] + [f"({run_bottom:d})"] * len(per)]
             body += [[f"{dm} m"] + ["" if dm not in at
-                                    else f"{at[dm][0]:.0f} ({at[dm][1]:.0f})"
+                                    else f"{at[dm][0]:.0f} ({at[dm][1]:d})"
                                     for _l, at, _t in per]
                      for dm in depths_u]
             # One column per scenario: OK = the normal dive, then each lost
@@ -1156,7 +1149,7 @@ class DecoApp:
             # cylinders (tank litres × fill pressure). Litres, SHORT flags and
             # bar-left all come from the shared report layer — the same figures
             # the per-cylinder card above and the CLI show.
-            usage_rows: List[List[str]] = []
+            usage_rows: list[list[str]] = []
             for label, ss in scenarios:
                 if usage_rows:
                     usage_rows.append([""] * 6)   # blank row between scenarios
@@ -1165,28 +1158,32 @@ class DecoApp:
                 srep = rp.gas_report(ss, gas, gp, gas_rows_raw)
                 tot_need = tot_emrg = tot_have = 0.0
                 for i, c in enumerate(srep.cylinders):
-                    have = c.tank_l * c.pressure_bar
+                    have_l = c.tank_l * c.pressure_bar
                     tot_need += c.liters
                     tot_emrg += c.liters_emergency
-                    tot_have += have
-                    if have <= 0:
+                    tot_have += have_l
+                    if have_l <= 0:
                         usage_rows.append([scen if i == 0 else "", repr(c.gas),
                                            "set tank", f"{c.liters:.0f}",
                                            f"({c.liters_emergency:.0f})", ""])
                         continue
                     short = " SHORT!" if c.short else ""
                     short_e = " SHORT!" if c.short_emergency else ""
+                    # have_l > 0 means tank and fill are both set, so bar_left
+                    # is never None here — `or 0.0` only satisfies the checker.
+                    left = max(c.bar_left or 0.0, 0.0)
+                    left_e = max(c.bar_left_emergency or 0.0, 0.0)
                     usage_rows.append(
-                        [scen if i == 0 else "", repr(c.gas), f"{have:.0f}",
+                        [scen if i == 0 else "", repr(c.gas), f"{have_l:.0f}",
                          f"{c.liters:.0f}{short}",
                          f"({c.liters_emergency:.0f}{short_e})",
-                         f"{max(c.bar_left, 0.0):.0f} / "
-                         f"{max(c.bar_left_emergency, 0.0):.0f}"])
+                         f"{left:.0f} / {left_e:.0f}"])
                 usage_rows.append(["", "TOTAL", f"{tot_have:.0f}",
                                    f"{tot_need:.0f}", f"({tot_emrg:.0f})", ""])
             stop_cards.append(format_card(
                 ["GAS USAGE · litres have / need (emergency)",
-                 "(emergency) = need + rock-bottom reserve · bar left at normal / emrg"], usage_rows,
+                 "(emergency) = need + rock-bottom reserve · "
+                 "bar left at normal / emrg"], usage_rows,
                 headers=["scenario", "gas", "have", "need", "(emrg)",
                          "bar left"],
                 aligns=["<", "<", ">", ">", ">", ">"]))
@@ -1204,9 +1201,7 @@ class DecoApp:
         cards[1:1] = stop_cards               # right under the header line
         cards.append(gas_plan_card)
 
-        cards.append([rp.DISCLAIMER])
-
-        lines: List[str] = []
+        lines: list[str] = []
         for i, card in enumerate(cards):
             if i:
                 lines.append("")
@@ -1267,6 +1262,10 @@ class DecoApp:
         else:
             profile = f"{depth:.0f} m / {bottom_time:.0f} min"
 
+        # Every "run" cell goes through report.runtime_min — truncated to whole
+        # minutes, MultiDeco's convention (see that helper). A zero-duration
+        # bottom segment never gets a row: a level whose whole time is transit
+        # would otherwise print a duplicate of the depth above it.
         def rows_for(ss):
             rows, run, prev = [], 0.0, None
             for s in ss:
@@ -1276,27 +1275,28 @@ class DecoApp:
                 # *at* a stop already shows on the stop row's gas column.
                 if (prev is not None and repr(s.gas) != repr(prev)
                         and s.kind != "stop"):
-                    rows.append([f"{s.depth_start:.0f} m", "gas", f"{run:.0f}",
-                                 repr(s.gas)])
+                    rows.append([f"{s.depth_start:.0f} m", "gas",
+                                 f"{rp.runtime_min(run):d}", repr(s.gas)])
                 run += s.duration
-                if s.kind == "bottom":
-                    rows.append([f"{s.depth_end:.0f} m", "-", f"{run:.0f}",
-                                 repr(s.gas)])
+                if s.kind == "bottom" and s.duration > 0:
+                    rows.append([f"{s.depth_end:.0f} m", "-",
+                                 f"{rp.runtime_min(run):d}", repr(s.gas)])
                 elif s.kind == "stop" and s.duration > 0:
                     rows.append([f"{s.depth_start:.0f} m", f"{s.duration:.0f}",
-                                 f"{run:.0f}", repr(s.gas)])
+                                 f"{rp.runtime_min(run):d}", repr(s.gas)])
                 prev = s.gas
-            rows.append(["surf", "-", f"{run:.0f}", ""])
+            rows.append(["surf", "-", f"{rp.runtime_min(run):d}", ""])
             return rows
 
-        cards: List[str] = []
+        cards: list[str] = []
         for label, ss in scen:
             name = ("MAIN DIVE" if label == "OK"
                     else f"LOST {'ALL GASES' if label == 'all' else label}")
             title = [
                 name, profile,
                 f"{gas!r} · GF {plan.gf_low*100:.0f}/{plan.gf_high*100:.0f}"
-                f" · TTS {b.time_to_surface(ss):.0f} · RT {b.total_runtime(ss):.0f}",
+                f" · TTS {b.time_to_surface(ss):.0f}"
+                f" · RT {rp.runtime_min(b.total_runtime(ss)):d}",
             ]
             footers = [min_gas]
             if label != "OK":
@@ -1318,15 +1318,12 @@ class DecoApp:
             cards.append("\n".join(self._cut_table_card(
                 grid, plan, depth, levels[-1].runtime)))
 
-        # The disclaimer must travel with the card: this text is printed / PNG
-        # exported and taken on dives, exactly where "educational" matters most.
-        cards.append(rp.DISCLAIMER)
         self.runtime_text.delete("1.0", tk.END)
         self.runtime_text.insert(tk.END, "\n\n".join(cards))
 
     @staticmethod
     def _cut_table_card(grid, plan, planned_depth: float,
-                        planned_time: float) -> List[str]:
+                        planned_time: float) -> list[str]:
         """The wetnotes cut-table matrix card: rows are the bottom-time
         variants, columns the depth variants, each cell the stop schedule as
         'depth:min' pairs plus the TTS — rounded UP, the conservative wetnotes
@@ -1349,8 +1346,8 @@ class DecoApp:
                            aligns=["<"] * len(headers), widen=0)
 
     def _render_runtime_png(self, path: str) -> str:
-        from matplotlib.figure import Figure
         from matplotlib.backends.backend_agg import FigureCanvasAgg
+        from matplotlib.figure import Figure
         body = self.runtime_text.get("1.0", tk.END).rstrip("\n")
         body = body.translate(_BOX_TO_ASCII)   # keep the frame aligned in the PNG
         n = body.count("\n") + 2  # body lines + the eko-deco brand line
@@ -1364,7 +1361,7 @@ class DecoApp:
         fig.savefig(path, facecolor="white", bbox_inches="tight")
         return path
 
-    def _export_runtime(self, path: str = None) -> None:
+    def _export_runtime(self, path: str | None = None) -> None:
         if not self._plan_ok:
             self.runtime_status.config(text="⚠ no valid plan to export")
             return
@@ -1404,7 +1401,7 @@ class DecoApp:
             cont = cfg.get("contingency", {})
             for var, key in zip((self.cont_tb, self.cont_ta,
                                  self.cont_db, self.cont_da),
-                                dc.CONTINGENCY_KEYS):
+                                dc.CONTINGENCY_KEYS, strict=True):
                 var.set(int(cont.get(key, 1)))
             for row in list(self.gas_rows):
                 self._remove_gas_row(row)
@@ -1415,12 +1412,12 @@ class DecoApp:
                                   recompute=False)
             # Levels are pure depth/time periods — gas is automatic by role.
             self.level_rows.clear()
-            for w in self.level_list.winfo_children():
+            for w in self.level_list.grid_slaves():
                 if int(w.grid_info().get("row", 0)) > 0:
                     w.destroy()
             for lv in cfg["levels"]:
                 self._add_level_row(lv["depth_m"], lv["runtime_min"],
-                                    lv.get("start_min"), recompute=False)
+                                    recompute=False)
         finally:
             self._building = was_building
         if not self._building:
@@ -1439,8 +1436,8 @@ class DecoApp:
         cfg.update({
             "levels": [self._level_row_dict(rl)
                        for rl in self._row_levels()],   # as typed: lose nothing
-            "gf_low": int(round(self._pct(self.gf_lo, 0.30) * 100)),
-            "gf_high": int(round(self._pct(self.gf_hi, 0.70) * 100)),
+            "gf_low": round(self._pct(self.gf_lo, 0.30) * 100),
+            "gf_high": round(self._pct(self.gf_hi, 0.70) * 100),
             "last_stop_m": 6.0 if self.last_stop6.get() else 3.0,
             "sac_normal": self._num(self.sac, 20.0, lo=1.0),
             "sac_multiplier": round(self._num(self.sac_mult, 2.0, lo=1.0), 2),
@@ -1450,7 +1447,8 @@ class DecoApp:
                                     (int(self.cont_tb.get()),
                                      int(self.cont_ta.get()),
                                      int(self.cont_db.get()),
-                                     int(self.cont_da.get())))),
+                                     int(self.cont_da.get())),
+                                    strict=True)),
             "gases": gases,
         })
         return cfg
@@ -1483,7 +1481,7 @@ def install_launcher() -> None:
     (_NET_WM_ICON) and shows a generic gear unless a .desktop file matches the
     window's WM_CLASS — so the branded taskbar icon needs this one-time step:
 
-        python app.py --install-launcher
+        deco-gui --install-launcher
     """
     if sys.platform != "linux":
         print("--install-launcher is for Linux desktops only.")
@@ -1496,15 +1494,20 @@ def install_launcher() -> None:
     os.makedirs(icon_dir, exist_ok=True)
     os.makedirs(app_dir, exist_ok=True)
     shutil.copyfile(ICON_PNG, os.path.join(icon_dir, f"{APP_NAME}.png"))
-    here = os.path.dirname(os.path.abspath(__file__))
+    # Launch through the interpreter that is running us (`-m deco.app`) rather
+    # than a bare `deco-gui`: it works from a venv, an editable checkout or a
+    # pipx install without assuming the console script is on the dock's PATH.
+    # Path= is the user's home so the GUI picks its per-user config, not
+    # whatever dive_plan.json happens to sit in the launching directory.
+    home = os.path.expanduser("~")
     desktop = os.path.join(app_dir, f"{APP_NAME}.desktop")
     with open(desktop, "w", encoding="utf-8") as f:
         f.write(f"""[Desktop Entry]
 Type=Application
 Name={APP_NAME}
-Comment=Bühlmann ZHL-16C dive-deco planner (educational)
-Exec={sys.executable} {os.path.join(here, "app.py")}
-Path={here}
+Comment=Bühlmann ZHL-16C dive-deco planner
+Exec={sys.executable} -m deco.app
+Path={home}
 Icon={APP_NAME}
 Terminal=false
 Categories=Education;Science;
@@ -1521,10 +1524,8 @@ def main() -> None:
     # className → WM_CLASS, which Linux docks/taskbars use to identify the app
     # (and to match the .desktop file --install-launcher registers).
     root = tk.Tk(className=APP_NAME)
-    try:
+    with contextlib.suppress(tk.TclError):
         ttk.Style().theme_use("clam")
-    except tk.TclError:
-        pass
     DecoApp(root)
     root.mainloop()
 

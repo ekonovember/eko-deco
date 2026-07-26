@@ -8,12 +8,9 @@ import contextlib
 import io
 import json
 import os
-import sys
 import unittest
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
-import cli
+from deco import cli
 
 
 def run_cli(argv):
@@ -41,13 +38,13 @@ class TestArgumentValidation(unittest.TestCase):
         self.assertIn("must be > 0", err)
 
     def test_negative_sac_rejected(self):
-        code, _, err = run_cli(["plan", "--depth", "30", "--time", "20",
-                                "--sac", "-20"])
+        code, _, _err = run_cli(["plan", "--depth", "30", "--time", "20",
+                                 "--sac", "-20"])
         self.assertEqual(code, 2)
 
     def test_zero_divers_rejected(self):
-        code, _, err = run_cli(["plan", "--depth", "30", "--time", "20",
-                                "--sac", "18", "--divers", "0"])
+        code, _, _err = run_cli(["plan", "--depth", "30", "--time", "20",
+                                 "--sac", "18", "--divers", "0"])
         self.assertEqual(code, 2)
 
     def test_sac_multiplier_below_one_rejected(self):
@@ -58,7 +55,7 @@ class TestArgumentValidation(unittest.TestCase):
         self.assertIn("multiplier", err)
 
     def test_negative_level_depth_rejected(self):
-        code, _, err = run_cli(["plan", "--level", "-30:20"])
+        code, _, _err = run_cli(["plan", "--level", "-30:20"])
         self.assertEqual(code, 2)
 
     def test_swapped_gfs_rejected(self):
@@ -85,7 +82,6 @@ class TestHappyPath(unittest.TestCase):
         self.assertEqual(code, 0)
         data = json.loads(out)
         self.assertIn("segments", data)
-        self.assertIn("disclaimer", data)
         self.assertTrue(data["segments"])
 
     def test_ndl_json_smoke(self):
@@ -128,7 +124,7 @@ class TestSaveReloadRoundTrip(unittest.TestCase):
                                   "--gas", "air", "--deco-gas", "50",
                                   "--save", path])
             self.assertEqual(code, 0)
-            with open(path, "r", encoding="utf-8") as fh:
+            with open(path, encoding="utf-8") as fh:
                 cfg = json.load(fh)
         for lvl in cfg["levels"]:
             self.assertEqual(set(lvl), {"depth_m", "runtime_min"})

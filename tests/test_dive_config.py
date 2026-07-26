@@ -2,13 +2,10 @@
 from __future__ import annotations
 
 import os
-import sys
 import tempfile
 import unittest
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
-import dive_config as dc
+from deco import dive_config as dc
 
 
 class TestDiveConfig(unittest.TestCase):
@@ -86,20 +83,21 @@ class TestDiveConfig(unittest.TestCase):
         self.assertAlmostEqual(levels[0].depth, 120)
         self.assertAlmostEqual(levels[0].runtime, 20)
 
-    def test_level_start_min_round_trips(self):
+    def test_legacy_start_min_is_dropped_on_load(self):
+        """Levels are contiguous now — the transit is part of the runtime, as in
+        every other planner. An old config carrying an arrival time still loads;
+        the key is simply dropped rather than silently changing the profile."""
         cfg = dc.default_config()
         cfg["levels"] = [{"depth_m": 16, "runtime_min": 17, "start_min": 4}]
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "c.json")
             dc.save(cfg, path)
             back = dc.load(path)
-        self.assertEqual(back["levels"][0]["start_min"], 4.0)
-        self.assertAlmostEqual(dc.levels_of(back)[0].start, 4.0)
-        # a level without start_min stays contiguous (Level.start is None)
-        cfg2 = dc.default_config()
-        cfg2["levels"] = [{"depth_m": 30, "runtime_min": 20}]
-        self.assertNotIn("start_min", dc.normalize(cfg2)["levels"][0])
-        self.assertIsNone(dc.levels_of(cfg2)[0].start)
+        self.assertNotIn("start_min", back["levels"][0])
+        self.assertEqual(back["levels"][0],
+                         {"depth_m": 16.0, "runtime_min": 17.0})
+        lv = dc.levels_of(back)[0]
+        self.assertEqual((lv.depth, lv.runtime), (16.0, 17.0))
 
     def test_legacy_inline_gas_is_dropped_not_parked(self):
         cfg = dc._merged({

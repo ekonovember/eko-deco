@@ -1,0 +1,122 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  PYTHONUTF8: "1"          # the source is UTF-8 (Bühlmann, ₂) — see README
+
+jobs:
+  # The core suite must stay standard-library-only and pass on a bare Python,
+  # on every OS, without compilers. That is the promise the project makes; this
+  # matrix is what enforces it.
+  test:
+    name: tests (${{ matrix.os }}, py${{ matrix.python }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest]
+        python: ["3.10", "3.11", "3.12", "3.13", "3.14"]
+        include:
+          - os: macos-latest
+            python: "3.12"
+          - os: windows-latest
+            python: "3.12"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - name: Run the suite (no install, no dependencies)
+        run: python -m unittest discover -s tests -t . -v
+
+  # The cross-checks compile the reference implementations and run eko-deco
+  # against them. They skip themselves when the compilers are missing, so this
+  # job exists to make sure they are never *silently* skipped everywhere.
+  crosschecks:
+    name: cross-checks vs Subsurface + Baker GFDECO
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - name: Install the oracle toolchains
+        run: sudo apt-get update && sudo apt-get install -y g++ gfortran
+      - run: python -m unittest tests.test_subsurface_crosscheck -v
+      - run: python -m unittest tests.test_baker_crosscheck -v
+      - name: Fail if either oracle skipped instead of running
+        run: |
+          python - <<'PY'
+          import io, unittest
+          from contextlib import redirect_stderr
+          buf = io.StringIO()
+          suite = unittest.defaultTestLoader.loadTestsFromNames([
+              "tests.test_subsurface_crosscheck", "tests.test_baker_crosscheck"])
+          with redirect_stderr(buf):
+              result = unittest.TextTestRunner(stream=buf, verbosity=0).run(suite)
+          if result.testsRun == 0 or result.skipped:
+              raise SystemExit(
+                  f"oracles did not run: {result.testsRun} tests, "
+                  f"{len(result.skipped)} skipped\n{buf.getvalue()}")
+          print(f"{result.testsRun} cross-check tests ran against both oracles")
+          PY
+
+  lint:
+    name: ruff + mypy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install -e ".[dev,gui]"
+      - run: ruff check --output-format=github .
+      - run: mypy
+
+  gui:
+    name: GUI smoke test (Xvfb)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: sudo apt-get update && sudo apt-get install -y xvfb python3-tk
+      - run: pip install -e ".[gui]"
+      - name: Build the window and render one plan off-screen
+        run: xvfb-run -a python -m unittest tests.test_app_levels -v
+
+  package:
+    name: build + metadata check
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+      - run: pip install build twine
+      - run: python -m build
+      - run: twine check dist/*
+      - name: The wheel must carry the icons and the typing marker
+        run: |
+          python - <<'PY'
+          import glob, zipfile
+          names = zipfile.ZipFile(glob.glob("dist/*.whl")[0]).namelist()
+          want = ("deco/py.typed", "deco/assets/icon.png", "deco/assets/icon.ico")
+          missing = [n for n in want if n not in names]
+          if missing:
+              raise SystemExit(f"missing from wheel: {missing}")
+          print("wheel contents OK")
+          PY

@@ -18,13 +18,14 @@ salinity exactly like dive.cpp), gas fractions in permille.
 
 from __future__ import annotations
 
+import contextlib
 import ctypes
 import math
 import os
 import shutil
 import subprocess
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import List, Optional, Sequence, Tuple
 
 _DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "subsurface_oracle")
 # Windows loads a .dll, everything else a .so. build.sh is a convenience for
@@ -91,7 +92,7 @@ def _load_lib() -> ctypes.CDLL:
     return lib
 
 
-_lib: Optional[ctypes.CDLL] = None
+_lib: ctypes.CDLL | None = None
 
 
 def lib() -> ctypes.CDLL:
@@ -144,10 +145,8 @@ class SubsurfaceDeco:
         self._lib.srf_set_dive(self.surface_mbar, self.salinity)
 
     def __del__(self):
-        try:
+        with contextlib.suppress(Exception):
             self._lib.srf_free(self.ds)
-        except Exception:
-            pass
 
     # -- unit conversions, exactly like the stub dive / dive.cpp --------------
 
@@ -189,7 +188,7 @@ class SubsurfaceDeco:
         """Depth change as 1 s constant-pressure slices at mid-slice depth
         (Subsurface's planner feeds the model discrete samples the same way).
         Returns the duration in minutes."""
-        total_s = int(round(abs(to_m - from_m) / rate_m_min * 60.0))
+        total_s = round(abs(to_m - from_m) / rate_m_min * 60.0)
         if total_s == 0:
             return 0.0
         step = (to_m - from_m) / total_s
@@ -215,7 +214,7 @@ class SubsurfaceDeco:
         self._configure()
         return self._lib.srf_get_gf(self.ds, pressure_bar)
 
-    def tissues(self) -> Tuple[List[float], List[float]]:
+    def tissues(self) -> tuple[list[float], list[float]]:
         n2 = (ctypes.c_double * 16)()
         he = (ctypes.c_double * 16)()
         self._lib.srf_tissues(self.ds, n2, he)
@@ -273,23 +272,24 @@ class SubsurfaceDeco:
              deco_gases: Sequence[Gas] = (), descent_rate: float = 18.0,
              ascent_rate: float = 10.0, stop_interval: float = 3.0,
              from_current: bool = False,
-             max_minutes: float = 24 * 60) -> Tuple[List[Stop], float]:
+             max_minutes: float = 24 * 60) -> tuple[list[Stop], float]:
         """Square-profile schedule — a one-level dive."""
         return self.plan_levels([(bottom_depth, bottom_time, None)], bottom_gas,
                                 deco_gases, descent_rate, ascent_rate,
                                 stop_interval, from_current, max_minutes)
 
-    def plan_levels(self, levels: Sequence[Tuple[float, float, Optional[Gas]]],
+    def plan_levels(self, levels: Sequence[tuple[float, float, Gas | None]],
                     bottom_gas: Gas, deco_gases: Sequence[Gas] = (),
                     descent_rate: float = 18.0, ascent_rate: float = 10.0,
                     stop_interval: float = 3.0, from_current: bool = False,
-                    max_minutes: float = 24 * 60) -> Tuple[List[Stop], float]:
+                    max_minutes: float = 24 * 60) -> tuple[list[Stop], float]:
         """Multi-level schedule. `levels` is [(depth, runtime, gas|None)] where
         runtime is the run time at the END of the level (descent included) and
         gas None = the bottom gas (the oracle's profiles never need the
-        travel-mix substitution) — matching eko-deco's `Level`. from_current=True continues from the present tissue state
-        (repetitive dive). Returns (stops, time-to-surface: the final ascent
-        only, travel between levels is bottom time)."""
+        travel-mix substitution) — matching eko-deco's `Level`.
+        from_current=True continues from the present tissue state (repetitive
+        dive). Returns (stops, time-to-surface: the final ascent only, travel
+        between levels is bottom time)."""
         gases = [bottom_gas, *deco_gases]
         if not from_current:
             self.clear()
@@ -300,12 +300,12 @@ class SubsurfaceDeco:
             gas = level_gas or bottom_gas
             rate = descent_rate if level_depth > depth else ascent_rate
             run += self.add_ramp(depth, level_depth, rate, gas)
-            self.add_flat(level_depth, gas, int(round(max(0.0, runtime - run) * 60.0)))
+            self.add_flat(level_depth, gas, round(max(0.0, runtime - run) * 60.0))
             run = runtime
             depth = level_depth
         bottom_depth = depth
 
-        stops: List[Stop] = []
+        stops: list[Stop] = []
         tts = 0.0
         depth = bottom_depth
         while depth > 1e-9:
@@ -333,7 +333,7 @@ class SubsurfaceDeco:
                 raise RuntimeError("schedule exceeded max_minutes")
         return stops, tts
 
-    def ndl_min(self, depth_m: float, gas: Gas, max_min: int = 600) -> Optional[int]:
+    def ndl_min(self, depth_m: float, gas: Gas, max_min: int = 600) -> int | None:
         """Minutes at depth (after instantaneous descent) before the ceiling
         drops below the surface — same definition as eko-deco ndl()."""
         self.clear()

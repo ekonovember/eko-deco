@@ -1,0 +1,120 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "eko-deco"
+description = "Bühlmann ZHL-16C decompression model with Erik Baker gradient factors — zero-dependency core, CLI and Tkinter GUI"
+readme = "README.md"
+license = "MIT"
+license-files = ["LICENSE"]
+requires-python = ">=3.10"
+authors = [{ name = "ekonovember" }]
+keywords = ["diving", "decompression", "buhlmann", "zhl16c", "gradient-factors", "trimix"]
+classifiers = [
+  "Development Status :: 4 - Beta",
+  "Environment :: Console",
+  "Intended Audience :: Science/Research",
+  "Programming Language :: Python :: 3 :: Only",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Programming Language :: Python :: 3.13",
+  "Programming Language :: Python :: 3.14",
+  "Topic :: Scientific/Engineering :: Physics",
+  "Typing :: Typed",
+]
+# The core and the CLI are standard library only, deliberately and permanently
+# (see CONTRIBUTING.md and DECISIONS.md #1). Only the GUI extra adds anything.
+dependencies = []
+dynamic = ["version"]
+
+[project.optional-dependencies]
+gui = ["matplotlib>=3.5"]
+dev = ["ruff>=0.6", "mypy>=1.11"]
+
+[project.scripts]
+deco = "deco.cli:main"
+
+[project.gui-scripts]
+deco-gui = "deco.app:main"
+
+[project.urls]
+Homepage = "https://github.com/ekonovember/eko-deco"
+Source = "https://github.com/ekonovember/eko-deco"
+Issues = "https://github.com/ekonovember/eko-deco/issues"
+
+[tool.setuptools.dynamic]
+version = { attr = "deco.__version__" }
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+deco = ["py.typed", "assets/*.png", "assets/*.ico"]
+
+# ---------------------------------------------------------------- unittest ---
+# The suite is stdlib-only and runs out of a checkout with no install:
+#   python -m unittest discover -s tests -t .
+# `tests/__init__.py` puts `src/` on sys.path, so `-t .` (top-level dir) is
+# what makes the package bootstrap import.
+
+# -------------------------------------------------------------------- ruff ---
+[tool.ruff]
+line-length = 96
+target-version = "py310"
+src = ["src", "tests"]
+extend-exclude = ["tests/subsurface_oracle", "tests/baker_oracle"]
+
+[tool.ruff.lint]
+select = [
+  "F",    # pyflakes
+  "E",    # pycodestyle errors
+  "W",    # pycodestyle warnings
+  "I",    # import sorting
+  "UP",   # pyupgrade — this codebase is 3.10+, annotations should say so
+  "B",    # bugbear
+  "C4",   # comprehensions
+  "SIM",  # simplifications
+  "RUF",
+]
+ignore = [
+  # The source is deliberately typeset: ₂, ×, −, ≤, — and friends appear in
+  # docstrings, comments and user-facing strings and are not typos.
+  "RUF001", "RUF002", "RUF003",
+  # `l` is the domain's own name for a level/dict-of-level and reads better
+  # than a synonym in the tight config/serialisation helpers.
+  "E741",
+]
+
+[tool.ruff.lint.per-file-ignores]
+# The GUI must call matplotlib.use() before the backend imports; the oracle
+# wrappers may only be imported after a compiler probe has succeeded, so the
+# cross-checks can skip instead of erroring on a machine with no g++/gfortran.
+"src/deco/app.py" = ["E402"]
+"tests/test_baker_crosscheck.py" = ["E402"]
+"tests/test_subsurface_crosscheck.py" = [
+  "E402",
+  # The Subsurface CASES table is one dive per line, columns aligned; wrapping
+  # it costs far more readability than the few characters it saves.
+  "E501",
+]
+"tests/test_shearwater_golden.py" = ["E402"]
+
+[tool.ruff.lint.isort]
+known-first-party = ["deco"]
+
+# -------------------------------------------------------------------- mypy ---
+[tool.mypy]
+python_version = "3.10"
+files = ["src/deco"]
+strict_equality = true
+warn_redundant_casts = true
+warn_unused_ignores = true
+warn_unreachable = true
+disallow_untyped_defs = false      # the GUI's Tk callbacks are untyped by nature
+no_implicit_optional = true
+
+[[tool.mypy.overrides]]
+module = ["matplotlib.*"]
+ignore_missing_imports = true

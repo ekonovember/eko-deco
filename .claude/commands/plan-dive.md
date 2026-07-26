@@ -5,7 +5,8 @@ allowed-tools: Bash(python:*)
 ---
 
 Run the deco planner with the user's arguments, then summarize the schedule
-(stops, total runtime, gas switches, surface ceiling). Restate that this is an
-educational model and not validated for real dives.
+(stops, total runtime, gas switches, surface ceiling). Always relay the
+ppO2/density/ceiling warnings — they are the only caveat in the output
+(DECISIONS.md #4/#5).
 
-!`python cli.py plan $ARGUMENTS`
+!`python -m deco.cli plan $ARGUMENTS`

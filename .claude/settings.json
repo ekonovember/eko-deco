@@ -1,4 +1,8 @@
 {
+  "env": {
+    "PYTHONUTF8": "1",
+    "PYTHONPATH": "src"
+  },
   "permissions": {
     "defaultMode": "acceptEdits",
     "allow": [
@@ -9,6 +13,8 @@
       "Grep",
       "Bash(python:*)",
       "Bash(python3:*)",
+      "Bash(ruff:*)",
+      "Bash(mypy:*)",
       "Skill",
       "Agent",
       "WebFetch"

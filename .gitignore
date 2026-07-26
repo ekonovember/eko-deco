@@ -1,16 +1,25 @@
 __pycache__/
 *.py[cod]
+
+# Packaging / build output
+build/
+dist/
 *.egg-info/
 .venv/
 venv/
 
+# Tooling caches
+.ruff_cache/
+.mypy_cache/
+
 # Personal (uncommitted) agent settings
-.claude/settings.local.json
+.claude/settings.local.json*
 
 # GUI PNG export
 runtime.png
 
-# Per-user GUI preferences (dark mode, …) — the dive itself is dive_plan.json
+# Per-user GUI preferences (dark mode, window geometry). These live in the
+# user's config directory now; the pattern stays for older checkouts.
 ui_settings.json
 
 # Built test oracles (compiled on demand by the cross-check tests)
@@ -18,4 +27,3 @@ ui_settings.json
 *.dll
 tests/baker_oracle/gfdeco
 tests/baker_oracle/gfdeco.exe
-.claude/settings.local.json*

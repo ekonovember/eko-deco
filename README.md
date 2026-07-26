@@ -7,6 +7,11 @@
 A small Python implementation of the Bühlmann ZHL-16C decompression model with
 Erik Baker's gradient factors — a zero-dependency core, plus a CLI and a Tkinter GUI.
 
+[![CI](https://github.com/ekonovember/eko-deco/actions/workflows/ci.yml/badge.svg)](https://github.com/ekonovember/eko-deco/actions/workflows/ci.yml)
+![Python 3.10+](https://img.shields.io/badge/python-3.10%2B-blue)
+![Core dependencies: none](https://img.shields.io/badge/core%20deps-none-brightgreen)
+[![License: MIT](https://img.shields.io/badge/license-MIT-blue)](LICENSE)
+
 <img src="pictures/app_ui.png" alt="eko-deco GUI — Results tab" width="900">
 
 <img src="pictures/app_profile.png" alt="eko-deco GUI — Profile tab with the deco ceiling" width="900">
@@ -26,10 +31,11 @@ Erik Baker's gradient factors — a zero-dependency core, plus a CLI and a Tkint
   `P_amb_tol = (P_comp − a·GF) / (GF/b + 1 − GF)`,
   linearly interpolated between GF-Low at the first stop and GF-High at the
   surface.
-- **Multi-level planning**: a dive is a list of levels (depth + runtime, each
-  with an optional gas — otherwise the planner breathes the gas relevant at that
-  depth), not just one square bottom. A level shallower than the ceiling is
-  flagged rather than silently planned.
+- **Multi-level planning**: a dive is a list of levels (depth + cumulative
+  runtime; the planner breathes the gas relevant at that depth), not just one
+  square bottom. Levels are contiguous — the transit to a level is part of its
+  runtime, the same definition MultiDeco, GFDECO and Subsurface use. A level
+  shallower than the ceiling is flagged rather than silently planned.
 - Automatic first-stop detection, 3 m stops (last stop 3 m or 6 m), and best-gas
   selection: deco gases switch at their MOD (ppO₂ ≤ 1.6) snapped to a standard
   stop depth — O₂ at the 6 m stop, EAN50 at 21 m.
@@ -71,7 +77,7 @@ Erik Baker's gradient factors — a zero-dependency core, plus a CLI and a Tkint
   GF-interpolated ceiling, anchored on the planned first stop, drawn as a dashed
   line with a translucent curtain from the surface.
 - Shared JSON config (`dive_plan.json`): the GUI and the CLI read/write the same
-  dive, so `cli.py plan --save` shows up in the app on Reload and vice-versa.
+  dive, so `deco plan --save` shows up in the app on Reload and vice-versa.
   Levels are pure depth/time periods; gas is chosen **automatically by role**
   (bottom gas while breathable, travel gas where not, deco gases on the ascent),
   so there is one source of truth and no per-level gas overrides to reconcile.
@@ -79,19 +85,42 @@ Erik Baker's gradient factors — a zero-dependency core, plus a CLI and a Tkint
   plus TTS and minimum-gas / turn pressure — exportable to PNG to take in the water.
 - NDL calculator and tissue-loading report.
 
+## Install
+
+Python 3.10+. The core library and CLI need **nothing** beyond the standard
+library; the GUI extra adds `matplotlib` (tkinter ships with CPython).
+
+```bash
+pip install -e ".[gui]"        # from a checkout: CLI + GUI
+pip install -e .               # CLI only, zero dependencies
+```
+
+That puts two commands on your PATH — `deco` (console planner) and `deco-gui`
+(the app). Both also run as modules without installing anything, straight from
+a checkout:
+
+```bash
+PYTHONPATH=src python -m deco.cli plan --depth 30 --time 25 --gas air
+PYTHONPATH=src python -m deco.app
+```
+
+### Where your dive lives
+
+`dive_plan.json` is shared by the CLI and the GUI. It is looked up in this
+order: `$DECO_CONFIG`, then `./dive_plan.json` if the directory you are in has
+one, then your per-user config directory
+(`~/.config/eko-deco/dive_plan.json`, `%APPDATA%\eko-deco\` on Windows). So a
+folder per trip works, and so does running `deco` from anywhere.
+
 ## The app (GUI)
 
-Run `python app.py` for the visual planner shown above:
+Run `deco-gui` for the visual planner shown above:
 
 - **Left** — every input: gradient factors and a **Last stop 6 m** switch
   (Shearwater/MultiDeco style); an editable **Levels** list — add a level per
-  row (depth, its **from → to** runtime window, and a gas picked from the gases
-  below — or `auto`, which breathes whatever is relevant at that depth) to plan
-  a multi-level dive. Each level's **from** is the runtime the diver arrives at
-  that depth: leave it blank to arrive as soon as the standard descent/ascent
-  allows (contiguous with the previous level), or set it to hold a window at that
-  depth — e.g. *from 4 to 17* at 16 m, where the descent runs at the standard
-  rate and lands on minute 4 (waiting at the previous depth until then); an
+  row (depth + cumulative **runtime**) to plan a multi-level dive, with gas
+  chosen automatically by role. Runtime is minutes since the surface at the
+  *end* of the level, transit included, so levels simply follow one another; an
   editable gas stack (bottom / travel / deco, each with its own O₂, He, tank and
   fill, and a **use** checkbox to leave a gas out of the plan without deleting
   it); SAC, the emergency SAC multiplier, the problem time (minutes solving
@@ -113,69 +142,56 @@ Run `python app.py` for the visual planner shown above:
 
 **Dark mode** lives in the **Settings** menu and themes the whole app including
 the chart; the choice — and the window size/position, captured when you close
-the app — is remembered in `ui_settings.json` (per-user, git-ignored), kept
-separate from the dive itself in `dive_plan.json`.
+the app — is remembered in a per-user `ui_settings.json` under your config
+directory, kept separate from the dive itself in `dive_plan.json`.
 
 **Taskbar icon:** the app sets its `<//>` tile as the window icon everywhere.
 GNOME docks additionally need a launcher to show it — register one (per-user,
 no root) with:
 
 ```bash
-python app.py --install-launcher   # Linux; then log out/in once
-```
-
-## Install
-
-Python 3.10+. The core library and CLI need **nothing** beyond the standard
-library; the GUI (`app.py`) also needs `matplotlib` (tkinter ships with CPython):
-
-```bash
-pip install matplotlib   # GUI only
+deco-gui --install-launcher   # Linux; then log out/in once
 ```
 
 ## Command line
 
 ```bash
 # Recreational
-python cli.py plan --depth 30 --time 25 --gas air
+deco plan --depth 30 --time 25 --gas air
 
 # Tech with deco gases
-python cli.py plan --depth 45 --time 25 --gas 21/35 \
+deco plan --depth 45 --time 25 --gas 21/35 \
     --deco-gas 50 --deco-gas 100 --gf-low 0.30 --gf-high 0.70
 
 # Multi-level: RUNTIME is cumulative (minutes since the surface, at the END of the level)
-python cli.py plan --level 45:25 --level 30:40 --level 18:55 \
+deco plan --level 45:25 --level 30:40 --level 18:55 \
     --gas 21/35 --deco-gas 50 --deco-gas 100
 
 # Hypoxic trimix over several levels — gas is automatic by role (travel down, deco up)
-python cli.py plan --level 120:20 --level 45:40 --gas 10/70 --travel-gas 35/25 --deco-gas 50
-
-# A level with a START-RUNTIME window: arrive at 16 m at minute 4, hold until 17
-# (descent at the standard rate lands on minute 4, waiting deep until then)
-python cli.py plan --level 40:20 --level 16:30-45 --gas air --deco-gas 50
+deco plan --level 120:20 --level 45:40 --gas 10/70 --travel-gas 35/25 --deco-gas 50
 
 # Last stop at 6 m instead of 3 m (Shearwater/MultiDeco style)
-python cli.py plan --depth 45 --time 25 --gas 21/35 --deco-gas 50 --last-stop 6
+deco plan --depth 45 --time 25 --gas 21/35 --deco-gas 50 --last-stop 6
 
 # Contingency cut table for a bottom-timer backup: a matrix on a 3 min × 3 m
 # grid — bottom-time rows shorter/longer, depth columns shallower/deeper.
 # Bare --contingency takes the step counts from the config; or pass
 # TB[:TA[:DB[:DA]]] (time before/after, depth before/after; 0 disables one).
-python cli.py plan --depth 40 --time 25 --gas air --deco-gas 50 --contingency
-python cli.py plan --depth 40 --time 25 --gas air --deco-gas 50 --contingency 0:2:0:1
+deco plan --depth 40 --time 25 --gas air --deco-gas 50 --contingency
+deco plan --depth 40 --time 25 --gas air --deco-gas 50 --contingency 0:2:0:1
 
 # Hypoxic trimix + travel gas, per-gas tanks, gas planning (TTS + rock bottom)
-python cli.py plan --depth 60 --time 25 --gas 10/70@24 \
+deco plan --depth 60 --time 25 --gas 10/70@24 \
     --travel-gas 35/25@11 --deco-gas 50@11 --deco-gas 100@7 \
     --sac 18 --sac-multiplier 1.5
 
 # Save a dive to the shared config, then re-plan it (the GUI reads the same file)
-python cli.py plan --depth 45 --time 10 --gas air@24@232 --deco-gas 50@11@200 --sac 20 --save
-python cli.py plan dive_plan.json     # positional config (or --load)
+deco plan --depth 45 --time 10 --gas air@24@232 --deco-gas 50@11@200 --sac 20 --save
+deco plan dive_plan.json     # positional config (or --load)
 
 # NDL & tissue report
-python cli.py ndl     --depth 30 --gas air
-python cli.py tissues --depth 40 --time 20 --gas ean32 --json
+deco ndl     --depth 30 --gas air
+deco tissues --depth 40 --time 20 --gas ean32 --json
 ```
 
 Gas syntax: `air`, `o2`, `ean32` / `nx32` / `32`, trimix `21/35` (fO₂/fHe %).
@@ -190,35 +206,52 @@ the rounding.
 
 A dive is one or more **levels**. `--depth/--time` is the square-profile
 shorthand for a single level; `--level DEPTH:RUNTIME` (repeatable) plans a
-multi-level dive, or `--level DEPTH:START-RUNTIME` (e.g. `16:4-17`) to give the
-level an explicit arrival runtime — the flat time is then `[start, runtime]`, the
-descent lands on `start` at the standard rate, and the diver waits at the previous
-depth until then. Gas is chosen automatically by role. **Runtime is cumulative**
-— minutes since leaving the surface, at the *end* of that level, descent
-included — which is how MultiDeco, Baker's GFDECO and Subsurface all take a
-profile.
+multi-level dive. Gas is chosen automatically by role. **Runtime is
+cumulative** — minutes since leaving the surface, at the *end* of that level,
+transit included — which is how MultiDeco, Baker's GFDECO and Subsurface all
+take a profile. Levels are contiguous, so there is no arrival time to set: a
+runtime too short to cover the descent/ascent is rejected, exactly as MultiDeco
+rejects one ("segment time … too short"). To loiter shallow before going
+deeper, add a level for the shallow depth.
 
 There are more knobs than shown above — ascent/descent/stop rates, the
 shallowest-stop depth (`--last-stop`), the ppO₂
 window (`--ppo2-bottom` / `--ppo2-deco` / `--ppo2-min`), the emergency SAC
 multiplier, problem time and diver count for rock bottom and the emergency gas
 need (`--sac-multiplier`, `--problem-time`, `--divers`) — see
-`python cli.py plan -h` (or `ndl -h`, …) for the full list. Ready-to-run
+`deco plan -h` (or `ndl -h`, …) for the full list. Ready-to-run
 command snippets live in [`examples/`](examples/).
 
 > **Windows note:** the source is UTF-8 (`Bühlmann`, `₂`); the default cp1252
 > console renders those as mojibake — cosmetic only. Set `PYTHONUTF8=1` (or run
 > `chcp 65001`) for clean output.
 
+## Use it as a library
+
+```python
+from deco import buhlmann as b
+
+plan = b.DivePlan(gf_low=0.30, gf_high=0.70,
+                  deco_gases=(b.Gas(0.50), b.O2))
+segments, tissues = b.plan_dive(45, 25, b.Gas(0.21, 0.35), plan)
+
+print(b.time_to_surface(segments))            # TTS in minutes
+print([(s.depth_start, s.duration) for s in segments if s.kind == "stop"])
+print(b.ppo2_violations(segments, plan))      # never ignore these
+```
+
+The package ships `py.typed`, so type checkers see the annotations.
+
 ## Test
 
 ```bash
-python -m unittest discover -s tests -v
+python -m unittest discover -s tests -t . -v
 ```
 
-The suite has two tiers:
+No install and no third-party packages needed — `tests/__init__.py` puts `src/`
+on the path. The suite has two tiers:
 
-- **119 core tests** — constant counts, surface saturation, Haldane equivalence,
+- **174 core tests** — constant counts, surface saturation, Haldane equivalence,
   NDLs against published Bühlmann values (±5 min), multi-level profiles,
   gas-switch and travel-gas behaviour, ppO₂-violation and oxygen-toxicity
   (CNS/OTU) checks, END/density, the last-stop option, TTS / rock-bottom
@@ -228,12 +261,23 @@ The suite has two tiers:
 - **26 cross-check tests** — these compile the reference implementations
   (Subsurface's `deco.cpp` with **g++**, Baker's `GFDECO` with **gfortran**) and
   run eko-deco against them. Without those compilers the two modules skip
-  themselves and you see `Ran 119 tests` — that is a *missing compiler*, not
+  themselves and you see `Ran 174 tests` — that is a *missing compiler*, not
   missing data; the skip message says so and tells you what to install. On
   Windows, install MSYS2/MinGW-w64 (or just run the suite under WSL) to get all
-  108.
+  200.
 
 The oracles are compiled on demand from Python, so no `make` step is needed.
+CI runs the core suite on Python 3.10–3.14 across Linux, macOS and Windows, and
+has a dedicated job that installs both toolchains and **fails if the
+cross-checks skip** — so "all green" can never mean "the oracles never ran".
+
+Lint and types:
+
+```bash
+pip install -e ".[dev]"
+ruff check .
+mypy
+```
 
 ## Validation
 
@@ -264,7 +308,32 @@ compiler isn't installed, so the core suite stays dependency-free.
 
 Remaining differences from Subsurface — air at 20.9 % vs 21 % O₂, salinity-based
 depth conversion, a dynamic GF anchor — are **intentional**: they are exactly
-what separates the Subsurface convention from the Shearwater one.
+what separates the Subsurface convention from the Shearwater one, and they are
+listed in [`DECISIONS.md`](DECISIONS.md) #3.
+
+## Layout
+
+```
+src/deco/          the package
+  buhlmann.py      the model — tissues, Schreiner, GF ceilings, gas planning
+  report.py        everything user-facing that is computed, shared by both front ends
+  dive_config.py   the dive_plan.json schema: load / save / normalize
+  cli.py           the `deco` console front end
+  app.py           the `deco-gui` Tkinter + matplotlib app
+  assets/          window/taskbar icons (packaged)
+tests/             unittest suites + the two compiled reference oracles
+examples/          ready-to-run command snippets
+pictures/          logo, screenshots, social preview, gen_assets.py
+dive_plan.json     the shared dive — agent- and hand-editable
+DECISIONS.md       why the planner does what it does, numbered and cited from code
+```
+
+## Contributing
+
+See [`CONTRIBUTING.md`](CONTRIBUTING.md) — and
+[`DECISIONS.md`](DECISIONS.md) before changing model math or output. The short
+version: the core stays dependency-free, warnings are load-bearing, and nothing
+gets copied out of the GPL oracle.
 
 ## AI-agent friendly
 
@@ -283,8 +352,7 @@ project:
 
 ## License
 
-[MIT](LICENSE). The educational disclaimer stands regardless of license: this
-code is **not validated for planning real dives**.
+[MIT](LICENSE).
 
 ## References
 

@@ -1,4 +1,4 @@
 {
   "description": "Recreational square profile, air, light deco at GF 30/80.",
-  "command": "python cli.py plan --depth 30 --time 25 --gas air --gf-low 0.30 --gf-high 0.80"
+  "command": "deco plan --depth 30 --time 25 --gas air --gf-low 0.30 --gf-high 0.80"
 }

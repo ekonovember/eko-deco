@@ -1,4 +1,4 @@
 {
   "description": "Tech-style 45 m for 25 min on trimix 21/35 with EAN50 + O2 deco gases.",
-  "command": "python cli.py plan --depth 45 --time 25 --gas 21/35 --deco-gas 50 --deco-gas 100 --gf-low 0.30 --gf-high 0.70"
+  "command": "deco plan --depth 45 --time 25 --gas 21/35 --deco-gas 50 --deco-gas 100 --gf-low 0.30 --gf-high 0.70"
 }

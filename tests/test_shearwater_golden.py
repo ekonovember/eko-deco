@@ -18,13 +18,11 @@ from __future__ import annotations
 
 import json
 import os
-import sys
 import unittest
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.abspath(os.path.join(_HERE, "..")))
 
-import buhlmann as b
+from deco import buhlmann as b
 
 FIXTURES = os.path.join(_HERE, "shearwater_golden.json")
 

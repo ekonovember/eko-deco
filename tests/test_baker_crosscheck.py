@@ -32,18 +32,18 @@ from __future__ import annotations
 import os
 import sys
 import unittest
+from typing import ClassVar
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.abspath(os.path.join(_HERE, "..")))
 sys.path.insert(0, _HERE)
 
-import buhlmann as b
+from deco import buhlmann as b
 
 try:
     import baker_deco as bd
     bd.ensure_built()
 except Exception as exc:  # no gfortran — keep the core suite green
-    raise unittest.SkipTest(f"Baker GFDECO oracle unavailable: {exc}")
+    raise unittest.SkipTest(f"Baker GFDECO oracle unavailable: {exc}") from exc
 
 from baker_deco import BakerGas
 
@@ -140,7 +140,7 @@ class TestBakerSchedules(unittest.TestCase):
         choice of the Baker/Shearwater convention. eko-deco's computed anchor
         must equal GFDECO's first stop within one 3 m step (GFDECO can push
         the first stop one step deeper via its PROJECTED_ASCENT check)."""
-        for name, depth, time, ge, dge, bg, gf in CASES:
+        for name, depth, time, ge, _dge, bg, gf in CASES:
             with self.subTest(name):
                 r = bd.plan(depth, time, bg, gf[0], gf[1])
                 if r.first_stop is None:
@@ -201,7 +201,7 @@ class TestBakerMultilevel(unittest.TestCase):
 
     # name, eko levels, eko bottom gas, eko deco gases,
     #       baker levels [(depth, runtime, mix#)], baker gases, gf
-    CASES = [
+    CASES: ClassVar[list] = [
         ("45->30->18 air +EAN50",
          [b.Level(45, 25), b.Level(30, 40), b.Level(18, 55)],
          b.Gas(0.21), [b.Gas(0.50)],
@@ -252,7 +252,9 @@ class TestBakerMultilevel(unittest.TestCase):
         more deco than staying deep for the whole runtime. Both engines agree."""
         plan = b.DivePlan(gf_low=0.30, gf_high=0.80, surface_p=BAKER_SURFACE,
                           deco_gases=(b.Gas(0.50),))
-        tissues = lambda: b.Tissues.at_surface(BAKER_SURFACE, b.AIR)
+        def tissues():
+            return b.Tissues.at_surface(BAKER_SURFACE, b.AIR)
+
         ml, _ = b.plan_multilevel([b.Level(45, 25), b.Level(18, 55)], b.Gas(0.21),
                                   plan, start_tissues=tissues())
         square, _ = b.plan_multilevel([b.Level(45, 55)], b.Gas(0.21), plan,

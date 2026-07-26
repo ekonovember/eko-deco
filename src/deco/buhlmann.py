@@ -19,8 +19,9 @@ Units
 from __future__ import annotations
 
 import math
+from collections.abc import Iterable, Sequence
 from dataclasses import dataclass, field
-from typing import Iterable, List, Optional, Sequence, Tuple
+from itertools import pairwise
 
 # -----------------------------------------------------------------------------
 # ZHL-16C constants (16 compartments). N2 and He.
@@ -146,12 +147,12 @@ class Gas:
 
     def __repr__(self) -> str:  # pragma: no cover - cosmetic
         if self.fHe > 0:
-            return f"Trimix {int(round(self.fO2*100))}/{int(round(self.fHe*100))}"
+            return f"Trimix {round(self.fO2*100)}/{round(self.fHe*100)}"
         if abs(self.fO2 - 0.21) < 1e-6:
             return "Air"
         if abs(self.fO2 - 1.0) < 1e-6:
             return "O2"          # what a diver writes on a slate, not "EAN100"
-        return f"EAN{int(round(self.fO2*100))}"
+        return f"EAN{round(self.fO2*100)}"
 
 
 AIR = Gas(0.21)
@@ -167,17 +168,17 @@ O2 = Gas(1.00)
 @dataclass
 class Tissues:
     """16-compartment N2/He loading (partial pressures, bar)."""
-    pN2: List[float] = field(default_factory=lambda: [0.0] * N_COMP)
-    pHe: List[float] = field(default_factory=lambda: [0.0] * N_COMP)
+    pN2: list[float] = field(default_factory=lambda: [0.0] * N_COMP)
+    pHe: list[float] = field(default_factory=lambda: [0.0] * N_COMP)
 
     @classmethod
-    def at_surface(cls, surface_p: float = P_ATM, gas: Gas = AIR) -> "Tissues":
+    def at_surface(cls, surface_p: float = P_ATM, gas: Gas = AIR) -> Tissues:
         """Fully saturated at surface on the given gas (default air)."""
         p_insp_n2 = (surface_p - P_H2O) * gas.fN2
         p_insp_he = (surface_p - P_H2O) * gas.fHe
         return cls(pN2=[p_insp_n2] * N_COMP, pHe=[p_insp_he] * N_COMP)
 
-    def copy(self) -> "Tissues":
+    def copy(self) -> Tissues:
         return Tissues(pN2=list(self.pN2), pHe=list(self.pHe))
 
 
@@ -222,7 +223,7 @@ def update_tissues(tissues: Tissues, gas: Gas,
 # M-values, ceiling, gradient factors
 # -----------------------------------------------------------------------------
 
-def compartment_ab(pN2: float, pHe: float, idx: int) -> Tuple[float, float]:
+def compartment_ab(pN2: float, pHe: float, idx: int) -> tuple[float, float]:
     """Bühlmann combined a/b coefficients weighted by N2/He partial pressure."""
     total = pN2 + pHe
     if total <= 0:
@@ -280,11 +281,11 @@ class DiveSegment:
     depth_end: float
     duration: float
     gas: Gas
-    gf_used: Optional[float] = None  # for stops / ceiling at end
+    gf_used: float | None = None  # for stops / ceiling at end
     # Set on a level that sits shallower than the decompression ceiling at that
     # point (only reachable on a multi-level profile): the ceiling depth in msw.
     # The schedule is still computed — the profile is the diver's to fix.
-    ceiling_m: Optional[float] = None
+    ceiling_m: float | None = None
 
     def as_dict(self) -> dict:
         return {
@@ -306,13 +307,13 @@ class Level:
     runtime  minutes since leaving the surface, at the END of this level
              (descent included — the same meaning `bottom_time` has always had,
              and what MultiDeco / Baker's GFDECO / Subsurface take as input)
-    start    minutes since leaving the surface at which the diver ARRIVES at
-             `depth` (the flat time at this level is then `runtime - start`).
-             The descent/ascent to `depth` runs at the plan's standard rate and
-             finishes exactly at `start`; the diver holds at the PREVIOUS depth
-             (the surface for the first level) until it is time to leave. `None`
-             (the default) means "arrive as soon as the standard-rate transit
-             allows" — i.e. levels are contiguous, the historical behaviour.
+
+    Levels are contiguous: the transit to `depth` runs at the plan's standard
+    rate and starts the moment the previous level ends, so its time is part of
+    this level's runtime. No planner models an arrival time separately — in
+    MultiDeco a level's time is rejected outright if it is "too short … for
+    descent/ascent" — so to loiter shallow before going deeper you add a level
+    for the shallow depth, exactly as you would there.
 
     Gas is always chosen automatically by role: the bottom mix while it is
     breathable, a travel mix where it is not (`DivePlan.descent_gas`). Levels
@@ -320,7 +321,6 @@ class Level:
     """
     depth: float
     runtime: float
-    start: Optional[float] = None
 
     def __post_init__(self) -> None:
         if self.depth < 0:
@@ -328,14 +328,6 @@ class Level:
         if self.runtime <= 0:
             raise ValueError(
                 f"level runtime must be > 0 min (got {self.runtime:g})")
-        if self.start is not None:
-            if self.start < 0:
-                raise ValueError(
-                    f"level start must be >= 0 min (got {self.start:g})")
-            if self.start > self.runtime + 1e-9:
-                raise ValueError(
-                    f"level start ({self.start:g} min) must be <= its runtime "
-                    f"({self.runtime:g} min)")
 
 
 @dataclass
@@ -440,7 +432,7 @@ def _round_up_to_stop(depth: float, interval: float) -> float:
     return math.ceil(depth / interval - 1e-9) * interval
 
 
-def _gas_switch_depths(plan: DivePlan, bottom_gas: Gas) -> List[float]:
+def _gas_switch_depths(plan: DivePlan, bottom_gas: Gas) -> list[float]:
     """Depths (msw) where the breathable-gas choice can change: each gas's
     (stop-rounded) ascent switch depth, its raw MOD at the descent ppO2
     ceiling, and each hypoxic mix's minimum breathable depth."""
@@ -458,9 +450,9 @@ def _gas_switch_depths(plan: DivePlan, bottom_gas: Gas) -> List[float]:
     return sorted(depths)
 
 
-def _move(tissues: Tissues, segs: List[DiveSegment], plan: DivePlan,
+def _move(tissues: Tissues, segs: list[DiveSegment], plan: DivePlan,
           bottom_gas: Gas, from_depth: float, to_depth: float, gas_for,
-          kind: str, p_first_stop: Optional[float]) -> None:
+          kind: str, p_first_stop: float | None) -> None:
     """Change depth continuously from `from_depth` to `to_depth`, splitting into
     sub-segments at gas-switch depths and loading tissues with the gas chosen
     (by `gas_for`) for each sub-segment.
@@ -476,8 +468,8 @@ def _move(tissues: Tissues, segs: List[DiveSegment], plan: DivePlan,
     breaks = [d for d in _gas_switch_depths(plan, bottom_gas)
               if lo + 1e-9 < d < hi - 1e-9]
     seq = [from_depth] + (breaks if descending else breaks[::-1]) + [to_depth]
-    runs: List[Tuple[float, float, Gas]] = []
-    for a, c in zip(seq, seq[1:]):
+    runs: list[tuple[float, float, Gas]] = []
+    for a, c in pairwise(seq):
         gas = gas_for((a + c) / 2.0)
         if runs and runs[-1][2] == gas:
             runs[-1] = (runs[-1][0], c, gas)   # coalesce same-gas sub-segments
@@ -494,9 +486,9 @@ def _move(tissues: Tissues, segs: List[DiveSegment], plan: DivePlan,
 
 
 def plan_dive(bottom_depth: float, bottom_time: float, bottom_gas: Gas,
-              plan: Optional[DivePlan] = None,
-              start_tissues: Optional[Tissues] = None
-              ) -> Tuple[List[DiveSegment], Tissues]:
+              plan: DivePlan | None = None,
+              start_tissues: Tissues | None = None
+              ) -> tuple[list[DiveSegment], Tissues]:
     """Compute a square-profile dive plan with deco stops.
 
     `bottom_time` is the total runtime to leaving the bottom (descent + flat).
@@ -510,21 +502,15 @@ def plan_dive(bottom_depth: float, bottom_time: float, bottom_gas: Gas,
 
 
 def plan_multilevel(levels: Sequence[Level], bottom_gas: Gas,
-                    plan: Optional[DivePlan] = None,
-                    start_tissues: Optional[Tissues] = None
-                    ) -> Tuple[List[DiveSegment], Tissues]:
+                    plan: DivePlan | None = None,
+                    start_tissues: Tissues | None = None
+                    ) -> tuple[list[DiveSegment], Tissues]:
     """Plan a multi-level dive: a sequence of levels, then the deco ascent.
 
     Each `Level.runtime` is the runtime (minutes since leaving the surface) at
     the END of that level, so the levels are cumulative and must increase. The
     diver travels between levels at the plan's descent/ascent rate; the travel
     time is part of the runtime, exactly as on the initial descent.
-
-    A level may also carry an explicit `start` (arrival runtime): the transit to
-    its depth then runs at the standard rate and finishes exactly at `start`,
-    and the diver holds at the PREVIOUS depth (the surface for the first level)
-    until it is time to leave — so `[start, runtime]` is the true flat time at
-    that depth. `start=None` arrives as soon as the transit allows (contiguous).
 
     Gas during the bottom phase is always automatic: the bottom gas, with
     travel mixes substituted where the bottom mix is not breathable — deco
@@ -540,7 +526,7 @@ def plan_multilevel(levels: Sequence[Level], bottom_gas: Gas,
         raise ValueError("a dive needs at least one level")
     if plan is None:
         plan = DivePlan()
-    for i, (prev, cur) in enumerate(zip(levels, levels[1:]), start=2):
+    for i, (prev, cur) in enumerate(pairwise(levels), start=2):
         if cur.runtime <= prev.runtime:
             raise ValueError(
                 f"level {i} runtime ({cur.runtime:g} min) must be later than "
@@ -549,38 +535,23 @@ def plan_multilevel(levels: Sequence[Level], bottom_gas: Gas,
 
     tissues = (start_tissues.copy() if start_tissues
                else Tissues.at_surface(plan.surface_p, AIR))
-    segs: List[DiveSegment] = []
-    descent_gas_for = lambda d: plan.descent_gas(d, bottom_gas)
-    ascent_gas_for = lambda d: plan.best_gas(d, bottom_gas)
+    segs: list[DiveSegment] = []
+    def descent_gas_for(d: float) -> Gas:
+        return plan.descent_gas(d, bottom_gas)
+
+    def ascent_gas_for(d: float) -> Gas:
+        return plan.best_gas(d, bottom_gas)
 
     # ---- levels: travel to each in turn, then hold it until its runtime ------
     run = 0.0
     depth = 0.0
     for i, level in enumerate(levels, start=1):
         going_down = level.depth > depth
-        # Time the standard-rate transit to this level's depth. `start` (if
-        # given) is when the diver ARRIVES here; otherwise arrive as soon as the
-        # transit allows (contiguous, the historical behaviour).
+        # Time the standard-rate transit to this level's depth. Levels are
+        # contiguous: the transit leaves the moment the previous level ends and
+        # its time is billed to this level's runtime.
         rate = plan.descent_rate if going_down else plan.ascent_rate
         transit_t = abs(level.depth - depth) / rate
-        earliest_arrival = run + transit_t
-        arrival = earliest_arrival if level.start is None else level.start
-        if arrival < earliest_arrival - 1e-9:
-            raise ValueError(
-                f"level {i} start ({level.start:g} min) is before the diver can "
-                f"reach {level.depth:g} m at the standard rate "
-                f"(earliest {earliest_arrival:.1f} min)")
-
-        # Hold at the PREVIOUS depth (the surface for level 1) until it is time
-        # to leave, so the transit lands exactly at `start`. With start=None the
-        # wait is zero and this is a no-op — levels stay contiguous.
-        wait = arrival - earliest_arrival
-        if wait > 1e-9:
-            gas_wait = descent_gas_for(depth)
-            p_wait = depth_to_p_amb(depth, plan.surface_p, plan.msw_per_bar)
-            update_tissues(tissues, gas_wait, p_wait, p_wait, wait)
-            segs.append(DiveSegment("bottom", depth, depth, wait, gas_wait))
-            run += wait
 
         # Bottom-phase gas is always automatic: the bottom gas, with a travel
         # mix swapped in where the bottom mix is hypoxic (descent_gas). Deco
@@ -669,9 +640,9 @@ def plan_multilevel(levels: Sequence[Level], bottom_gas: Gas,
 # Convenience: NDL (no-decompression limit) at a given depth on a gas
 # -----------------------------------------------------------------------------
 
-def ndl(depth_m: float, gas: Gas = AIR, plan: Optional[DivePlan] = None,
-        start_tissues: Optional[Tissues] = None,
-        max_min: int = 600) -> Optional[int]:
+def ndl(depth_m: float, gas: Gas = AIR, plan: DivePlan | None = None,
+        start_tissues: Tissues | None = None,
+        max_min: int = 600) -> int | None:
     """Minutes you can stay at `depth_m` (after instantaneous descent) before
     a stop is required at GF-High. Returns None if > max_min."""
     if plan is None:
@@ -718,7 +689,7 @@ def average_depth(segments: Iterable[DiveSegment]) -> float:
     return weighted / total_t if total_t > 0 else 0.0
 
 
-def ceiling_violations(segments: Iterable[DiveSegment]) -> List[DiveSegment]:
+def ceiling_violations(segments: Iterable[DiveSegment]) -> list[DiveSegment]:
     """Levels that sat shallower than the decompression ceiling."""
     return [s for s in segments if s.ceiling_m is not None]
 
@@ -734,7 +705,7 @@ class PpO2Violation:
 
 
 def ppo2_violations(segments: Iterable[DiveSegment],
-                    plan: Optional[DivePlan] = None) -> List[PpO2Violation]:
+                    plan: DivePlan | None = None) -> list[PpO2Violation]:
     """Segments breathed outside the ppO2 window — hyperoxic past the working
     ceiling or hypoxic below ppo2_min.
 
@@ -753,7 +724,7 @@ def ppo2_violations(segments: Iterable[DiveSegment],
     endpoint."""
     if plan is None:
         plan = DivePlan()
-    out: List[PpO2Violation] = []
+    out: list[PpO2Violation] = []
     for s in segments:
         if s.gas in plan.deco_gases:
             hi = plan.ppo2_deco               # deco gas: 1.6 wherever breathed
@@ -775,7 +746,7 @@ def ppo2_violations(segments: Iterable[DiveSegment],
 
 
 def worst_ppo2_violations(segments: Iterable[DiveSegment],
-                          plan: Optional[DivePlan] = None) -> List[PpO2Violation]:
+                          plan: DivePlan | None = None) -> list[PpO2Violation]:
     """`ppo2_violations` reduced to the single worst offence per (gas, kind) —
     what a warning banner should show (air below its MOD flags the descent AND
     the bottom; one line with the deepest ppO2 says everything)."""
@@ -810,7 +781,7 @@ def _cns_rate(po2: float) -> float:
     """CNS clock fraction per minute at a ppO2 (bar)."""
     if po2 <= _CNS_RATE[0][0]:
         return 0.0
-    for (p0, r0), (p1, r1) in zip(_CNS_RATE, _CNS_RATE[1:]):
+    for (p0, r0), (p1, r1) in pairwise(_CNS_RATE):
         if po2 <= p1:
             return r0 + (r1 - r0) * (po2 - p0) / (p1 - p0)
     (p0, r0), (p1, r1) = _CNS_RATE[-2], _CNS_RATE[-1]
@@ -819,7 +790,7 @@ def _cns_rate(po2: float) -> float:
 
 def cns_otu(segments: Iterable[DiveSegment], surface_p: float = P_ATM,
             msw_per_bar: float = MSW_PER_BAR,
-            step: float = 0.5) -> Tuple[float, float]:
+            step: float = 0.5) -> tuple[float, float]:
     """(CNS %, OTU) accumulated over the planned segments.
 
     CNS integrates the NOAA single-exposure clock (`_CNS_RATE`); OTU uses the
@@ -843,9 +814,9 @@ def cns_otu(segments: Iterable[DiveSegment], surface_p: float = P_ATM,
 
 
 def ceiling_profile(segments: Sequence[DiveSegment],
-                    plan: Optional[DivePlan] = None,
-                    start_tissues: Optional[Tissues] = None,
-                    step: float = 0.5) -> List[Tuple[float, float]]:
+                    plan: DivePlan | None = None,
+                    start_tissues: Tissues | None = None,
+                    step: float = 0.5) -> list[tuple[float, float]]:
     """(runtime_min, ceiling_m) samples along a planned dive, for plotting.
 
     Re-walks `segments` with the same tissue math as the planner (Schreiner is
@@ -861,7 +832,7 @@ def ceiling_profile(segments: Sequence[DiveSegment],
     tissues = (start_tissues.copy() if start_tissues
                else Tissues.at_surface(plan.surface_p, AIR))
     bottom_end = _bottom_phase_end(segs)
-    p_first_stop: Optional[float] = None       # unknown until the deco ascent
+    p_first_stop: float | None = None       # unknown until the deco ascent
     out = [(0.0, ceiling_depth(tissues, plan.gf_low,
                                plan.surface_p, plan.msw_per_bar))]
     run = 0.0
@@ -919,7 +890,7 @@ class ContingencyCell:
     than the descent takes)."""
     depth: float
     bottom_time: float
-    segments: Optional[List[DiveSegment]]
+    segments: list[DiveSegment] | None
 
     def text(self) -> str:
         """Wetnotes cell text: stops deep→shallow as 'depth:min', then the TTS
@@ -933,12 +904,12 @@ class ContingencyCell:
 
 
 def contingency_schedules(levels: Sequence[Level], bottom_gas: Gas,
-                          plan: Optional[DivePlan] = None, *,
+                          plan: DivePlan | None = None, *,
                           time_before: int = 1, time_after: int = 1,
                           depth_before: int = 1, depth_after: int = 1,
                           time_step: float = CONTINGENCY_TIME_STEP,
                           depth_step: float = CONTINGENCY_DEPTH_STEP
-                          ) -> List[List[ContingencyCell]]:
+                          ) -> list[list[ContingencyCell]]:
     """Backup "cut table" matrix for a bottom-timer (gauge) diver: schedules for
     the planned dive and its neighbours on a fixed grid.
 
@@ -967,7 +938,7 @@ def contingency_schedules(levels: Sequence[Level], bottom_gas: Gas,
     depths = [d0 + j * depth_step for j in range(-int(depth_before),
                                                  int(depth_after) + 1) if
               d0 + j * depth_step > 0]
-    grid: List[List[ContingencyCell]] = []
+    grid: list[list[ContingencyCell]] = []
     for t in times:
         row = []
         for d in depths:
@@ -993,7 +964,7 @@ class GasPlan:
     divers: int = 1                       # divers sharing the supply in an
                                           # emergency (2 = buddy out of gas,
                                           # shared until the first gas switch)
-    tank_liters: Optional[float] = None   # total cylinder volume, for bar output
+    tank_liters: float | None = None   # total cylinder volume, for bar output
 
     def __post_init__(self) -> None:
         if self.sac <= 0:
@@ -1014,7 +985,7 @@ class GasPlan:
 
 def segment_gas_liters(segments: Iterable[DiveSegment], sac: float,
                        surface_p: float = P_ATM, msw_per_bar: float = MSW_PER_BAR,
-                       kinds: Optional[Tuple[str, ...]] = None) -> float:
+                       kinds: tuple[str, ...] | None = None) -> float:
     """Litres breathed across `segments` at `sac`, using each segment's average
     depth. `kinds` optionally restricts which segment kinds are counted."""
     total = 0.0
@@ -1048,7 +1019,7 @@ def emergency_gas_liters(segments: Iterable[DiveSegment], gas: Gas,
     cylinder, so the rest of the deco is billed once. No switch = shared all
     the way to the surface.
 
-    Known limitation (see investigations/DECISIONS.md #7): the emergency ascent
+    Known limitation (see DECISIONS.md #7): the emergency ascent
     is taken from the *last* level, so on a deep-first multilevel profile
     (a deep level followed by shallower ones) this mixes two moments and can
     UNDERSTATE the true worst case at the deep level. It is a single-square /

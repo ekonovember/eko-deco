@@ -22,25 +22,24 @@ level agrees to machine precision.
 
 from __future__ import annotations
 
-import math
 import os
 import random
 import sys
 import unittest
+from typing import ClassVar
 
 _HERE = os.path.dirname(os.path.abspath(__file__))
-sys.path.insert(0, os.path.abspath(os.path.join(_HERE, "..")))
 sys.path.insert(0, _HERE)
 
-import buhlmann as b
+from deco import buhlmann as b
 
 try:
     import subsurface_deco as sd
     sd.lib()
 except Exception as exc:  # no g++ / build failure — keep the core suite green
-    raise unittest.SkipTest(f"subsurface oracle unavailable: {exc}")
+    raise unittest.SkipTest(f"subsurface oracle unavailable: {exc}") from exc
 
-from subsurface_deco import SubsurfaceDeco, Gas
+from subsurface_deco import Gas, SubsurfaceDeco
 
 SEA = sd.SEAWATER_SALINITY
 FRESH = sd.FRESHWATER_SALINITY
@@ -180,7 +179,7 @@ class TestCeiling(unittest.TestCase):
             d = SubsurfaceDeco()
             for _ in range(rng.randint(1, 6)):
                 amb = d.depth_to_bar(rng.uniform(0.0, 80.0))
-                ge, gs = rng.choice(GAS_PAIRS)
+                ge, _gs = rng.choice(GAS_PAIRS)
                 b.update_tissues(t, ge, amb, amb, float(rng.randint(1, 40)))
             for gf in self.GFS:
                 with self.subTest(trial=trial, gf=gf):
@@ -282,7 +281,7 @@ class TestSchedules(unittest.TestCase):
 
     # name, depth, time, eko gas, eko deco, srf gas, srf deco, gf,
     #   surface_mbar, salinity, tts_tol
-    CASES = [
+    CASES: ClassVar[list] = [
         ("18m/60min air 30/80", 18, 60, EKO_AIR, [], SRF_AIR, [], (30, 80), 1013, SEA, 4.0),
         ("24m/45min air 40/85", 24, 45, EKO_AIR, [], SRF_AIR, [], (40, 85), 1013, SEA, 4.0),
         ("30m/40min EAN32 30/80", 30, 40, b.Gas(0.32), [], Gas(320), [], (30, 80), 1013, SEA, 4.0),
@@ -307,7 +306,7 @@ class TestSchedules(unittest.TestCase):
 
     @staticmethod
     def schedules(case):
-        (name, depth, time, ge, dge, gs, dgs, gf, smb, sal, _) = case
+        (_name, depth, time, ge, dge, gs, dgs, gf, smb, sal, _) = case
         plan = eko_plan(gf, dge, surface_mbar=smb, salinity=sal)
         segs, _ = b.plan_dive(depth, time, ge, plan,
                               start_tissues=surface_tissues(smb))
@@ -352,7 +351,7 @@ class TestMultilevel(unittest.TestCase):
     level-by-level profile (Baker's oracle pins the planner convention)."""
 
     # name, eko levels, oracle levels [(depth, runtime, gas|None)], gf
-    CASES = [
+    CASES: ClassVar[list] = [
         ("45->30->18 air +EAN50",
          [b.Level(45, 25), b.Level(30, 40), b.Level(18, 55)],
          [(45, 25, None), (30, 40, None), (18, 55, None)], (30, 80)),
@@ -416,7 +415,7 @@ class TestMultilevel(unittest.TestCase):
             flat = lv.runtime - (run + travel)
             p = b.depth_to_p_amb(lv.depth, surf, mpb)
             b.update_tissues(eko, EKO_AIR, p, p, flat)
-            oracle.add_flat(lv.depth, SRF_AIR, int(round(flat * 60)))
+            oracle.add_flat(lv.depth, SRF_AIR, round(flat * 60))
             run, depth = lv.runtime, lv.depth
 
         n2, he = oracle.tissues()
@@ -434,7 +433,7 @@ class TestRepetitiveDive(unittest.TestCase):
 
     def test_second_dive_schedule_and_tissues(self):
         plan = eko_plan((30, 80))
-        segs, t = b.plan_dive(30, 30, EKO_AIR, plan,
+        _segs, t = b.plan_dive(30, 30, EKO_AIR, plan,
                               start_tissues=surface_tissues())
         b.update_tissues(t, EKO_AIR, surface_bar(), surface_bar(), 45.0)
         segs2, t2 = b.plan_dive(30, 25, EKO_AIR, plan, start_tissues=t)

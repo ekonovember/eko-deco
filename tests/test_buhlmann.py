@@ -5,13 +5,9 @@ Run with: python -m pytest -q   (or)   python tests/test_buhlmann.py
 from __future__ import annotations
 
 import math
-import os
-import sys
 import unittest
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
-import buhlmann as b
+from deco import buhlmann as b
 
 
 class TestConstants(unittest.TestCase):
@@ -91,7 +87,7 @@ class TestPlan(unittest.TestCase):
 
 class TestCLI(unittest.TestCase):
     def test_parse_gas(self):
-        from cli import parse_gas
+        from deco.cli import parse_gas
         self.assertEqual(parse_gas("air").fO2, 0.21)
         self.assertEqual(parse_gas("ean32").fO2, 0.32)
         self.assertEqual(parse_gas("50").fO2, 0.50)
@@ -101,7 +97,7 @@ class TestCLI(unittest.TestCase):
         self.assertAlmostEqual(g.fN2, 0.44)
 
     def test_parse_level(self):
-        from cli import parse_level
+        from deco.cli import parse_level
         lv = parse_level("45:25")
         self.assertAlmostEqual(lv.depth, 45)
         self.assertAlmostEqual(lv.runtime, 25)
@@ -109,24 +105,23 @@ class TestCLI(unittest.TestCase):
         self.assertAlmostEqual(lv.depth, 120)
         self.assertAlmostEqual(lv.runtime, 20)
 
-    def test_parse_level_with_start_window(self):
-        from cli import parse_level
-        lv = parse_level("16:4-17")
-        self.assertAlmostEqual(lv.depth, 16)
-        self.assertAlmostEqual(lv.start, 4)
-        self.assertAlmostEqual(lv.runtime, 17)
-        # no dash -> contiguous, start is unset
-        self.assertIsNone(parse_level("45:25").start)
+    def test_parse_level_rejects_the_retired_start_window(self):
+        """DEPTH:START-RUNTIME is gone: levels are contiguous, so the transit is
+        part of the runtime (no planner has an arrival time). The old syntax
+        must fail loudly rather than parse into something else."""
+        from deco.cli import parse_level
+        with self.assertRaises(ValueError):
+            parse_level("16:4-17")
 
     def test_parse_level_rejects_junk(self):
-        from cli import parse_level
+        from deco.cli import parse_level
         for spec in ("45", "45:25:50", "45:25:50:9", "deep:25", "45:soon",
                      "16:soon-17", "16:4-late"):
             with self.assertRaises(ValueError, msg=spec):
                 parse_level(spec)
 
     def test_parse_contingency(self):
-        from cli import parse_contingency
+        from deco.cli import parse_contingency
         none4 = (None, None, None, None)
         self.assertEqual(parse_contingency(""), none4)            # bare flag
         self.assertEqual(parse_contingency("2"), (2, None, None, None))
@@ -137,18 +132,19 @@ class TestCLI(unittest.TestCase):
             with self.assertRaises(ValueError, msg=spec):
                 parse_contingency(spec)
 
-    def test_plan_json_carries_warnings_toxicity_and_disclaimer(self):
+    def test_plan_json_carries_warnings_and_toxicity(self):
         import contextlib
         import io
         import json
-        import cli
+
+        from deco import cli
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             rc = cli.main(["plan", "--depth", "70", "--time", "20",
                            "--gas", "air", "--json"])
         self.assertEqual(rc, 0)
         out = json.loads(buf.getvalue())
-        self.assertIn("disclaimer", out)
+        self.assertNotIn("disclaimer", out)
         self.assertTrue(any("ppO2" in w for w in out["warnings"]))
         self.assertTrue(any("density" in w for w in out["warnings"]))
         self.assertGreater(out["cns_pct"], 0)
@@ -158,7 +154,8 @@ class TestCLI(unittest.TestCase):
     def test_plan_missing_config_is_an_error(self):
         import contextlib
         import io
-        import cli
+
+        from deco import cli
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             rc = cli.main(["plan", "/no/such/dive_plan.json"])
@@ -168,7 +165,8 @@ class TestCLI(unittest.TestCase):
     def test_plan_rejects_inverted_gradient_factors(self):
         import contextlib
         import io
-        import cli
+
+        from deco import cli
         err = io.StringIO()
         with contextlib.redirect_stderr(err):
             rc = cli.main(["plan", "--depth", "40", "--time", "20",
@@ -181,7 +179,8 @@ class TestCLI(unittest.TestCase):
         import contextlib
         import io
         import json
-        import cli
+
+        from deco import cli
         buf = io.StringIO()
         with contextlib.redirect_stdout(buf):
             rc = cli.main(["plan", "--depth", "40", "--time", "20",
@@ -477,52 +476,32 @@ class TestMultilevel(unittest.TestCase):
         # descent (2.5 min) is inside level 1's 25 min, not added to it
         self.assertAlmostEqual(bottoms[0].duration, 25.0 - 45 / 18.0, places=6)
 
-    def test_explicit_start_holds_at_previous_depth_then_transits(self):
-        """A level with an explicit start arrives exactly at `start`: the diver
-        waits at the previous depth (the surface here), the descent runs at the
-        standard rate and lands on `start`, and [start, runtime] is the flat
-        time at the depth."""
-        segs, _ = b.plan_multilevel([b.Level(16, 17, start=4)], b.AIR, self.PLAN)
-        wait = segs[0]
-        self.assertEqual((wait.kind, wait.depth_start, wait.depth_end), ("bottom", 0, 0))
-        self.assertAlmostEqual(wait.duration, 4 - 16 / 18.0, places=6)  # surface hold
-        descent = segs[1]
-        self.assertEqual(descent.kind, "descent")
-        self.assertAlmostEqual(descent.duration, 16 / 18.0, places=6)
-        flat = segs[2]
+    def test_levels_are_contiguous_transit_billed_to_the_runtime(self):
+        """No arrival time: the transit to a level leaves the moment the
+        previous level ends and its time comes out of that level's runtime —
+        the MultiDeco/GFDECO/Subsurface convention. A 16 m level to runtime 17
+        is 16/18 min of descent plus the remainder flat, with no hold at 0 m."""
+        segs, _ = b.plan_multilevel([b.Level(16, 17)], b.AIR, self.PLAN)
+        self.assertEqual(segs[0].kind, "descent")           # no surface hold
+        self.assertAlmostEqual(segs[0].duration, 16 / 18.0, places=6)
+        flat = segs[1]
         self.assertEqual((flat.kind, flat.depth_start), ("bottom", 16))
-        self.assertAlmostEqual(flat.duration, 13.0, places=6)   # minutes 4 -> 17
+        self.assertAlmostEqual(flat.duration, 17 - 16 / 18.0, places=6)
 
-    def test_explicit_start_waits_at_the_real_previous_depth(self):
-        """Between two levels the wait happens at the PREVIOUS level's depth, not
-        the surface: an extended stay deep before ascending to the next leg."""
-        levels = [b.Level(40, 20), b.Level(20, 40, start=30)]
-        segs, _ = b.plan_multilevel(levels, b.EAN32, self.PLAN)
-        bottoms = [s for s in segs if s.kind == "bottom"]
-        # 40 m level, then a hold still at 40 m, then the 20 m level
-        self.assertEqual([s.depth_start for s in bottoms[:2]], [40, 40])
-        # arrival at 20 m == start (30): transit 20 m / 10 m/min = 2 min before it
-        run = 0.0
-        for s in segs:
-            if s.depth_start == 20 and s.kind == "bottom":
-                break
-            run += s.duration
-        self.assertAlmostEqual(run, 30.0, places=6)
+    def test_no_duplicate_bottom_segment_at_the_same_depth(self):
+        """Each level contributes exactly one bottom segment, so a schedule can
+        never print the same depth twice in a row (what the retired arrival
+        time used to cause)."""
+        segs, _ = b.plan_multilevel([b.Level(26, 16), b.Level(36, 33)],
+                                    b.EAN32, self.PLAN)
+        depths = [s.depth_start for s in segs if s.kind == "bottom"]
+        self.assertEqual(depths, [26, 36])
 
-    def test_start_none_matches_contiguous(self):
-        """Setting start to the earliest possible arrival is identical to leaving
-        it unset (contiguous)."""
-        auto, _ = b.plan_multilevel([b.Level(45, 25), b.Level(30, 40)],
-                                    b.AIR, self.PLAN)
-        # earliest arrival at 30 m: 25 + (45-30)/10 = 26.5 min
-        explicit, _ = b.plan_multilevel(
-            [b.Level(45, 25), b.Level(30, 40, start=26.5)], b.AIR, self.PLAN)
-        self.assertEqual([s.as_dict() for s in auto],
-                         [s.as_dict() for s in explicit])
-
-    def test_start_before_reachable_is_rejected(self):
+    def test_runtime_shorter_than_the_transit_is_rejected(self):
+        """MultiDeco's "segment time … too short … for descent/ascent": a level
+        whose runtime cannot cover the transit is an error, not a silent hold."""
         with self.assertRaises(ValueError):   # 16 m needs 0.9 min to reach
-            b.plan_multilevel([b.Level(16, 17, start=0.5)], b.AIR, self.PLAN)
+            b.plan_multilevel([b.Level(16, 0.5)], b.AIR, self.PLAN)
 
     def test_going_shallow_shortens_the_deco(self):
         deep, _ = b.plan_multilevel([b.Level(45, 55)], b.AIR, self.PLAN)
@@ -886,13 +865,10 @@ class TestDomainValidation(unittest.TestCase):
     def test_level_surface_depth_allowed(self):
         b.Level(0.0, 5.0)                      # safety stop at the surface: fine
 
-    def test_level_rejects_start_after_runtime(self):
-        with self.assertRaises(ValueError):
-            b.Level(16.0, 17.0, start=20.0)
-
-    def test_level_rejects_negative_start(self):
-        with self.assertRaises(ValueError):
-            b.Level(16.0, 17.0, start=-1.0)
+    def test_level_has_no_arrival_time(self):
+        """Levels are depth + cumulative runtime, nothing else."""
+        with self.assertRaises(TypeError):
+            b.Level(16.0, 17.0, start=4.0)
 
     def test_plan_rejects_nonpositive_rates_and_intervals(self):
         for kw in ({"ascent_rate": 0.0}, {"descent_rate": 0.0},

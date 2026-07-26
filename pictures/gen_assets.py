@@ -1,13 +1,18 @@
 """Regenerate the branding assets: icon.png, icon.ico, social_preview.png.
 
+The window/taskbar icons are package data and are written into
+``src/deco/assets/`` so they ship in the wheel; ``social_preview.png`` stays in
+``pictures/`` with the README artwork.
+
 Dev-only (needs matplotlib + Pillow, which are NOT runtime deps of the app);
 run from the repo root: python pictures/gen_assets.py. The generated files are
 committed, so this only needs re-running when the branding changes.
 """
 import io
 
-import numpy as np
 import matplotlib
+import numpy as np
+
 matplotlib.use("Agg")
 from matplotlib.colors import to_rgb
 from matplotlib.figure import Figure
@@ -79,13 +84,13 @@ def render_icon(px: int) -> Image.Image:
     return Image.open(buf).convert("RGBA")
 
 
-render_icon(512).save("pictures/icon.png")
+render_icon(512).save("src/deco/assets/icon.png")
 # Assemble the .ico from natively-rendered frames, largest first (the ICO plugin
 # keeps each appended image at its own native size — a small base image would
 # otherwise clamp every frame down to its size).
 _ico_sizes = [256, 128, 64, 48, 32, 24, 16]
 _frames = [render_icon(s) for s in _ico_sizes]
-_frames[0].save("pictures/icon.ico", format="ICO", append_images=_frames[1:])
+_frames[0].save("src/deco/assets/icon.ico", format="ICO", append_images=_frames[1:])
 
 # ---- GitHub social preview (1280x640) ----
 fig = Figure(figsize=(12.8, 6.4), dpi=100)
@@ -103,7 +108,7 @@ ax.text(0.40, 0.62, "eko-deco", ha="left", va="center", fontsize=88,
 ax.text(0.5, 0.41, "Bühlmann ZHL-16C + gradient factors + rock bottom",
         ha="center", va="center", fontsize=28, color="#d0d0d0",
         family="sans-serif")
-ax.text(0.5, 0.33, "educational dive-deco planner in pure Python — "
+ax.text(0.5, 0.33, "dive-deco planner in pure Python — "
                    "cross-checked against Subsurface and Baker's GFDECO",
         ha="center", va="center", fontsize=17, color="#8a8a8a",
         family="sans-serif")
@@ -114,7 +119,9 @@ prof_d = [0, 0.75, 0.75, 0.95, 0.95, 0.55, 0.55, 0.35, 0.35, 0.20, 0]
 ceil_t = [0.18, 0.30, 0.45, 0.60, 0.75, 0.90, 0.97]
 ceil_d = [0.05, 0.22, 0.38, 0.42, 0.30, 0.12, 0]
 y0, h = 0.03, 0.20                       # strip at the bottom of the card
-to_y = lambda d: y0 + (1 - d) * h
+def to_y(d):
+    return y0 + (1 - d) * h
+
 ax.plot([t * 0.92 + 0.04 for t in prof_t], [to_y(d) for d in prof_d],
         color=BLUE, linewidth=3, solid_capstyle="round")
 ax.plot([t * 0.92 + 0.04 for t in ceil_t], [to_y(d) for d in ceil_d],

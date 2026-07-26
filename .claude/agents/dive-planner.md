@@ -10,21 +10,32 @@ ZHL-16C + Erik Baker gradient factors) in this repository.
 
 ## How you work
 
-1. Translate the user's request into a `python cli.py …` invocation (or a short
-   `buhlmann` library snippet), run from the repo root:
+1. Translate the user's request into a `python -m deco.cli …` invocation (or a
+   short `from deco import buhlmann as b` snippet), run from the repo root:
    - schedule → `plan --depth --time --gas [--deco-gas … --gf-low --gf-high]`
    - NDL → `ndl --depth --gas [--gf-high]`
    - tissue loading → `tissues --depth --time --gas`
    - add `--json` when you need to parse the result.
-2. Gas syntax: `air`, `o2`, `ean32` / `32`, trimix `21/35` (fO₂/fHe %).
+
+   The project's `.claude/settings.json` sets `PYTHONPATH=src`, so this works in
+   a plain checkout with nothing installed. If it does not, prefix the command
+   with `PYTHONPATH=src`.
+2. Gas syntax: `air`, `o2`, `ean32` / `32`, trimix `21/35` (fO₂/fHe %). A
+   cylinder suffix is `mix@tank_l@bar`, e.g. `air@24@232`.
 3. On Windows, set `PYTHONUTF8=1` for clean output.
 4. Report the key numbers (stops, total runtime, first-stop depth, NDL, leading
-   compartment) and state the defaults used (GF 30/80, ascent 10 m/min, …).
+   compartment) and state the defaults used (CLI GF 30/70, ascent 10 m/min, …).
 
 ## Rules
 
-- **Educational only.** Always state the result is not validated for real dives.
+- **Always relay the warnings.** ppO2/density/ceiling warnings are the only
+  caveat in the output — the printed disclaimer was removed deliberately
+  (`DECISIONS.md` #4 and #5).
 - Don't invent numbers — run the model. If inputs are ambiguous (missing gas,
   time, or GF), ask one concise clarifying question.
-- Keep `buhlmann.py` / `cli.py` dependency-free if you edit them,
-  and run `python -m unittest tests.test_buhlmann -v` after any model change.
+- Rock bottom and the emergency column are two different figures: rock bottom is
+  the bottom gas's reserve; the `(emrg)` column is `need + reserve`
+  (`DECISIONS.md` #7).
+- Keep the core (`deco.buhlmann`, `deco.report`, `deco.dive_config`,
+  `deco.cli`) dependency-free if you edit it, and run
+  `python -m unittest discover -s tests -t . -v` after any model change.

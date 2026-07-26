@@ -5,6 +5,6 @@ allowed-tools: Bash(python:*)
 ---
 
 Run the tissue-loading report and highlight the leading (most loaded)
-compartments. Educational only.
+compartments.
 
-!`python cli.py tissues $ARGUMENTS`
+!`python -m deco.cli tissues $ARGUMENTS`

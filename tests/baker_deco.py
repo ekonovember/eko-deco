@@ -11,13 +11,14 @@ applies a change when reaching the first stop at or above that depth).
 
 from __future__ import annotations
 
+import contextlib
 import os
 import re
 import shutil
 import subprocess
 import tempfile
+from collections.abc import Sequence
 from dataclasses import dataclass
-from typing import List, Optional, Sequence, Tuple
 
 _DIR = os.path.join(os.path.dirname(os.path.abspath(__file__)), "baker_oracle")
 # build.sh is a convenience for humans; the build below is driven from Python so
@@ -61,16 +62,16 @@ class BakerGas:
 
 @dataclass
 class BakerResult:
-    stops: List[Tuple[float, float]]   # (depth m, minutes) deepest first
+    stops: list[tuple[float, float]]   # (depth m, minutes) deepest first
     tts: float                         # minutes, leaving bottom -> surface
-    first_stop: Optional[float]
+    first_stop: float | None
     raw_output: str
 
 
 def plan(bottom_depth: float, bottom_time: float, gases: Sequence[BakerGas],
          gf_low: float, gf_high: float, descent_rate: float = 18.0,
          ascent_rate: float = 10.0, step_size: float = 3.0,
-         last_stop_step: Optional[float] = None,
+         last_stop_step: float | None = None,
          min_stop_time: float = 1.0) -> BakerResult:
     """Run GFDECO for a square profile — a one-level dive."""
     return plan_levels([(bottom_depth, bottom_time, 1)], gases, gf_low, gf_high,
@@ -78,11 +79,11 @@ def plan(bottom_depth: float, bottom_time: float, gases: Sequence[BakerGas],
                        min_stop_time)
 
 
-def plan_levels(levels: Sequence[Tuple[float, float, int]],
+def plan_levels(levels: Sequence[tuple[float, float, int]],
                 gases: Sequence[BakerGas],
                 gf_low: float, gf_high: float, descent_rate: float = 18.0,
                 ascent_rate: float = 10.0, step_size: float = 3.0,
-                last_stop_step: Optional[float] = None,
+                last_stop_step: float | None = None,
                 min_stop_time: float = 1.0) -> BakerResult:
     """Run GFDECO for a multi-level profile.
 
@@ -174,7 +175,7 @@ _SEG_RE = re.compile(r"^\s*\d+\s+(-?[\d.]+|[\d.]+)\s+([\d.]+)\s+\|")
 
 def _parse(out: str, bottom_time: float) -> BakerResult:
     in_deco = False
-    stops: List[Tuple[float, float]] = []
+    stops: list[tuple[float, float]] = []
     max_run = bottom_time
     for line in out.splitlines():
         if "DECOMPRESSION PROFILE" in line:
@@ -184,10 +185,8 @@ def _parse(out: str, bottom_time: float) -> BakerResult:
             continue
         m = _SEG_RE.match(line)
         if m:
-            try:
+            with contextlib.suppress(ValueError):
                 max_run = max(max_run, float(m.group(2)))
-            except ValueError:
-                pass
         s = _STOP_RE.search(line)
         if s and "Descent" not in line:
             depth, minutes = float(s.group(1)), float(s.group(2))

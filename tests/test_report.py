@@ -1,14 +1,10 @@
 """Tests for the shared report layer (report.py)."""
 from __future__ import annotations
 
-import os
-import sys
 import unittest
 
-sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..")))
-
-import buhlmann as b
-import report as rp
+from deco import buhlmann as b
+from deco import report as rp
 
 
 class TestAggregateBanks(unittest.TestCase):
@@ -97,6 +93,33 @@ class TestWarnings(unittest.TestCase):
         res = rp.compute_plan_result([b.Level(30.0, 20.0)], b.AIR,
                                      b.DivePlan())
         self.assertEqual(res.warnings, [])
+
+
+class TestRuntimeConvention(unittest.TestCase):
+    """`runtime_min` renders a runtime the way a schedule shows it. The values
+    below are transcribed from a real MultiDeco 4.26 plan export (one row per
+    segment, true runtime → the integer MultiDeco prints in parentheses): every
+    row is the floor, never a round. Both front ends render runtimes through
+    this helper, so the cards cannot drift from the planner the schedules are
+    cross-checked against."""
+
+    def test_matches_the_multideco_export(self):
+        for true_run, shown in [(1.611, 1), (41.000, 41), (43.875, 43),
+                                (44.008, 44), (50.440, 50), (50.870, 50)]:
+            self.assertEqual(rp.runtime_min(true_run), shown,
+                             msg=f"{true_run} min")
+
+    def test_truncates_rather_than_rounds(self):
+        # .5 and .9 both stay on the minute already reached — a round() here
+        # would advance the runtime past a stop the diver has not finished.
+        self.assertEqual(rp.runtime_min(34.5), 34)
+        self.assertEqual(rp.runtime_min(39.9), 39)
+
+    def test_exact_minutes_survive_float_error(self):
+        # A runtime that is exactly 33 must never print 32 because the segment
+        # durations summed to 32.999999999999996.
+        self.assertEqual(rp.runtime_min(33.0), 33)
+        self.assertEqual(rp.runtime_min(32.999999999999996), 33)
 
 
 class TestPlanResult(unittest.TestCase):

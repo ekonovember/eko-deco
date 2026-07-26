@@ -8,8 +8,8 @@ re-derive them.
 
 Design rules (see CLAUDE.md):
 * stdlib only — this module sits between ``buhlmann`` and the front ends;
-* warnings are load-bearing: `PlanResult.warnings` must be surfaced, with the
-  educational disclaimer, by every renderer;
+* warnings are load-bearing: `PlanResult.warnings` must be surfaced by every
+  renderer;
 * gases are identified by the frozen ``Gas`` value itself (equality/hash),
   never by its display ``repr`` — two mixes that round to the same label must
   not merge their accounting.
@@ -17,15 +17,27 @@ Design rules (see CLAUDE.md):
 
 from __future__ import annotations
 
+import math
+from collections.abc import Sequence
 from dataclasses import dataclass, field
-from typing import Dict, List, Optional, Sequence, Tuple
+from typing import overload
 
-import buhlmann as b
-
-DISCLAIMER = "Educational model — NOT validated for planning real dives."
+from deco import buhlmann as b
 
 #: Default cylinder fill pressure (bar) when none is given.
 DEFAULT_FILL_BAR = 232.0
+
+
+def runtime_min(minutes: float) -> int:
+    """A runtime as a schedule shows it: truncated to whole minutes.
+
+    This is MultiDeco's convention, verified against a real export — its plan
+    prints the runtime in parentheses and every row is the floor of the true
+    value (1.61 → 1, 43.875 → 43, 44.008 → 44, 50.44 → 50, 50.87 → 50). Both
+    front ends render runtimes through here so they cannot drift from each
+    other or from the planner the schedules are cross-checked against.
+    """
+    return math.floor(minutes + 1e-9)
 
 
 # -----------------------------------------------------------------------------
@@ -33,7 +45,7 @@ DEFAULT_FILL_BAR = 232.0
 # -----------------------------------------------------------------------------
 
 def warning_lines(segments: Sequence[b.DiveSegment], plan: b.DivePlan,
-                  bottom_gas: b.Gas, max_depth_m: float) -> List[str]:
+                  bottom_gas: b.Gas, max_depth_m: float) -> list[str]:
     """The load-bearing warning texts for a planned dive: ceiling violations,
     worst ppO2 offences, and the gas-density ceiling. One string per warning,
     identical wording in every front end."""
@@ -70,14 +82,14 @@ class Bank:
     pressure_bar: float
 
 
-def aggregate_banks(gases: Sequence[Tuple[str, b.Gas, float, float]]
-                    ) -> List[Bank]:
+def aggregate_banks(gases: Sequence[tuple[str, b.Gas, float, float]]
+                    ) -> list[Bank]:
     """Aggregate ``(role, Gas, tank_l, pressure_bar)`` rows by exact mix
     (``Gas`` equality, not display label), preserving first-seen order."""
-    order: List[b.Gas] = []
-    tank: Dict[b.Gas, float] = {}
-    press: Dict[b.Gas, float] = {}
-    role: Dict[b.Gas, str] = {}
+    order: list[b.Gas] = []
+    tank: dict[b.Gas, float] = {}
+    press: dict[b.Gas, float] = {}
+    role: dict[b.Gas, str] = {}
     for r, g, tk, pr in gases:
         if g not in tank:
             order.append(g)
@@ -104,21 +116,21 @@ class CylinderNeed:
     pressure_bar: float
 
     @property
-    def bar_used(self) -> Optional[float]:
+    def bar_used(self) -> float | None:
         return self.liters / self.tank_l if self.tank_l > 0 else None
 
     @property
-    def bar_used_emergency(self) -> Optional[float]:
+    def bar_used_emergency(self) -> float | None:
         return self.liters_emergency / self.tank_l if self.tank_l > 0 else None
 
     @property
-    def bar_left(self) -> Optional[float]:
+    def bar_left(self) -> float | None:
         if self.tank_l > 0 and self.pressure_bar > 0:
             return self.pressure_bar - self.liters / self.tank_l
         return None
 
     @property
-    def bar_left_emergency(self) -> Optional[float]:
+    def bar_left_emergency(self) -> float | None:
         if self.tank_l > 0 and self.pressure_bar > 0:
             return self.pressure_bar - self.liters_emergency / self.tank_l
         return None
@@ -140,18 +152,18 @@ class CylinderNeed:
 class GasReport:
     """Per-mix consumption plus the rock-bottom (minimum gas) reserve."""
     plan: b.GasPlan
-    cylinders: List[CylinderNeed]
+    cylinders: list[CylinderNeed]
     rock_bottom_l: float
     back_tank_l: float
     back_pressure_bar: float
 
     @property
-    def rock_bottom_bar(self) -> Optional[float]:
+    def rock_bottom_bar(self) -> float | None:
         return (self.rock_bottom_l / self.back_tank_l
                 if self.back_tank_l > 0 else None)
 
     @property
-    def turn_pressure_bar(self) -> Optional[float]:
+    def turn_pressure_bar(self) -> float | None:
         """Half the usable gas above rock bottom, from the fill — None when
         rock bottom is not expressible in bar or exceeds the fill."""
         rb = self.rock_bottom_bar
@@ -161,19 +173,39 @@ class GasReport:
         return self.back_pressure_bar - usable / 2.0 if usable > 0 else None
 
 
+@overload
 def gas_report(segments: Sequence[b.DiveSegment],
-               bottom_gas: b.Gas, gas_plan: Optional[b.GasPlan],
-               gases: Sequence[Tuple[str, b.Gas, float, float]],
+               bottom_gas: b.Gas, gas_plan: b.GasPlan,
+               gases: Sequence[tuple[str, b.Gas, float, float]],
+               surface_p: float = ...,
+               msw_per_bar: float = ...) -> GasReport: ...
+
+
+@overload
+def gas_report(segments: Sequence[b.DiveSegment],
+               bottom_gas: b.Gas, gas_plan: None,
+               gases: Sequence[tuple[str, b.Gas, float, float]],
+               surface_p: float = ...,
+               msw_per_bar: float = ...) -> None: ...
+
+
+def gas_report(segments: Sequence[b.DiveSegment],
+               bottom_gas: b.Gas, gas_plan: b.GasPlan | None,
+               gases: Sequence[tuple[str, b.Gas, float, float]],
                surface_p: float = b.P_ATM,
-               msw_per_bar: float = b.MSW_PER_BAR) -> Optional[GasReport]:
+               msw_per_bar: float = b.MSW_PER_BAR) -> GasReport | None:
     """Per-mix need/have accounting for a planned dive, or None without a
     ``GasPlan``. Mixes appear in the order they are first breathed; same-mix
-    cylinders act as one bank (`aggregate_banks`)."""
+    cylinders act as one bank (`aggregate_banks`).
+
+    Overloaded so a caller that *has* a ``GasPlan`` (the GUI always does) gets
+    a plain ``GasReport`` back and does not have to re-prove non-None at every
+    field access."""
     if gas_plan is None:
         return None
     banks = {bk.gas: bk for bk in aggregate_banks(gases)}
-    cylinders: List[CylinderNeed] = []
-    seen: List[b.Gas] = []
+    cylinders: list[CylinderNeed] = []
+    seen: list[b.Gas] = []
     for s in segments:
         if s.gas in seen:
             continue
@@ -209,12 +241,12 @@ def gas_report(segments: Sequence[b.DiveSegment],
 @dataclass
 class PlanResult:
     """Everything a front end needs to render one planned dive. Computed once
-    by `compute_plan_result`; renderers must surface `warnings` and the
-    `DISCLAIMER` on anything that looks like a schedule."""
-    levels: List[b.Level]
+    by `compute_plan_result`; renderers must surface `warnings` on anything
+    that looks like a schedule."""
+    levels: list[b.Level]
     bottom_gas: b.Gas
     plan: b.DivePlan
-    segments: List[b.DiveSegment]
+    segments: list[b.DiveSegment]
     tissues: b.Tissues
     max_depth_m: float
     avg_depth_m: float
@@ -225,16 +257,16 @@ class PlanResult:
     otu: float
     end_m: float
     density_g_l: float
-    warnings: List[str] = field(default_factory=list)
-    gas: Optional[GasReport] = None
-    contingency: Optional[List[List[b.ContingencyCell]]] = None
+    warnings: list[str] = field(default_factory=list)
+    gas: GasReport | None = None
+    contingency: list[list[b.ContingencyCell]] | None = None
 
 
 def compute_plan_result(levels: Sequence[b.Level], bottom_gas: b.Gas,
                         plan: b.DivePlan,
-                        gas_plan: Optional[b.GasPlan] = None,
-                        gases: Sequence[Tuple[str, b.Gas, float, float]] = (),
-                        contingency: Optional[Tuple[int, int, int, int]] = None
+                        gas_plan: b.GasPlan | None = None,
+                        gases: Sequence[tuple[str, b.Gas, float, float]] = (),
+                        contingency: tuple[int, int, int, int] | None = None
                         ) -> PlanResult:
     """Plan the dive and derive every shared figure: schedule, warnings,
     CNS/OTU, END/density, gas accounting, and (optionally) the contingency

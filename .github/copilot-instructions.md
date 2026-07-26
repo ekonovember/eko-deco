@@ -6,15 +6,26 @@ When you start `copilot` in this folder, Copilot CLI auto-loads this file **plus
 
 **Full project guide:** [`../CLAUDE.md`](../CLAUDE.md) — module map, commands,
 conventions, and safety scope. It is the single source of truth.
+**Why things are the way they are:** [`../DECISIONS.md`](../DECISIONS.md) — a
+numbered decision log the code cites (`see DECISIONS.md #7`). Check it before
+changing model math, output, or the dependency policy.
 
 ## Quick facts
 
-- Educational Bühlmann ZHL-16C + gradient-factor dive calculator. **Not for real
-  dives** — keep that disclaimer in any schedule/NDL/ceiling output.
-- Python 3.10+ (works on 3.14). Core (`buhlmann.py`, `cli.py`)
-  is dependency-free; only `app.py` needs matplotlib/tkinter. Don't add deps to the core.
-- CLI: `python cli.py {plan|ndl|tissues} … [--json]`.
-- Run tests after any model-math change: `python -m unittest tests.test_buhlmann -v`.
+- Bühlmann ZHL-16C + gradient-factor dive calculator. Output carries no printed
+  disclaimer (removed deliberately, DECISIONS #5) — the ppO2/density/ceiling
+  **warnings** are the safety surface instead (DECISIONS #4), so every
+  schedule/NDL/ceiling path must show them.
+- Python 3.10+ (works on 3.14). src layout: the package is `src/deco/`.
+  The core (`deco.buhlmann`, `deco.report`, `deco.dive_config`, `deco.cli`) is
+  dependency-free; only `deco.app` needs matplotlib/tkinter. Don't add deps to
+  the core (DECISIONS #1).
+- CLI: `deco {plan|ndl|tissues} … [--json]` (or `python -m deco.cli …`).
+  GUI: `deco-gui`.
+- Run the suite after any model-math change:
+  `python -m unittest discover -s tests -t .` — the `-t .` matters, it is what
+  puts `src/` on the path.
+- `ruff check .` and `mypy` are clean and CI enforces both.
 - Windows: set `PYTHONUTF8=1` for correct `Bühlmann` / subscript output.
 
 ## Skills, commands, agents

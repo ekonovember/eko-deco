@@ -1,0 +1,35 @@
+# Optional: `pip install pre-commit && pre-commit install`.
+# CI runs the same checks, so this only shortens the feedback loop.
+#
+# Deliberately NO auto-formatter. Much of this codebase is hand-aligned —
+# the schedule tables, the ZHL-16C coefficient block, the wetnotes card — and
+# a formatter would flatten alignment that is there to be read. `ruff check`
+# polices correctness and imports; layout stays a human decision.
+repos:
+  - repo: https://github.com/astral-sh/ruff-pre-commit
+    rev: v0.14.5
+    hooks:
+      - id: ruff
+        args: [--fix]
+
+  - repo: https://github.com/pre-commit/pre-commit-hooks
+    rev: v6.0.0
+    hooks:
+      - id: end-of-file-fixer
+        exclude: ^tests/(subsurface|baker)_oracle/
+      - id: trailing-whitespace
+        exclude: ^tests/(subsurface|baker)_oracle/
+      - id: check-json
+      - id: check-yaml
+      - id: check-merge-conflict
+      - id: check-added-large-files
+        args: [--maxkb=1024]
+
+  - repo: local
+    hooks:
+      - id: unittest
+        name: unittest (core suite, stdlib only)
+        entry: python -m unittest discover -s tests -t .
+        language: system
+        pass_filenames: false
+        types: [python]

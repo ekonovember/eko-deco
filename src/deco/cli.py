@@ -2,26 +2,22 @@
 
 Examples
 --------
-    python cli.py plan --depth 30 --time 25 --gas air
-    python cli.py plan --depth 45 --time 25 --gas 21/35 --deco-gas 50 --deco-gas 100
-    python cli.py plan --depth 60 --time 25 --gas 10/70 --travel-gas 35/25 --deco-gas 50 --sac 18
-    python cli.py ndl --depth 30 --gas air
-    python cli.py tissues --depth 30 --time 25 --gas air
+    deco plan --depth 30 --time 25 --gas air
+    deco plan --depth 45 --time 25 --gas 21/35 --deco-gas 50 --deco-gas 100
+    deco plan --depth 60 --time 25 --gas 10/70 --travel-gas 35/25 --deco-gas 50 --sac 18
+    deco ndl --depth 30 --gas air
+    deco tissues --depth 30 --time 25 --gas air
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
-from typing import List, Optional
 
-import buhlmann as b
-import dive_config as dc
-import report as rp
-
-DISCLAIMER = rp.DISCLAIMER
+from deco import buhlmann as b
+from deco import dive_config as dc
+from deco import report as rp
 
 
 def _positive_float(s: str) -> float:
@@ -73,45 +69,30 @@ def parse_gas_spec(spec: str):
 
 
 def parse_level(spec: str) -> b.Level:
-    """Parse a level as 'DEPTH:RUNTIME' or 'DEPTH:START-RUNTIME'.
+    """Parse a level as 'DEPTH:RUNTIME', e.g. '45:25'.
 
-    e.g. '45:25' (arrive as soon as the descent allows, hold to runtime 25) or
-    '16:4-17' (arrive at 16 m at minute 4, hold there until minute 17 — the
-    descent runs at the standard rate and lands exactly at minute 4, the diver
-    waiting at the previous depth until then).
-
-    RUNTIME is the runtime in minutes at the END of the level (cumulative,
-    descent included); the optional START is the runtime the diver arrives at
-    the depth. Gas is chosen automatically by role — levels are pure depth/time
-    periods."""
+    RUNTIME is the runtime in minutes at the END of the level — cumulative,
+    descent included. Levels are contiguous: the transit to the depth runs at
+    the standard rate and its time is part of that runtime. Gas is chosen
+    automatically by role — levels are pure depth/time periods."""
     parts = spec.split(":")
     if len(parts) != 2:
         raise ValueError(
-            f"level '{spec}': expected DEPTH:RUNTIME or DEPTH:START-RUNTIME, "
-            f"e.g. 45:25 or 16:4-17")
-    start: Optional[float] = None
+            f"level '{spec}': expected DEPTH:RUNTIME, e.g. 45:25")
     try:
-        depth = float(parts[0])
-        if "-" in parts[1]:
-            s, e = parts[1].split("-", 1)
-            start, runtime = float(s), float(e)
-        else:
-            runtime = float(parts[1])
-    except ValueError:
+        depth, runtime = float(parts[0]), float(parts[1])
+    except ValueError as e:
         raise ValueError(
-            f"level '{spec}': depth, start and runtime must be numbers")
-    return b.Level(depth, runtime, start=start)
+            f"level '{spec}': depth and runtime must be numbers") from e
+    return b.Level(depth, runtime)
 
 
 def _level_dict(l: b.Level) -> dict:
-    """Serialize a Level to the config/JSON shape, omitting an unset start."""
-    d = {"depth_m": l.depth, "runtime_min": l.runtime}
-    if l.start is not None:
-        d["start_min"] = l.start
-    return d
+    """Serialize a Level to the config/JSON shape."""
+    return {"depth_m": l.depth, "runtime_min": l.runtime}
 
 
-def parse_contingency(spec: str):
+def parse_contingency(spec: str) -> tuple[int | None, int | None, int | None, int | None]:
     """Parse a cut-table step-count spec 'TB[:TA[:DB[:DA]]]' — bottom-time rows
     3 min shorter/longer, depth columns 3 m shallower/deeper — e.g. '1:2:0:1'.
     Empty parts (and the empty string, from a bare --contingency) mean "use the
@@ -120,22 +101,24 @@ def parse_contingency(spec: str):
     if len(parts) > 4:
         raise ValueError(f"contingency '{spec}': expected TB[:TA[:DB[:DA]]], "
                          "e.g. 1 or 1:2:0:1")
-    counts = []
+    counts: list[int | None] = []
     for p in parts + [""] * (4 - len(parts)):
         if not p.strip():
             counts.append(None)
             continue
         try:
             n = int(p)
-        except ValueError:
-            raise ValueError(f"contingency '{spec}': step counts must be integers")
+        except ValueError as e:
+            raise ValueError(
+                f"contingency '{spec}': step counts must be integers") from e
         if n < 0:
             raise ValueError(f"contingency '{spec}': step counts must be >= 0")
         counts.append(n)
-    return tuple(counts)
+    tb, ta, db, da = counts
+    return tb, ta, db, da
 
 
-def _args_levels(args) -> List[b.Level]:
+def _args_levels(args) -> list[b.Level]:
     """Levels from --level (repeatable), or the --depth/--time shorthand."""
     if args.level:
         return [parse_level(spec) for spec in args.level]
@@ -185,7 +168,7 @@ def _config_from_args(args) -> dict:
     automatically by role, so no per-level gas references are written."""
     _gp, gases = _args_gas_context(args)
     sac = args.sac if args.sac is not None else 20.0
-    counts = (None, None, None, None)
+    counts: tuple[int | None, ...] = (None, None, None, None)
     if args.contingency is not None:
         counts = parse_contingency(args.contingency)
     c_default = dc.default_config()["contingency"]
@@ -208,7 +191,7 @@ def _config_from_args(args) -> dict:
         "ppo2_deco": args.ppo2_deco,
         "ppo2_min": args.ppo2_min,
         "contingency": {k: (n if n is not None else c_default[k])
-                        for k, n in zip(dc.CONTINGENCY_KEYS, counts)},
+                        for k, n in zip(dc.CONTINGENCY_KEYS, counts, strict=True)},
         "gases": gas_entries,
     }
 
@@ -283,9 +266,10 @@ def _contingency_output(grid, planned_depth: float, planned_time: float):
     depth variants, each cell the stop schedule as 'depth:min' pairs plus the
     TTS rounded up to whole minutes, the wetnotes way ('no deco' when clean,
     'n/a' when unplannable); '*' marks the planned row and column."""
-    data = {"time_step_min": b.CONTINGENCY_TIME_STEP,
-            "depth_step_m": b.CONTINGENCY_DEPTH_STEP,
-            "depths_m": [c.depth for c in grid[0]], "rows": []}
+    rows: list[dict] = []
+    data: dict = {"time_step_min": b.CONTINGENCY_TIME_STEP,
+                  "depth_step_m": b.CONTINGENCY_DEPTH_STEP,
+                  "depths_m": [c.depth for c in grid[0]], "rows": rows}
     for row in grid:
         cells = []
         for c in row:
@@ -297,13 +281,11 @@ def _contingency_output(grid, planned_depth: float, planned_time: float):
                 entry["tts_min"] = round(b.time_to_surface(c.segments), 2)
                 entry["runtime_min"] = round(b.total_runtime(c.segments), 2)
             cells.append(entry)
-        data["rows"].append({"bottom_time_min": row[0].bottom_time,
-                             "cells": cells})
+        rows.append({"bottom_time_min": row[0].bottom_time, "cells": cells})
 
     lines = ["", "Contingency cut table (square profile at max depth, steps "
                  f"{b.CONTINGENCY_TIME_STEP:g} min × {b.CONTINGENCY_DEPTH_STEP:g}"
-                 " m, * = planned; cell: stop depth:min · TTS rounded UP) — "
-                 "educational, NOT dive-safe:"]
+                 " m, * = planned; cell: stop depth:min · TTS rounded UP):"]
     heads = [f"{c.depth:g} m" + ("*" if abs(c.depth - planned_depth) < 1e-9
                                  else "") for c in grid[0]]
     texts = [[c.text() for c in row] for row in grid]
@@ -313,7 +295,7 @@ def _contingency_output(grid, planned_depth: float, planned_time: float):
     lines.append((f"    {corner:<11}"
                   + "  ".join(f"{heads[j]:<{widths[j]}}"
                               for j in range(len(heads)))).rstrip())
-    for row, txt in zip(grid, texts):
+    for row, txt in zip(grid, texts, strict=True):
         label = f"{row[0].bottom_time:g}′" + (
             "*" if abs(row[0].bottom_time - planned_time) < 1e-9 else "")
         lines.append((f"    {label:<11}"
@@ -360,7 +342,7 @@ def cmd_plan(args) -> int:
             return 2
         gf_low, gf_high = args.gf_low, args.gf_high
 
-    counts4 = None
+    counts4: tuple[int, int, int, int] | None = None
     if args.contingency is not None:
         try:
             counts = parse_contingency(args.contingency)
@@ -368,8 +350,9 @@ def cmd_plan(args) -> int:
             print(f"plan: {e}", file=sys.stderr)
             return 2
         base = dc.contingency_of(cfg if load_path else {})
-        counts4 = tuple(base[i] if counts[i] is None else counts[i]
-                        for i in range(4))
+        tb, ta, db, da = (dflt if given is None else given
+                          for dflt, given in zip(base, counts, strict=True))
+        counts4 = (tb, ta, db, da)
 
     try:
         res = rp.compute_plan_result(levels, bottom, plan, gp, gas_rows,
@@ -418,7 +401,6 @@ def _plan_json(res: rp.PlanResult, model_label: str, gas_data, cont_data,
         "end_m": round(res.end_m, 1),
         "gas_density_g_l": round(res.density_g_l, 2),
         "warnings": res.warnings,
-        "disclaimer": DISCLAIMER,
     }
     if gas_data is not None:
         out["gas"] = gas_data
@@ -430,19 +412,15 @@ def _plan_json(res: rp.PlanResult, model_label: str, gas_data, cont_data,
 
 
 def _plan_text(res: rp.PlanResult, model_label: str, gas_lines, cont_lines,
-               saved_to) -> List[str]:
+               saved_to) -> list[str]:
     """The human-readable projection of a PlanResult, one line per entry."""
     levels, plan, depth = res.levels, res.plan, res.max_depth_m
-    if len(levels) == 1 and levels[0].start is None:
+    if len(levels) == 1:
         profile = f"bottom {depth:g} m for {levels[0].runtime:g} min"
     else:
-        def _leg(l):
-            window = (f"{l.start:g}–{l.runtime:g}" if l.start is not None
-                      else f"{l.runtime:g}")
-            return f"{l.depth:g} m @ {window} min"
-        profile = " → ".join(_leg(l) for l in levels)
-        if len(levels) > 1:
-            profile = f"{len(levels)} levels: {profile}"
+        profile = " → ".join(f"{l.depth:g} m @ {l.runtime:g} min"
+                             for l in levels)
+        profile = f"{len(levels)} levels: {profile}"
     lines = [f"\nDive plan  {model_label}  {profile} on {res.bottom_gas!r}"]
     if len(levels) > 1:
         lines.append(f"Max depth {depth:g} m · average depth "
@@ -467,7 +445,7 @@ def _plan_text(res: rp.PlanResult, model_label: str, gas_lines, cont_lines,
         run += s.duration
         gf = "" if s.gf_used is None else f"{s.gf_used:.2f}"
         lines.append(f"{s.kind:<10}{s.depth_start:>7.1f}{s.depth_end:>7.1f}"
-                     f"{s.duration:>8.1f}{run:>8.1f}{repr(s.gas):>14}{gf:>6}")
+                     f"{s.duration:>8.1f}{run:>8.1f}{s.gas!r:>14}{gf:>6}")
     lines.append("-" * 78)
     lines.append(f"Total runtime: {res.total_runtime_min:.1f} min    "
                  f"Time to surface (TTS): {res.tts_min:.1f} min")
@@ -478,7 +456,6 @@ def _plan_text(res: rp.PlanResult, model_label: str, gas_lines, cont_lines,
     lines.extend(cont_lines)
     if saved_to:
         lines.append(f"Saved dive to {saved_to}")
-    lines.append(DISCLAIMER)
     return lines
 
 
@@ -493,12 +470,10 @@ def cmd_ndl(args) -> int:
     label = "(>10h)" if n is None else f"{n} min"
     if args.json:
         print(json.dumps({"depth_m": args.depth, "gas": args.gas,
-                          "gf_high": args.gf_high, "ndl_min": n,
-                          "disclaimer": DISCLAIMER}))
+                          "gf_high": args.gf_high, "ndl_min": n}))
     else:
         print(f"NDL at {args.depth} m on {gas!r} "
               f"(Bühlmann GF-High {args.gf_high:.2f}): {label}")
-        print(DISCLAIMER)
     return 0
 
 
@@ -509,7 +484,7 @@ def cmd_tissues(args) -> int:
     except ValueError as e:
         print(f"tissues: {e}", file=sys.stderr)
         return 2
-    segs, tissues = b.plan_dive(args.depth, args.time, gas, plan)
+    _segs, tissues = b.plan_dive(args.depth, args.time, gas, plan)
     rows = []
     for i in range(b.N_COMP):
         p_comp = tissues.pN2[i] + tissues.pHe[i]
@@ -534,9 +509,9 @@ def cmd_tissues(args) -> int:
     return 0
 
 
-def main(argv: List[str] | None = None) -> int:
+def main(argv: list[str] | None = None) -> int:
     p = argparse.ArgumentParser(prog="deco",
-        description="Bühlmann ZHL-16C + Gradient Factor dive planner (educational).")
+        description="Bühlmann ZHL-16C + Gradient Factor dive planner.")
     # Shared options
     common = argparse.ArgumentParser(add_help=False)
     common.add_argument("--gf-low", type=float, default=0.30,
@@ -550,7 +525,8 @@ def main(argv: List[str] | None = None) -> int:
     common.add_argument("--stop-interval", type=_positive_float, default=3.0,
                         help="m")
     common.add_argument("--last-stop", type=_nonneg_float, default=3.0,
-                        help="shallowest stop depth in m (6 = Shearwater-style last stop at 6 m)")
+                        help="shallowest stop depth in m "
+                             "(6 = Shearwater-style last stop at 6 m)")
     common.add_argument("--travel-gas", action="append",
                         help="Descent/travel gas for a hypoxic bottom mix. Repeatable.")
     common.add_argument("--deco-gas", action="append",
@@ -568,7 +544,7 @@ def main(argv: List[str] | None = None) -> int:
     sp = sub.add_parser("plan", parents=[common], help="Compute a deco schedule.")
     sp.add_argument("config", nargs="?",
                     help="dive config JSON to load (same as --load), "
-                         "e.g. `python cli.py plan dive_plan.json`.")
+                         "e.g. `deco plan dive_plan.json`.")
     sp.add_argument("--depth", type=_positive_float,
                     help="bottom depth (m); square dive")
     sp.add_argument("--time", type=_positive_float,
@@ -576,11 +552,9 @@ def main(argv: List[str] | None = None) -> int:
     sp.add_argument("--level", action="append",
                     help="multi-level dive: DEPTH:RUNTIME, e.g. 45:25 (RUNTIME "
                          "is cumulative minutes since the surface, at the END of "
-                         "the level), or DEPTH:START-RUNTIME, e.g. 16:4-17 to "
-                         "arrive at 16 m at minute 4 and hold until minute 17 "
-                         "(descent at the standard rate, waiting at the previous "
-                         "depth until then). Gas is chosen automatically by "
-                         "role. Repeatable; replaces --depth/--time.")
+                         "the level, transit included — levels are contiguous). "
+                         "Gas is chosen automatically by role. Repeatable; "
+                         "replaces --depth/--time.")
     sp.add_argument("--gas", default="air",
                     help="bottom gas, optional @tank e.g. air@24, 21/35@24")
     sp.add_argument("--sac", type=_positive_float,
@@ -605,9 +579,9 @@ def main(argv: List[str] | None = None) -> int:
                          "columns shallower/deeper than planned (default from "
                          "the config, else 1:1:1:1; a zero count disables "
                          "that direction).")
-    sp.add_argument("--load", nargs="?", const=dc.DEFAULT_PATH,
+    sp.add_argument("--load", nargs="?", const=dc.default_path(),
                     help="Load the dive from a JSON config (default dive_plan.json).")
-    sp.add_argument("--save", nargs="?", const=dc.DEFAULT_PATH,
+    sp.add_argument("--save", nargs="?", const=dc.default_path(),
                     help="Save this dive to a JSON config (default dive_plan.json).")
     sp.set_defaults(func=cmd_plan)
 
