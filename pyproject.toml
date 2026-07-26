@@ -115,6 +115,14 @@ warn_unreachable = true
 disallow_untyped_defs = false      # the GUI's Tk callbacks are untyped by nature
 no_implicit_optional = true
 
+# Don't type-check *through* the plotting stack. matplotlib ships py.typed and
+# its stubs pull in numpy's, which use `type` statements — 3.12+ syntax that
+# `python_version = "3.10"` above (correctly) rejects. `ignore_missing_imports`
+# is not enough: mypy still parses stubs it finds, so the imports have to be
+# skipped outright. deco.app only ever calls into matplotlib; nothing of ours
+# depends on its types.
 [[tool.mypy.overrides]]
-module = ["matplotlib.*"]
+module = ["matplotlib.*", "numpy.*"]
 ignore_missing_imports = true
+follow_imports = "skip"
+follow_imports_for_stubs = true
