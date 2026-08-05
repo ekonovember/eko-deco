@@ -276,10 +276,17 @@ on the path. The suite has two tiers:
 - **26 cross-check tests** — these compile the reference implementations
   (Subsurface's `deco.cpp` with **g++**, Baker's `GFDECO` with **gfortran**) and
   run eko-deco against them. Without those compilers the two modules skip
-  themselves and you see `Ran 218 tests` — that is a *missing compiler*, not
+  themselves and you see `Ran 233 tests` — that is a *missing compiler*, not
   missing data; the skip message says so and tells you what to install. On
   Windows, install MSYS2/MinGW-w64 (or just run the suite under WSL) to get all
-  244.
+  259.
+
+Beyond comparing outputs, `tests/planner_diff.py` compares the *inputs*: it
+keeps a registry of every model constant and planner setting, fails the suite if
+one is ever added without being registered, and grades each against a reference
+export as `DIVERGES`, `UNDETERMINED`, `SETTING`, `JOINT_OK` or `MATCH`. The
+`UNDETERMINED` verdict is the useful one — a constant the evidence cannot speak
+to must not read as agreement. `python -m tests.planner_diff` prints the report.
 
 The oracles are compiled on demand from Python, so no `make` step is needed.
 CI runs the core suite on Python 3.10–3.14 across Linux, macOS and Windows, and

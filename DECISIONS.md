@@ -280,7 +280,12 @@ but their *schedules* match eko-deco's sea-level salt defaults far better than
 the fresh-water constants do — MultiDeco appears to apply water type and
 altitude to what it displays and not to its model. We follow the physics, so
 eko-deco's fresh-water plan differs from MultiDeco's on the same settings.
-`tests/test_multideco_scenarios.py` pins both halves of that.
+`tests/test_multideco_scenarios.py` pins both halves of that, and
+`tests/test_planner_diff.py` pins the stronger statement: **no single
+configuration reproduces both halves**. Set the environment MultiDeco prints
+and its schedule stops matching (by 2 min/stop on scenario 1, 5 on scenario 2);
+keep the one its schedule implies and its printed pressures stop matching. The
+tempting "improvement" is to chase one half and silently lose the other.
 
 ## #16 — A separate deco SAC
 
@@ -320,3 +325,35 @@ where the "0:27" first-stop rows are its padding to a whole runtime minute).
 CLI's segment table still lists ascents as their own rows, which is the right
 shape for a full schedule dump. `tests/test_report.py` pins the reconciliation
 as a property over whole cards, not just the one example.
+
+## #18 — Divergences are enumerated, not noticed
+
+`tests/planner_diff.py` keeps a registry of every model constant and planner
+setting, and `registry_gaps()` introspects `buhlmann` and fails the suite if
+anything is missing from it. Comparing against a reference export grades each
+entry `DIVERGES`, `UNDETERMINED`, `SETTING`, `JOINT_OK` or `MATCH`.
+
+**Why.** The fresh-water environment behind DECISIONS #15 was found because
+someone happened to notice a printed ppO2 we could not reproduce and went
+looking. That is not a process. Everything about a cross-check is easy except
+knowing what you forgot to compare, so the list of things that *could* differ
+has to be maintained mechanically or it silently rots.
+
+**Why `UNDETERMINED` is a distinct verdict.** "We found no difference" and "the
+evidence cannot show a difference" are the same output and completely different
+claims. A dive on nitrox says nothing about whether we and another planner
+agree on the composition of air; a plan with no gas volumes says nothing about
+consumption. Folding those into MATCH is how a divergence survives a green
+cross-check, so the harness refuses to.
+
+**Identifiability.** A printed ppO2 inverts to a region of (surface pressure,
+metres per bar) — the grid search returns the region, because printed values
+are rounded and a point estimate would be a fiction. A printed *schedule*
+inverts to nothing: it is a joint function of the halftimes, the a/b sets,
+P_H2O, the GF convention and the environment at once, so those get `JOINT_OK`
+— the group agrees, no member is separately identified. Claiming more would be
+the same error in the other direction.
+
+**Consequence.** Adding a constant to `buhlmann` without registering it fails
+the suite. That is deliberate friction, and it is the only thing making "we can
+detect all possible differences" a checkable claim.

@@ -817,6 +817,15 @@ _CNS_RATE = (
 )
 
 
+# Repex / Hamilton pulmonary oxygen dose (OTU): rate = ((ppO2 - THRESH)/THRESH)
+# ^ EXP per minute above the threshold. Named rather than inlined so the
+# constant registry in tests/planner_diff.py can enumerate them — a model
+# constant that only exists as a literal cannot be compared against a
+# reference planner.
+OTU_THRESHOLD_PPO2 = 0.5
+OTU_EXPONENT = 0.83
+
+
 def _cns_rate(po2: float) -> float:
     """CNS clock fraction per minute at a ppO2 (bar)."""
     if po2 <= _CNS_RATE[0][0]:
@@ -834,9 +843,10 @@ def cns_otu(segments: Iterable[DiveSegment], surface_p: float = P_ATM,
     """(CNS %, OTU) accumulated over the planned segments.
 
     CNS integrates the NOAA single-exposure clock (`_CNS_RATE`); OTU uses the
-    Repex / Hamilton pulmonary dose, rate = ((ppO2 - 0.5) / 0.5)^0.83 per
-    minute for ppO2 > 0.5 bar. Depth-changing segments are integrated in
-    sub-steps of `step` minutes at the midpoint ppO2."""
+    Repex / Hamilton pulmonary dose (`OTU_THRESHOLD_PPO2`, `OTU_EXPONENT`),
+    rate = ((ppO2 - 0.5) / 0.5)^0.83 per minute for ppO2 > 0.5 bar.
+    Depth-changing segments are integrated in sub-steps of `step` minutes at
+    the midpoint ppO2."""
     cns = otu = 0.0
     for s in segments:
         if s.duration <= 0:
@@ -848,8 +858,9 @@ def cns_otu(segments: Iterable[DiveSegment], surface_p: float = P_ATM,
             depth = s.depth_start + (s.depth_end - s.depth_start) * frac
             po2 = s.gas.ppo2(depth, surface_p, msw_per_bar)
             cns += _cns_rate(po2) * dt
-            if po2 > 0.5:
-                otu += dt * ((po2 - 0.5) / 0.5) ** 0.83
+            if po2 > OTU_THRESHOLD_PPO2:
+                otu += dt * ((po2 - OTU_THRESHOLD_PPO2)
+                             / OTU_THRESHOLD_PPO2) ** OTU_EXPONENT
     return cns * 100.0, otu
 
 

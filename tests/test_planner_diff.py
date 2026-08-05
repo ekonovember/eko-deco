@@ -1,0 +1,234 @@
+"""The constant/variable divergence harness (tests/planner_diff.py).
+
+Two jobs, both regression guards rather than illustrations:
+
+* the registry stays **complete** — adding a constant to `buhlmann` without
+  registering it fails here, so "every possible difference" is a checkable
+  claim and not a promise someone has to remember to keep;
+* the divergence set for the bundled MultiDeco exports is **pinned** — a new
+  difference between us and those plans turns into a failing test naming the
+  constant, instead of a schedule that is quietly a minute out.
+"""
+
+from __future__ import annotations
+
+import unittest
+
+from deco import buhlmann as b
+from tests import planner_diff as pd
+from tests import test_multideco_scenarios as md
+
+DEFAULT_ENV = (b.P_ATM, b.MSW_PER_BAR)
+MD_ENV = (md.MD_SURFACE_P, md.MD_MSW_PER_BAR)
+
+#: True in BOTH configurations, so it is a property of the two planners rather
+#: than of how we chose to configure ours: MultiDeco reports gas density at a
+#: different reference state (~20 C per bar vs our 0 C per atm, the convention
+#: behind the Anthony & Mitchell limits our ceiling uses). The molar masses ride
+#: along because a printed density only identifies the mass/volume ratio.
+DIVERGES_ALWAYS = {
+    "MOLAR_VOLUME", "M_O2", "M_N2", "M_HE", "density reference",
+}
+
+#: Planned at eko-deco's sea-level salt defaults the schedule agrees, but the
+#: printed pressures do not — the environment and, through ppO2, the oxygen
+#: exposure.
+DIVERGES_AT_OUR_DEFAULTS = DIVERGES_ALWAYS | {
+    "P_ATM", "MSW_PER_BAR", "DivePlan.surface_p", "DivePlan.msw_per_bar",
+    "_CNS_RATE", "OTU_THRESHOLD_PPO2", "OTU_EXPONENT",
+}
+
+#: Planned in the environment MultiDeco's own printout implies, the pressures
+#: match and the SCHEDULE stops matching — by 2 min/stop on scenario 1 and
+#: 5 min on scenario 2. Everything the schedule jointly constrains is therefore
+#: flagged. This is the evidence for DECISIONS.md #15's caveat: MultiDeco
+#: appears to apply water type and altitude to what it displays but not to its
+#: model, so no single configuration reproduces both halves of the export.
+DIVERGES_AT_MULTIDECOS_ENVIRONMENT = DIVERGES_ALWAYS | {
+    "N_COMP", "N2_A", "N2_B", "N2_HALFTIME", "HE_A", "HE_B", "HE_HALFTIME",
+    "P_H2O", "GF anchor", "DivePlan.last_stop_depth", "DivePlan.stop_interval",
+    "DivePlan.ppo2_deco", "DivePlan.ppo2_switch_tol",
+    "runtime rounding", "stop-time printing", "first-stop padding",
+}
+
+
+def _findings(scenario: int, env: tuple[float, float]) -> list[pd.Finding]:
+    surface_p, msw_per_bar = env
+    ev = pd.multideco_evidence(scenario, surface_p=surface_p,
+                               msw_per_bar=msw_per_bar)
+    return pd.compare(ev, surface_p=surface_p, msw_per_bar=msw_per_bar)
+
+
+def _by_verdict(findings, verdict) -> set[str]:
+    return {f.tunable.name for f in findings if f.verdict == verdict}
+
+
+class TestRegistryCompleteness(unittest.TestCase):
+    def test_no_gaps(self):
+        """Every module constant and every DivePlan/GasPlan field is
+        registered. This is the whole basis for claiming the harness can see
+        all possible differences: it cannot detect a divergence in something
+        it does not know exists."""
+        gaps = pd.registry_gaps()
+        self.assertEqual(gaps, [], f"unregistered tunables: {gaps} — add them "
+                                   "to planner_diff.registry() with the "
+                                   "observables that could pin them")
+
+    def test_entries_are_well_formed(self):
+        seen = set()
+        for t in pd.registry():
+            with self.subTest(t.name):
+                self.assertNotIn(t.name, seen, "duplicate registry entry")
+                seen.add(t.name)
+                self.assertIn(t.where, ("module", "DivePlan", "GasPlan",
+                                        "convention"))
+                self.assertIn(t.exposure, ("setting", "library-only",
+                                           "hardcoded"))
+                for kind in t.pinned_by:
+                    self.assertIn(kind, (pd.PPO2, pd.EAD, pd.DENSITY,
+                                         pd.SCHEDULE, pd.OXTOX, pd.VOLUMES,
+                                         pd.STATED))
+
+    def test_the_environment_pair_is_the_only_separately_identifiable_model_input(self):
+        """A sanity check on the harness's own premise: printed pressures pin
+        the environment on its own, while the tissue constants are only ever
+        joint with the schedule. If this ever changes, the JOINT_OK verdicts
+        below are understating what the evidence could prove."""
+        by_name = {t.name: t for t in pd.registry()}
+        self.assertTrue(by_name["DivePlan.surface_p"].identifiable_alone)
+        self.assertTrue(by_name["DivePlan.msw_per_bar"].identifiable_alone)
+        for name in ("N2_A", "N2_B", "N2_HALFTIME", "HE_A", "HE_B", "P_H2O"):
+            self.assertFalse(by_name[name].identifiable_alone, name)
+
+
+class TestNoFalseReassurance(unittest.TestCase):
+    """The failure mode worth engineering against: reporting agreement where
+    there is simply no evidence."""
+
+    def test_empty_evidence_makes_everything_undetermined(self):
+        findings = pd.compare(pd.Evidence())
+        self.assertEqual(len(findings), len(pd.registry()))
+        self.assertEqual(_by_verdict(findings, pd.UNDETERMINED),
+                         {f.tunable.name for f in findings})
+
+    def test_a_dive_that_never_breathes_air_says_nothing_about_air(self):
+        findings = _findings(1, MD_ENV)
+        air = next(f for f in findings if f.tunable.name == "AIR")
+        self.assertEqual(air.verdict, pd.UNDETERMINED)
+
+    def test_contradictory_pressures_are_reported_not_swallowed(self):
+        """If no (surface, metres-per-bar) pair explains every printed ppO2,
+        something other than the environment differs — a rounding rule or the
+        formula itself. That must surface, not silently widen the box."""
+        ev = pd.Evidence(ppo2=((b.Gas(0.36), 32, 1.47),
+                               (b.Gas(0.36), 32, 1.60)))   # same point, two values
+        box = pd.infer_environment(ev)
+        self.assertTrue(box.empty)
+        verdicts = {f.tunable.name: f.verdict for f in pd.compare(ev)}
+        self.assertEqual(verdicts["DivePlan.surface_p"], pd.DIVERGES)
+        self.assertEqual(verdicts["DivePlan.msw_per_bar"], pd.DIVERGES)
+
+
+class TestEnvironmentInference(unittest.TestCase):
+    """The harness reproduces, mechanically, the manual scan that found the
+    fresh-water/1.0-bar environment in the first place."""
+
+    def test_brackets_multidecos_environment(self):
+        ev = pd.multideco_evidence(1, surface_p=md.MD_SURFACE_P,
+                                   msw_per_bar=md.MD_MSW_PER_BAR)
+        box = pd.infer_environment(ev)
+        self.assertFalse(box.empty)
+        self.assertTrue(box.contains(md.MD_SURFACE_P, md.MD_MSW_PER_BAR))
+        # and it excludes our sea-level salt defaults — the original bug
+        self.assertFalse(box.contains(b.P_ATM, b.MSW_PER_BAR))
+        assert box.msw_per_bar and box.surface_p
+        self.assertGreater(box.msw_per_bar[0], 10.2)
+        self.assertLess(box.surface_p[0], 1.01)
+
+    def test_water_preset_is_identified_by_name(self):
+        findings = _findings(1, MD_ENV)
+        water = next(f for f in findings if f.tunable.name == "WATER_TYPES")
+        self.assertEqual(water.verdict, pd.MATCH)
+        self.assertIn("fresh", water.detail)
+
+
+class TestKnownDivergences(unittest.TestCase):
+    def _assert_set(self, scenario, env, want):
+        findings = _findings(scenario, env)
+        got = _by_verdict(findings, pd.DIVERGES)
+        self.assertEqual(
+            got, want,
+            "\n".join([f"divergence set changed (added {got - want}, "
+                       f"gone {want - got}):"]
+                      + [str(f) for f in findings if f.verdict == pd.DIVERGES]))
+
+    def test_pinned_at_our_defaults(self):
+        for scenario in (1, 2):
+            with self.subTest(scenario=scenario):
+                self._assert_set(scenario, DEFAULT_ENV,
+                                 DIVERGES_AT_OUR_DEFAULTS)
+
+    def test_pinned_at_multidecos_own_environment(self):
+        for scenario in (1, 2):
+            with self.subTest(scenario=scenario):
+                self._assert_set(scenario, MD_ENV,
+                                 DIVERGES_AT_MULTIDECOS_ENVIRONMENT)
+
+    def test_no_configuration_reproduces_both_halves_of_the_export(self):
+        """The headline finding, and the reason DECISIONS.md #15 carries a
+        caveat instead of a fix: set the environment MultiDeco prints and its
+        schedule stops matching; keep the one its schedule implies and its
+        printed pressures stop matching. That is a property of MultiDeco, not
+        a bug of ours — but it must stay visible, because the tempting
+        "improvement" is to chase one half and silently lose the other."""
+        for scenario in (1, 2):
+            with self.subTest(scenario=scenario):
+                at_default = _by_verdict(_findings(scenario, DEFAULT_ENV),
+                                         pd.DIVERGES)
+                at_md = _by_verdict(_findings(scenario, MD_ENV), pd.DIVERGES)
+                # environment wrong at our defaults…
+                self.assertIn("DivePlan.surface_p", at_default)
+                self.assertNotIn("DivePlan.surface_p", at_md)
+                # …schedule wrong at theirs
+                self.assertIn("P_H2O", at_md)
+                self.assertNotIn("P_H2O", at_default)
+                # and neither is clean
+                self.assertTrue(at_default and at_md)
+
+    def test_the_environment_matches_once_it_is_set(self):
+        for scenario in (1, 2):
+            with self.subTest(scenario=scenario):
+                matched = _by_verdict(_findings(scenario, MD_ENV), pd.MATCH)
+                self.assertLessEqual(
+                    {"DivePlan.surface_p", "DivePlan.msw_per_bar",
+                     "MSW_PER_BAR_FRESH", "WATER_TYPES"}, matched)
+
+    def test_defaults_would_have_caught_the_original_bug(self):
+        """Planned at sea-level salt water — the only thing eko-deco could do
+        before this work — the harness flags the environment outright. That is
+        the regression this whole module exists to make automatic."""
+        for scenario in (1, 2):
+            with self.subTest(scenario=scenario):
+                got = _by_verdict(_findings(scenario, DEFAULT_ENV), pd.DIVERGES)
+                self.assertIn("DivePlan.surface_p", got)
+                self.assertIn("DivePlan.msw_per_bar", got)
+                # …and the knock-on effect on oxygen exposure
+                self.assertIn("_CNS_RATE", got)
+
+    def test_stated_settings_are_not_reported_as_defects(self):
+        """GF and the rates differ from our defaults on every export; they are
+        inputs to pass, not divergences, and must not drown the real ones."""
+        findings = _findings(1, MD_ENV)
+        self.assertEqual(
+            _by_verdict(findings, pd.SETTING),
+            {"DivePlan.gf_low", "DivePlan.gf_high",
+             "DivePlan.descent_rate", "DivePlan.ascent_rate"})
+
+    def test_report_renders(self):
+        text = pd.format_report(_findings(1, MD_ENV), "smoke")
+        self.assertIn("DIVERGES", text)
+        self.assertIn("density reference", text)
+
+
+if __name__ == "__main__":
+    unittest.main()

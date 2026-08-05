@@ -49,6 +49,18 @@ pre-1.0, so anything may still move.
   and MultiDeco's stop-time printing).
 - `report.wetnotes_rows` — the printable runtime card's rows, moved out of the
   GUI into the shared layer so they are testable without a display.
+- **A constant/variable divergence harness**, `tests/planner_diff.py`. The
+  fresh-water environment was found by a manual parameter scan; this makes that
+  mechanical. It keeps a registry of every model constant and planner setting —
+  with an introspection guard that fails the suite if one is missing, so
+  "every possible difference" is checkable rather than hoped for — and grades
+  each against a reference export as `DIVERGES` / `UNDETERMINED` / `SETTING` /
+  `JOINT_OK` / `MATCH`. `UNDETERMINED` is the point: a constant the evidence
+  cannot speak to must not read as agreement. `python -m tests.planner_diff`
+  prints a report; adding a planner means writing one `Evidence`.
+- `buhlmann.OTU_THRESHOLD_PPO2` and `OTU_EXPONENT` — the Repex dose constants
+  were inline literals, and a constant that exists only as a literal cannot be
+  enumerated or compared.
 - `pyproject.toml`: project metadata, `deco` / `deco-gui` entry points,
   `[gui]` and `[dev]` extras, ruff and mypy configuration, `py.typed`.
 - GitHub Actions CI: the stdlib-only suite across Python 3.10–3.14 on Linux,
