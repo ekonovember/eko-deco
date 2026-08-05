@@ -56,23 +56,29 @@ _saved = None
 
 
 def setUpModule():
+    """GFDECO is ZH-L16**B**, so its N2 'a' table is patched on for this module.
+    The water-vapour pressure is NOT patched: it is a plan input now
+    (DECISIONS.md #19), passed as p_h2o=BAKER_P_H2O wherever a plan is built
+    here — a global only has to be patched when there is no parameter."""
     global _saved
-    _saved = (b.N2_A, b.P_H2O)
-    b.N2_A, b.P_H2O = ZHL16B_N2_A, BAKER_P_H2O
+    _saved = b.N2_A
+    b.N2_A = ZHL16B_N2_A
 
 
 def tearDownModule():
-    b.N2_A, b.P_H2O = _saved
+    b.N2_A = _saved
 
 
 BAKER_SURFACE = 1.0  # bar; GFDECO msw mode: sea level = 10.0 msw
 
 
 def eko_schedule(depth, time, gas, deco, gf, **plan_kw):
+    plan_kw.setdefault("p_h2o", BAKER_P_H2O)
     plan = b.DivePlan(gf_low=gf[0], gf_high=gf[1], descent_rate=18.0,
                       surface_p=BAKER_SURFACE, deco_gases=tuple(deco), **plan_kw)
     segs, _ = b.plan_dive(depth, time, gas, plan,
-                          start_tissues=b.Tissues.at_surface(BAKER_SURFACE, b.AIR))
+                          start_tissues=b.Tissues.at_surface(
+                              BAKER_SURFACE, b.AIR, plan.p_h2o))
     stops = [(s.depth_start, s.duration) for s in segs if s.kind == "stop"]
     return stops, b.time_to_surface(segs)
 
@@ -80,13 +86,14 @@ def eko_schedule(depth, time, gas, deco, gf, **plan_kw):
 def eko_anchor(depth, time, gas, gf_low):
     """eko-deco's GF-low anchor: rounded first stop computed when leaving the
     bottom — recomputed here exactly like plan_dive does."""
-    plan = b.DivePlan(descent_rate=18.0, surface_p=BAKER_SURFACE)
-    t = b.Tissues.at_surface(plan.surface_p, b.AIR)
+    plan = b.DivePlan(descent_rate=18.0, surface_p=BAKER_SURFACE,
+                      p_h2o=BAKER_P_H2O)
+    t = b.Tissues.at_surface(plan.surface_p, b.AIR, plan.p_h2o)
     p0 = b.depth_to_p_amb(0.0, plan.surface_p, plan.msw_per_bar)
     p_bot = b.depth_to_p_amb(depth, plan.surface_p, plan.msw_per_bar)
     t_desc = depth / plan.descent_rate
-    b.update_tissues(t, gas, p0, p_bot, t_desc)
-    b.update_tissues(t, gas, p_bot, p_bot, max(0.0, time - t_desc))
+    b.update_tissues(t, gas, p0, p_bot, t_desc, plan.p_h2o)
+    b.update_tissues(t, gas, p_bot, p_bot, max(0.0, time - t_desc), plan.p_h2o)
     ceil = b.ceiling_depth(t, gf_low, plan.surface_p, plan.msw_per_bar)
     return b._round_up_to_stop(ceil, plan.stop_interval)
 
@@ -229,10 +236,12 @@ class TestBakerMultilevel(unittest.TestCase):
         for name, levels, ge, dge, blevels, bgases, gf in self.CASES:
             with self.subTest(name):
                 plan = b.DivePlan(gf_low=gf[0], gf_high=gf[1], descent_rate=18.0,
-                                  surface_p=BAKER_SURFACE, deco_gases=tuple(dge))
+                                  surface_p=BAKER_SURFACE, p_h2o=BAKER_P_H2O,
+                                  deco_gases=tuple(dge))
                 segs, _ = b.plan_multilevel(
                     levels, ge, plan,
-                    start_tissues=b.Tissues.at_surface(BAKER_SURFACE, b.AIR))
+                    start_tissues=b.Tissues.at_surface(BAKER_SURFACE, b.AIR,
+                                                       BAKER_P_H2O))
                 eko_stops = [(s.depth_start, s.duration) for s in segs
                              if s.kind == "stop"]
                 eko_tts = b.time_to_surface(segs)
@@ -251,9 +260,9 @@ class TestBakerMultilevel(unittest.TestCase):
         """Sanity: spending the back half of the dive shallow must not produce
         more deco than staying deep for the whole runtime. Both engines agree."""
         plan = b.DivePlan(gf_low=0.30, gf_high=0.80, surface_p=BAKER_SURFACE,
-                          deco_gases=(b.Gas(0.50),))
+                          p_h2o=BAKER_P_H2O, deco_gases=(b.Gas(0.50),))
         def tissues():
-            return b.Tissues.at_surface(BAKER_SURFACE, b.AIR)
+            return b.Tissues.at_surface(BAKER_SURFACE, b.AIR, BAKER_P_H2O)
 
         ml, _ = b.plan_multilevel([b.Level(45, 25), b.Level(18, 55)], b.Gas(0.21),
                                   plan, start_tissues=tissues())

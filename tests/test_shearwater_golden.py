@@ -35,21 +35,18 @@ def _gas(d: dict) -> b.Gas:
 
 
 def _schedule(dive: dict):
+    # The source planner's water-vapour constant is a plan input, not a global
+    # to patch: MultiDeco/Baker use Schreiner 0.0567, eko-deco defaults to
+    # Buhlmann's 0.0627 (DECISIONS.md #19).
     plan = b.DivePlan(
         gf_low=dive["gf"][0] / 100.0, gf_high=dive["gf"][1] / 100.0,
         descent_rate=dive.get("descent_rate", 18.0),
         ascent_rate=dive.get("ascent_rate", 10.0),
         last_stop_depth=dive.get("last_stop_m", 3.0),
+        p_h2o=dive.get("p_h2o", b.P_H2O),
         deco_gases=tuple(_gas(g) for g in dive.get("deco_gases", [])))
-    # match the source planner's water-vapour constant if it differs from
-    # eko-deco's Buhlmann default (MultiDeco: Schreiner 0.0567)
-    saved_p_h2o = b.P_H2O
-    b.P_H2O = dive.get("p_h2o", saved_p_h2o)
-    try:
-        segs, _ = b.plan_dive(dive["depth_m"], dive["bottom_time_min"],
-                              _gas(dive["bottom_gas"]), plan)
-    finally:
-        b.P_H2O = saved_p_h2o
+    segs, _ = b.plan_dive(dive["depth_m"], dive["bottom_time_min"],
+                          _gas(dive["bottom_gas"]), plan)
     return ([(s.depth_start, s.duration) for s in segs if s.kind == "stop"],
             b.time_to_surface(segs))
 

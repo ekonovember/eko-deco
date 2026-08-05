@@ -17,7 +17,6 @@ Design rules (see CLAUDE.md):
 
 from __future__ import annotations
 
-import math
 from collections.abc import Sequence
 from dataclasses import dataclass, field
 from typing import overload
@@ -28,16 +27,10 @@ from deco import buhlmann as b
 DEFAULT_FILL_BAR = 232.0
 
 
-def runtime_min(minutes: float) -> int:
-    """A runtime as a schedule shows it: truncated to whole minutes.
-
-    This is MultiDeco's convention, verified against a real export — its plan
-    prints the runtime in parentheses and every row is the floor of the true
-    value (1.61 → 1, 43.875 → 43, 44.008 → 44, 50.44 → 50, 50.87 → 50). Both
-    front ends render runtimes through here so they cannot drift from each
-    other or from the planner the schedules are cross-checked against.
-    """
-    return math.floor(minutes + 1e-9)
+#: The printed-schedule notation lives in `buhlmann` so the dependency-free
+#: core can reach it too (the contingency cut table renders cells there).
+#: Re-exported here because both front ends already reach for it via `report`.
+runtime_min = b.runtime_min
 
 
 def water_name(msw_per_bar: float) -> str:
@@ -55,31 +48,26 @@ def wetnotes_rows(segments: Sequence[b.DiveSegment]) -> list[list[str]]:
     """The printed schedule as ``[depth, stop, run, gas]`` string rows — the
     wetnotes/runtime-card format (see ``cards/README.md``).
 
-    Two conventions, both MultiDeco's and both verified against real exports
-    (``examples/scenario_1``, ``examples/scenario_2``):
+    The notation is `buhlmann.StopLeg`'s: ``run`` is the runtime you **leave**
+    that depth (truncated), ``stop`` is the **leg** — the time from leaving the
+    row above to leaving this one, ascent included — so the stop column always
+    adds up to the run column.
 
-    * ``run`` is the runtime on **leaving** that depth, truncated to whole
-      minutes by `runtime_min`.
-    * ``stop`` is the **leg** time — the ascent to that stop plus the hold —
-      taken as the difference of the printed runtimes, so the STOP column
-      always adds up to the RUN column. Printing the hold alone reads as a lie
-      underwater: a 3-minute hold at 3 m still advances the runtime by 4, and a
-      diver adding up the STOP column would surface a minute early on every
-      stop (see DECISIONS.md #17).
+    A gas-switch row is an annotation — it carries the runtime the switch
+    happens at, but the stop legs are measured from the previous stop (from
+    leaving the bottom for the first), so this card, the GUI's stop table and
+    the cut table print identical minutes for the same stop.
 
-    A zero-duration bottom segment gets no row — a level whose whole time is
+    A zero-duration bottom segment gets no row: a level whose whole time is
     transit would otherwise print a duplicate of the depth above it.
     """
     rows: list[list[str]] = []
-    run, prev_run = 0.0, 0
+    legs = iter(b.stop_legs(segments))
+    run = 0.0
     prev: b.Gas | None = None
 
-    def emit(depth: str, stop: str | None, run_min: int, gas: str) -> None:
-        nonlocal prev_run
-        rows.append([depth,
-                     f"{run_min - prev_run:d}" if stop is None else stop,
-                     f"{run_min:d}", gas])
-        prev_run = run_min
+    def emit(depth: str, stop: str, run_min: int, gas: str) -> None:
+        rows.append([depth, stop, f"{run_min:d}", gas])
 
     for s in segments:
         # A gas switch with no stop at that depth (EAN50 at 21 m on a 40 m dive
@@ -92,7 +80,8 @@ def wetnotes_rows(segments: Sequence[b.DiveSegment]) -> list[list[str]]:
         if s.kind == "bottom" and s.duration > 0:
             emit(f"{s.depth_end:.0f} m", "-", runtime_min(run), repr(s.gas))
         elif s.kind == "stop" and s.duration > 0:
-            emit(f"{s.depth_start:.0f} m", None, runtime_min(run), repr(s.gas))
+            leg = next(legs)
+            emit(f"{leg.depth:.0f} m", f"{leg.leg:d}", leg.run, repr(leg.gas))
         prev = s.gas
     emit("surf", "-", runtime_min(run), "")
     return rows

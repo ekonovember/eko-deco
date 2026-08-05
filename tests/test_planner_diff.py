@@ -48,7 +48,8 @@ DIVERGES_AT_OUR_DEFAULTS = DIVERGES_ALWAYS | {
 #: model, so no single configuration reproduces both halves of the export.
 DIVERGES_AT_MULTIDECOS_ENVIRONMENT = DIVERGES_ALWAYS | {
     "N_COMP", "N2_A", "N2_B", "N2_HALFTIME", "HE_A", "HE_B", "HE_HALFTIME",
-    "P_H2O", "GF anchor", "DivePlan.last_stop_depth", "DivePlan.stop_interval",
+    "P_H2O", "DivePlan.p_h2o", "GF anchor", "DivePlan.last_stop_depth",
+    "DivePlan.stop_interval",
     "DivePlan.ppo2_deco", "DivePlan.ppo2_switch_tol",
     "runtime rounding", "stop-time printing", "first-stop padding",
 }

@@ -19,7 +19,8 @@ Schema::
       "sac_multiplier": 2.0, "problem_minutes": 1, "divers": 1,
       "ascent_rate": 10, "descent_rate": 18, "stop_interval": 3, "last_stop_m": 3,
       "ppo2_bottom": 1.4, "ppo2_deco": 1.6, "ppo2_min": 0.18,
-      "surface_p_bar": 1.01325, "msw_per_bar": 10.0,
+      "ppo2_switch_tol": 0.05,
+      "surface_p_bar": 1.01325, "msw_per_bar": 10.0, "p_h2o_bar": 0.0627,
       "contingency": {"time_before": 1, "time_after": 1,
                       "depth_before": 1, "depth_after": 1},
       "gases": [
@@ -55,7 +56,11 @@ previous behaviour). ``surface_p_bar`` and ``msw_per_bar`` are the environment:
 surface pressure and how many metres of water make a bar — 10.0 for salt water
 (the default), 10 1/3 for fresh (``buhlmann.WATER_TYPES``). They move every
 pressure the plan derives, so ppO₂, MOD, END, density, CNS/OTU, gas volumes and
-the schedule itself all follow.
+the schedule itself all follow. ``p_h2o_bar`` is the alveolar water-vapour
+pressure (Bühlmann 0.0627; Schreiner/MultiDeco/Baker use 0.0567) and
+``ppo2_switch_tol`` how far above ``ppo2_deco`` a gas switch may be rounded
+deeper to land on a stop depth — both are real algorithm inputs, so both are
+settable rather than baked in (DECISIONS #19).
 
 ``contingency`` sizes the backup cut-table matrix as step counts on the fixed
 3 min × 3 m grid: ``time_before``/``time_after`` bottom-time rows shorter/longer
@@ -124,8 +129,10 @@ def default_config() -> dict:
         "ppo2_bottom": 1.4,
         "ppo2_deco": 1.6,
         "ppo2_min": 0.18,
+        "ppo2_switch_tol": 0.05,
         "surface_p_bar": b.P_ATM,
         "msw_per_bar": b.MSW_PER_BAR,
+        "p_h2o_bar": b.P_H2O,
         "contingency": {"time_before": 1, "time_after": 1,
                         "depth_before": 1, "depth_after": 1},
         "gases": [
@@ -311,8 +318,10 @@ def to_buhlmann(cfg: dict) -> tuple[b.Gas, b.DivePlan, b.GasPlan, list[tuple]]:
                       ppo2_bottom=cfg.get("ppo2_bottom", 1.4),
                       ppo2_deco=cfg.get("ppo2_deco", 1.6),
                       ppo2_min=cfg.get("ppo2_min", 0.18),
+                      ppo2_switch_tol=cfg.get("ppo2_switch_tol", 0.05),
                       surface_p=cfg.get("surface_p_bar", b.P_ATM),
                       msw_per_bar=cfg.get("msw_per_bar", b.MSW_PER_BAR),
+                      p_h2o=cfg.get("p_h2o_bar", b.P_H2O),
                       travel_gases=travel, deco_gases=deco)
     sac_deco = cfg.get("sac_deco")
     gp = b.GasPlan(sac=cfg["sac_normal"],

@@ -154,6 +154,8 @@ def _build_plan(args) -> b.DivePlan:
         ppo2_deco=args.ppo2_deco,
         ppo2_bottom=args.ppo2_bottom,
         ppo2_min=args.ppo2_min,
+        ppo2_switch_tol=args.ppo2_switch_tol,
+        p_h2o=args.p_h2o,
     )
 
 
@@ -208,8 +210,10 @@ def _config_from_args(args) -> dict:
         "ppo2_bottom": args.ppo2_bottom,
         "ppo2_deco": args.ppo2_deco,
         "ppo2_min": args.ppo2_min,
+        "ppo2_switch_tol": args.ppo2_switch_tol,
         "surface_p_bar": _surface_p(args),
         "msw_per_bar": _msw_per_bar(args),
+        "p_h2o_bar": args.p_h2o,
         "contingency": {k: (n if n is not None else c_default[k])
                         for k, n in zip(dc.CONTINGENCY_KEYS, counts, strict=True)},
         "gases": gas_entries,
@@ -417,8 +421,16 @@ def _plan_json(res: rp.PlanResult, model_label: str, gas_data, cont_data,
                   "travel_gases": [repr(g) for g in res.plan.travel_gases],
                   "deco_gases": [repr(g) for g in res.plan.deco_gases],
                   "surface_p_bar": res.plan.surface_p,
-                  "msw_per_bar": res.plan.msw_per_bar},
+                  "msw_per_bar": res.plan.msw_per_bar,
+                  "p_h2o_bar": res.plan.p_h2o},
         "segments": [s.as_dict() for s in res.segments],
+        # The printed-schedule notation (buhlmann.StopLeg), so an agent reads
+        # the same numbers the runtime card and the GUI show: `run` is when you
+        # LEAVE that stop (truncated to whole minutes) and `leg` is the ascent
+        # to it plus the hold. `segments` above is the raw, untruncated dump.
+        "stops": [{"depth_m": l.depth, "leg_min": l.leg, "run_min": l.run,
+                   "hold_min": round(l.hold, 2), "gas": repr(l.gas)}
+                  for l in b.stop_legs(res.segments)],
         "total_runtime_min": round(res.total_runtime_min, 2),
         "tts_min": round(res.tts_min, 2),
         "final_ceiling_m": round(res.surface_ceiling_m, 2),
@@ -484,6 +496,14 @@ def _plan_text(res: rp.PlanResult, model_label: str, gas_lines, cont_lines,
     lines.append("-" * 78)
     lines.append(f"Total runtime: {res.total_runtime_min:.1f} min    "
                  f"Time to surface (TTS): {res.tts_min:.1f} min")
+    legs = b.stop_legs(res.segments)
+    if legs:
+        # The card/GUI notation alongside the raw segment dump above: `run` is
+        # when you LEAVE the stop, truncated; the minutes are the leg (ascent
+        # to the stop + hold), so they add up to the runtimes.
+        lines.append("Stops as printed on a card (leave-at runtime · leg min): "
+                     + "  ".join(f"{l.depth:g}m {l.leg:d}′@{l.run:d}"
+                                 for l in legs))
     lines.append(f"CNS {res.cns_pct:.0f}% · OTU {res.otu:.0f}    "
                  f"Surface ceiling at GF-High: {res.surface_ceiling_m:.2f} m")
     lines.extend(f"⚠  {w}" for w in res.warnings)
@@ -572,6 +592,14 @@ def main(argv: list[str] | None = None) -> int:
                         help="ppO2 ceiling for the bottom/travel gas on descent.")
     common.add_argument("--ppo2-min", type=_nonneg_float, default=0.18,
                         help="Hypoxia floor; a gas is unusable below this ppO2.")
+    common.add_argument("--ppo2-switch-tol", type=_nonneg_float, default=0.05,
+                        help="How far over --ppo2-deco a gas switch may be "
+                             "rounded deeper to land on a stop depth (bar). "
+                             "0.05 is what puts O2 on the 6 m stop.")
+    common.add_argument("--p-h2o", type=_positive_float, default=b.P_H2O,
+                        help=f"Alveolar water-vapour pressure (bar). Default "
+                             f"{b.P_H2O:g} (Buhlmann); MultiDeco, Shearwater "
+                             "and Baker's GFDECO use 0.0567 (Schreiner).")
     common.add_argument("--water", choices=sorted(b.WATER_TYPES),
                         default="salt",
                         help="Water type, i.e. how many metres make a bar: "

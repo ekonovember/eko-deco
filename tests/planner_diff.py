@@ -185,7 +185,7 @@ _PLAN_PINS = {
 }
 _GAS_PINS = {
     "sac": (VOLUMES,), "sac_deco": (VOLUMES,), "sac_multiplier": (),
-    "problem_minutes": (), "divers": (), "tank_liters": (STATED,),
+    "problem_minutes": (), "divers": (),
 }
 
 

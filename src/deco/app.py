@@ -423,6 +423,8 @@ class DecoApp:
         self.two_divers.trace_add(
             "write", lambda *_: None if self._building else self.recompute())
 
+        self._add_algorithm_panel(left)
+
         # --- contingency cut tables (bottom-timer backup matrix) ---
         cont = ttk.LabelFrame(left, text="Contingency (cut table)", padding=6)
         cont.pack(fill=tk.X, pady=(8, 0))
@@ -657,6 +659,70 @@ class DecoApp:
         self.water.trace_add("write", self._on_water_type)
         self.altitude.trace_add("write", self._on_altitude)
 
+    def _add_algorithm_panel(self, parent) -> None:
+        """Every remaining planner input, in one collapsed-by-default block.
+
+        These were config-file-only before: the GUI read them from
+        ``dive_plan.json`` and wrote them back untouched, so a dive planned in
+        the app silently used whatever was in the file and there was no way to
+        see or change it. Every input to the algorithm is now reachable from
+        all three front ends (DECISIONS.md #19), and `test_input_coverage`
+        fails if a new one is added without a widget.
+
+        Collapsed by default because these are not per-dive knobs — the
+        defaults are the agencies' — but visible, not hidden."""
+        box = ttk.LabelFrame(parent, text="Algorithm & rates", padding=6)
+        box.pack(fill=tk.X, pady=(8, 0))
+        self.algo_open = tk.BooleanVar(value=False)
+        body = ttk.Frame(box)
+        ttk.Checkbutton(box, text="show", variable=self.algo_open,
+                        command=lambda: body.pack(fill=tk.X)
+                        if self.algo_open.get() else body.pack_forget()).pack(
+            anchor="w")
+
+        rates = ttk.Frame(body)
+        rates.pack(fill=tk.X, pady=2)
+        self.descent_rate = self._add_spin(rates, "Descent", 1, 60, 1, 18.0,
+                                           fmt="%g", unit="m/min",
+                                           label_width=8, unit_width=6)
+        self.ascent_rate = self._add_spin(rates, "ascent", 1, 30, 1, 10.0,
+                                          fmt="%g", unit="m/min", unit_width=6)
+        stops = ttk.Frame(body)
+        stops.pack(fill=tk.X, pady=2)
+        self.stop_interval = self._add_spin(stops, "Stops", 1, 10, 1, 3.0,
+                                            fmt="%g", unit="m apart",
+                                            label_width=8, unit_width=7)
+        # Free value; the "Last stop 6 m" switch by the GF row is the common
+        # case and writes this box, but 9 m (say) is now expressible.
+        self.last_stop = self._add_spin(stops, "last", 0, 12, 3, 3.0,
+                                        fmt="%g", unit="m", unit_width=6)
+        pp = ttk.Frame(body)
+        pp.pack(fill=tk.X, pady=2)
+        self.ppo2_bottom = self._add_spin(pp, "ppO₂", 0.5, 2.0, 0.05, 1.4,
+                                          fmt="%.2f", unit="bottom",
+                                          label_width=8, unit_width=7)
+        self.ppo2_deco = self._add_spin(pp, "", 0.5, 2.0, 0.05, 1.6,
+                                        fmt="%.2f", unit="deco", unit_width=6)
+        pp2 = ttk.Frame(body)
+        pp2.pack(fill=tk.X, pady=2)
+        self.ppo2_min = self._add_spin(pp2, "", 0.0, 0.5, 0.01, 0.18,
+                                       fmt="%.2f", unit="min", label_width=8,
+                                       unit_width=7)
+        self.ppo2_switch_tol = self._add_spin(pp2, "", 0.0, 0.5, 0.01, 0.05,
+                                              fmt="%.2f", unit="switch tol",
+                                              unit_width=10)
+        model = ttk.Frame(body)
+        model.pack(fill=tk.X, pady=2)
+        self.p_h2o = self._add_spin(model, "P H₂O", 0.0001, 0.2, 0.001,
+                                    b.P_H2O, fmt="%.4f", unit="bar",
+                                    label_width=8, unit_width=6, width=7)
+        ttk.Label(model, text="0.0627 Bühlmann · 0.0567 Schreiner").pack(
+            side=tk.LEFT)
+        # Keep the shorthand switch and the free field in step.
+        self.last_stop6.trace_add(
+            "write", lambda *_: None if self._building else
+            self.last_stop.set("6" if self.last_stop6.get() else "3"))
+
     def _on_water_type(self, *_) -> None:
         """Water dropdown → msw/bar. Setting the spinbox var fires its own
         trace, so the recompute happens there; don't kick off a second one.
@@ -876,17 +942,20 @@ class DecoApp:
             if g is None or role == "Bottom":
                 continue
             (travel if role == "Travel" else deco).append(g)
-        base = self._base_cfg
+        # Every field below comes from a widget now — nothing is read straight
+        # from the config any more (DECISIONS.md #19).
         return b.DivePlan(
             gf_low=self._pct(self.gf_lo, 0.30),
             gf_high=self._pct(self.gf_hi, 0.70),
-            ascent_rate=base.get("ascent_rate", ASCENT_RATE),
-            descent_rate=base.get("descent_rate", 18.0),
-            stop_interval=base.get("stop_interval", 3.0),
-            last_stop_depth=6.0 if self.last_stop6.get() else 3.0,
-            ppo2_bottom=base.get("ppo2_bottom", 1.4),
-            ppo2_deco=base.get("ppo2_deco", 1.6),
-            ppo2_min=base.get("ppo2_min", 0.18),
+            ascent_rate=self._num(self.ascent_rate, ASCENT_RATE, lo=0.5),
+            descent_rate=self._num(self.descent_rate, 18.0, lo=0.5),
+            stop_interval=self._num(self.stop_interval, 3.0, lo=0.5),
+            last_stop_depth=self._num(self.last_stop, 3.0, lo=0.0),
+            ppo2_bottom=self._num(self.ppo2_bottom, 1.4, lo=0.1),
+            ppo2_deco=self._num(self.ppo2_deco, 1.6, lo=0.1),
+            ppo2_min=self._num(self.ppo2_min, 0.18, lo=0.0),
+            ppo2_switch_tol=self._num(self.ppo2_switch_tol, 0.05, lo=0.0),
+            p_h2o=self._num(self.p_h2o, b.P_H2O, lo=0.0001),
             surface_p=self._num(self.surface_p, b.P_ATM, lo=0.1),
             msw_per_bar=self._num(self.msw_per_bar, b.MSW_PER_BAR, lo=1.0),
             deco_gases=tuple(deco),
@@ -951,16 +1020,17 @@ class DecoApp:
 
     @staticmethod
     def _stops_by_depth(segs) -> tuple[dict, float]:
-        """{stop depth (m, int): (minutes, runtime at end of stop)} + total RT.
-        Runtimes are truncated to whole minutes via ``report.runtime_min`` —
-        MultiDeco's convention, which this table's `min (runtime)` cells copy."""
-        run, at = 0.0, {}
-        for s in segs:
-            run += s.duration
-            if s.kind == "stop" and s.duration > 0:
-                at[round(s.depth_start)] = (s.duration,
-                                                 rp.runtime_min(run))
-        return at, run
+        """{stop depth (m, int): (leg minutes, runtime leaving)} + total RT.
+
+        Both numbers are `buhlmann.StopLeg`'s, the same notation the runtime
+        card and the cut table print: the runtime is when you **leave** that
+        depth (truncated to whole minutes), and the minutes are the **leg** —
+        the ascent to the stop plus the hold, measured from the previous stop
+        (from leaving the bottom for the first) — so the column adds up to the
+        runtimes beside it."""
+        legs = b.stop_legs(segs)
+        at = {round(leg.depth): (leg.leg, leg.run) for leg in legs}
+        return at, b.total_runtime(segs)
 
     # -------------------------------------------------------------- draw ----
 
@@ -1185,18 +1255,20 @@ class DecoApp:
         # per-scenario gas-usage card in litres. ---
         stop_cards: list[list[str]] = []
         if scenarios and len(scenarios) > 1:
-            per = [(label, *self._stops_by_depth(ss)) for label, ss in scenarios]
-            depths_u = sorted({d for _l, at, _t in per for d in at}, reverse=True)
             # Runtime when leaving the bottom phase (total minus TTS): on a
             # multi-level dive stopping at the FIRST bottom segment would pair
             # the max depth with the runtime of the first (maybe shallower)
-            # level.
+            # level. It is also the row above the first stop, so it is what the
+            # first leg is measured from.
             run_bottom = rp.runtime_min(
                 b.total_runtime(segs) - b.time_to_surface(segs))
+            per = [(label, *self._stops_by_depth(ss))
+                   for label, ss in scenarios]
+            depths_u = sorted({d for _l, at, _t in per for d in at}, reverse=True)
             labels = ["All" if l == "all" else l for l, _at, _t in per]
             body = [[f"{depth:.0f} m"] + [f"({run_bottom:d})"] * len(per)]
             body += [[f"{dm} m"] + ["" if dm not in at
-                                    else f"{at[dm][0]:.0f} ({at[dm][1]:d})"
+                                    else f"{at[dm][0]:d} ({at[dm][1]:d})"
                                     for _l, at, _t in per]
                      for dm in depths_u]
             # One column per scenario: OK = the normal dive, then each lost
@@ -1432,6 +1504,15 @@ class DecoApp:
             self.gf_lo.set(str(cfg["gf_low"]))
             self.gf_hi.set(str(cfg["gf_high"]))
             self.last_stop6.set(cfg.get("last_stop_m", 3.0) >= 6.0)
+            self.last_stop.set(f"{cfg.get('last_stop_m', 3.0):g}")
+            self.descent_rate.set(f"{cfg.get('descent_rate', 18.0):g}")
+            self.ascent_rate.set(f"{cfg.get('ascent_rate', ASCENT_RATE):g}")
+            self.stop_interval.set(f"{cfg.get('stop_interval', 3.0):g}")
+            self.ppo2_bottom.set(f"{cfg.get('ppo2_bottom', 1.4):.2f}")
+            self.ppo2_deco.set(f"{cfg.get('ppo2_deco', 1.6):.2f}")
+            self.ppo2_min.set(f"{cfg.get('ppo2_min', 0.18):.2f}")
+            self.ppo2_switch_tol.set(f"{cfg.get('ppo2_switch_tol', 0.05):.2f}")
+            self.p_h2o.set(f"{cfg.get('p_h2o_bar', b.P_H2O):.4f}")
             self.sac.set(f"{cfg['sac_normal']:g}")
             self.sac_deco.set(f"{cfg.get('sac_deco') or 0:g}")
             self.sac_mult.set(f"{cfg.get('sac_multiplier', 2.0):.2f}")
@@ -1486,7 +1567,15 @@ class DecoApp:
                        for rl in self._row_levels()],   # as typed: lose nothing
             "gf_low": round(self._pct(self.gf_lo, 0.30) * 100),
             "gf_high": round(self._pct(self.gf_hi, 0.70) * 100),
-            "last_stop_m": 6.0 if self.last_stop6.get() else 3.0,
+            "last_stop_m": self._num(self.last_stop, 3.0, lo=0.0),
+            "ascent_rate": self._num(self.ascent_rate, ASCENT_RATE, lo=0.5),
+            "descent_rate": self._num(self.descent_rate, 18.0, lo=0.5),
+            "stop_interval": self._num(self.stop_interval, 3.0, lo=0.5),
+            "ppo2_bottom": self._num(self.ppo2_bottom, 1.4, lo=0.1),
+            "ppo2_deco": self._num(self.ppo2_deco, 1.6, lo=0.1),
+            "ppo2_min": self._num(self.ppo2_min, 0.18, lo=0.0),
+            "ppo2_switch_tol": self._num(self.ppo2_switch_tol, 0.05, lo=0.0),
+            "p_h2o_bar": self._num(self.p_h2o, b.P_H2O, lo=0.0001),
             "sac_normal": self._num(self.sac, 20.0, lo=1.0),
             "sac_deco": (sd if (sd := self._num(self.sac_deco, 0.0, lo=0.0)) > 0
                          else None),

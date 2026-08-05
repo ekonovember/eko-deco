@@ -1,0 +1,316 @@
+"""Every input to the algorithm is reachable, and binding, from every front end.
+
+"Binding" is the load-bearing word. It is not enough for a knob to exist in the
+config schema or take an argparse flag: the value has to arrive in the
+`DivePlan` / `GasPlan` the planner is actually handed. The GUI in particular
+used to *read* the rates and the ppO2 window from `dive_plan.json` and write
+them back untouched — present in the file, invisible in the app, and impossible
+to change there. That reads as support and is not.
+
+So this enumerates `DivePlan` and `GasPlan` by reflection and, for each field,
+sets a distinctive value through each of the three front ends and checks it
+comes back out. A field added without being wired fails here — which is the
+point: the coverage claim has to be checkable, not remembered (DECISIONS.md
+#19).
+
+The GUI half skips without Tk/matplotlib, like the other GUI suites.
+"""
+
+from __future__ import annotations
+
+import contextlib
+import dataclasses
+import io
+import unittest
+from typing import ClassVar
+
+from deco import buhlmann as b
+from deco import cli
+from deco import dive_config as dc
+
+try:
+    import tkinter as tk
+
+    from deco import app
+    _root = tk.Tk()
+    _root.withdraw()
+    _HAVE_GUI = True
+except Exception:
+    _HAVE_GUI = False
+else:
+    _root.destroy()
+
+
+#: A distinctive value per plan field, different from the default so a knob
+#: that is silently ignored cannot pass by coincidence.
+PLAN_PROBE: dict[str, float] = {
+    "descent_rate": 17.0, "ascent_rate": 7.0, "stop_interval": 2.0,
+    "last_stop_depth": 6.0, "gf_low": 0.22, "gf_high": 0.77,
+    "surface_p": 0.93, "msw_per_bar": 10.25, "p_h2o": 0.0567,
+    "ppo2_deco": 1.55, "ppo2_bottom": 1.35, "ppo2_min": 0.19,
+    "ppo2_switch_tol": 0.09,
+}
+GAS_PROBE: dict[str, float] = {
+    "sac": 17.5, "sac_deco": 13.5, "sac_multiplier": 1.75,
+    "problem_minutes": 2.5, "divers": 2,
+}
+#: Fields carried as gas-stack roles rather than scalars, checked separately.
+GAS_STACK_FIELDS = {"travel_gases", "deco_gases"}
+#: Nothing here at present. A field listed here would be one the planner
+#: declares but never reads — which is exactly the trap this module exists to
+#: prevent, so prefer deleting the field to listing it.
+UNUSED_FIELDS: set[str] = set()
+
+
+def _probe_config() -> dict:
+    cfg = dc.default_config()
+    cfg.update({
+        "descent_rate": 17.0, "ascent_rate": 7.0, "stop_interval": 2.0,
+        "last_stop_m": 6.0, "gf_low": 22, "gf_high": 77,
+        "surface_p_bar": 0.93, "msw_per_bar": 10.25, "p_h2o_bar": 0.0567,
+        "ppo2_deco": 1.55, "ppo2_bottom": 1.35, "ppo2_min": 0.19,
+        "ppo2_switch_tol": 0.09,
+        "sac_normal": 17.5, "sac_deco": 13.5, "sac_multiplier": 1.75,
+        "problem_minutes": 2.5, "divers": 2,
+    })
+    return cfg
+
+
+CLI_ARGV = [
+    "plan", "--depth", "30", "--time", "20", "--gas", "air",
+    "--travel-gas", "35/25", "--deco-gas", "50",
+    "--descent-rate", "17", "--ascent-rate", "7", "--stop-interval", "2",
+    "--last-stop", "6", "--gf-low", "0.22", "--gf-high", "0.77",
+    "--surface-p", "0.93", "--msw-per-bar", "10.25", "--p-h2o", "0.0567",
+    "--ppo2-deco", "1.55", "--ppo2-bottom", "1.35", "--ppo2-min", "0.19",
+    "--ppo2-switch-tol", "0.09",
+    "--sac", "17.5", "--sac-deco", "13.5", "--sac-multiplier", "1.75",
+    "--problem-time", "2.5", "--divers", "2",
+]
+
+
+def _cli_plans():
+    """Run the real parser, then build the plan exactly as `cmd_plan` does."""
+    captured = {}
+    original = cli.cmd_plan
+
+    def spy(args):
+        captured["args"] = args
+        return 0
+
+    cli.cmd_plan = spy
+    try:
+        with contextlib.redirect_stdout(io.StringIO()), \
+                contextlib.redirect_stderr(io.StringIO()):
+            cli.main(CLI_ARGV)
+    finally:
+        cli.cmd_plan = original
+    args = captured["args"]
+    return cli._build_plan(args), cli._args_gas_context(args)[0]
+
+
+class TestEveryFieldIsProbed(unittest.TestCase):
+    """The guard on the guard: a new plan field must join a probe table, or the
+    coverage tests below would silently stop covering the whole surface."""
+
+    def test_no_plan_field_is_unaccounted_for(self):
+        known = set(PLAN_PROBE) | GAS_STACK_FIELDS
+        fields = {f.name for f in dataclasses.fields(b.DivePlan)}
+        self.assertEqual(fields - known, set(),
+                         "new DivePlan field(s): add a value to PLAN_PROBE and "
+                         "wire them into the config, the CLI and the GUI")
+
+    def test_no_gas_plan_field_is_unaccounted_for(self):
+        known = set(GAS_PROBE) | UNUSED_FIELDS
+        fields = {f.name for f in dataclasses.fields(b.GasPlan)}
+        self.assertEqual(fields - known, set(),
+                         "new GasPlan field(s): add a value to GAS_PROBE and "
+                         "wire them into the config, the CLI and the GUI")
+
+
+class TestConfigBinds(unittest.TestCase):
+    """The agentic surface: dive_plan.json is what an agent edits."""
+
+    def setUp(self):
+        self.plan, self.gas_plan = dc.to_buhlmann(_probe_config())[1:3]
+
+    def test_plan_fields(self):
+        for name, want in PLAN_PROBE.items():
+            with self.subTest(name):
+                self.assertAlmostEqual(getattr(self.plan, name), want, places=9)
+
+    def test_gas_plan_fields(self):
+        for name, want in GAS_PROBE.items():
+            with self.subTest(name):
+                self.assertAlmostEqual(getattr(self.gas_plan, name), want,
+                                       places=9)
+
+    def test_gas_stack_roles(self):
+        cfg = _probe_config()
+        cfg["gases"] = [
+            {"role": "Bottom", "o2": 21, "he": 35},
+            {"role": "Travel", "o2": 35, "he": 25},
+            {"role": "Deco", "o2": 50, "he": 0},
+        ]
+        bottom, plan, _gp, _g = dc.to_buhlmann(cfg)
+        self.assertEqual(bottom, b.Gas(0.21, 0.35))
+        self.assertEqual(plan.travel_gases, (b.Gas(0.35, 0.25),))
+        self.assertEqual(plan.deco_gases, (b.Gas(0.50),))
+
+    def test_everything_survives_a_round_trip_through_json(self):
+        import json
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "c.json")
+            dc.save(_probe_config(), path)
+            with open(path, encoding="utf-8") as fh:
+                raw = json.load(fh)
+            plan, gp = dc.to_buhlmann(dc.load(path))[1:3]
+        for name, want in PLAN_PROBE.items():
+            with self.subTest(name):
+                self.assertAlmostEqual(getattr(plan, name), want, places=9)
+        for name, want in GAS_PROBE.items():
+            with self.subTest(f"GasPlan.{name}"):
+                self.assertAlmostEqual(getattr(gp, name), want, places=9)
+        # and the file is human/agent-editable: no field hidden behind a
+        # derived key the schema does not document
+        self.assertIn("p_h2o_bar", raw)
+        self.assertIn("ppo2_switch_tol", raw)
+
+
+class TestCliBinds(unittest.TestCase):
+    def setUp(self):
+        self.plan, self.gas_plan = _cli_plans()
+
+    def test_plan_fields(self):
+        for name, want in PLAN_PROBE.items():
+            with self.subTest(name):
+                self.assertAlmostEqual(getattr(self.plan, name), want, places=9)
+
+    def test_gas_plan_fields(self):
+        for name, want in GAS_PROBE.items():
+            with self.subTest(name):
+                self.assertAlmostEqual(getattr(self.gas_plan, name), want,
+                                       places=9)
+
+    def test_gas_stack_roles(self):
+        self.assertEqual(self.plan.travel_gases, (b.Gas(0.35, 0.25),))
+        self.assertEqual(self.plan.deco_gases, (b.Gas(0.50),))
+
+    def test_save_captures_every_field_for_the_agentic_side(self):
+        """`--save` has to write what was planned, or the CLI and an agent
+        editing the file disagree about the same dive."""
+        captured = {}
+        original = cli.cmd_plan
+        cli.cmd_plan = lambda args: captured.setdefault("args", args) and 0
+        try:
+            with contextlib.redirect_stdout(io.StringIO()), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                cli.main(CLI_ARGV)
+        finally:
+            cli.cmd_plan = original
+        cfg = cli._config_from_args(captured["args"])
+        plan, gp = dc.to_buhlmann(cfg)[1:3]
+        for name, want in PLAN_PROBE.items():
+            with self.subTest(name):
+                self.assertAlmostEqual(getattr(plan, name), want, places=9)
+        for name, want in GAS_PROBE.items():
+            with self.subTest(f"GasPlan.{name}"):
+                self.assertAlmostEqual(getattr(gp, name), want, places=9)
+
+
+@unittest.skipUnless(_HAVE_GUI, "Tk/matplotlib GUI not available")
+class TestGuiBinds(unittest.TestCase):
+    """The one that used to be untrue: several of these were config
+    passthrough with no widget at all."""
+
+    #: plan field -> the GUI variable that drives it
+    WIDGETS: ClassVar[dict[str, tuple[str, str]]] = {
+        "descent_rate": ("descent_rate", "17"),
+        "ascent_rate": ("ascent_rate", "7"),
+        "stop_interval": ("stop_interval", "2"),
+        "last_stop_depth": ("last_stop", "6"),
+        "gf_low": ("gf_lo", "22"),
+        "gf_high": ("gf_hi", "77"),
+        "surface_p": ("surface_p", "0.93"),
+        "msw_per_bar": ("msw_per_bar", "10.25"),
+        "p_h2o": ("p_h2o", "0.0567"),
+        "ppo2_deco": ("ppo2_deco", "1.55"),
+        "ppo2_bottom": ("ppo2_bottom", "1.35"),
+        "ppo2_min": ("ppo2_min", "0.19"),
+        "ppo2_switch_tol": ("ppo2_switch_tol", "0.09"),
+    }
+    GAS_WIDGETS: ClassVar[dict[str, tuple[str, str]]] = {
+        "sac": ("sac", "17.5"), "sac_deco": ("sac_deco", "13.5"),
+        "sac_multiplier": ("sac_mult", "1.75"),
+        "problem_minutes": ("problem_min", "2.5"),
+    }
+
+    def setUp(self):
+        self.root = tk.Tk()
+        self.root.withdraw()
+        self.app = app.DecoApp(self.root)
+
+    def tearDown(self):
+        self.root.destroy()
+
+    def _set_everything(self):
+        for _field, (var, value) in self.WIDGETS.items():
+            getattr(self.app, var).set(value)
+        for _field, (var, value) in self.GAS_WIDGETS.items():
+            getattr(self.app, var).set(value)
+        self.app.two_divers.set(True)
+
+    def test_every_plan_field_has_a_widget_that_binds(self):
+        self._set_everything()
+        plan = self.app._make_plan()
+        for name, want in PLAN_PROBE.items():
+            with self.subTest(name):
+                self.assertAlmostEqual(getattr(plan, name), want, places=9)
+
+    def test_every_gas_plan_field_has_a_widget_that_binds(self):
+        self._set_everything()
+        gp = self.app._gas_plan()
+        for name, want in GAS_PROBE.items():
+            with self.subTest(name):
+                self.assertAlmostEqual(getattr(gp, name), want, places=9)
+
+    def test_the_widget_map_covers_every_field(self):
+        """If a field gains a probe value but no GUI widget, say so here rather
+        than letting the two tests above quietly test a shorter list."""
+        self.assertEqual(set(PLAN_PROBE) - set(self.WIDGETS), set())
+        self.assertEqual(set(GAS_PROBE) - set(self.GAS_WIDGETS) - {"divers"},
+                         set())
+
+    def test_everything_round_trips_through_the_config(self):
+        self._set_everything()
+        cfg = self.app._collect_config()
+        plan, gp = dc.to_buhlmann(cfg)[1:3]
+        for name, want in PLAN_PROBE.items():
+            with self.subTest(name):
+                self.assertAlmostEqual(getattr(plan, name), want, places=9)
+        for name, want in GAS_PROBE.items():
+            with self.subTest(f"GasPlan.{name}"):
+                self.assertAlmostEqual(getattr(gp, name), want, places=9)
+        # and reloading puts the same numbers back in the boxes
+        self.app._apply_config(cfg)
+        again = self.app._make_plan()
+        for name, want in PLAN_PROBE.items():
+            with self.subTest(f"reload {name}"):
+                self.assertAlmostEqual(getattr(again, name), want, places=9)
+
+    def test_last_stop_switch_and_field_stay_in_step(self):
+        """The '6 m' shorthand writes the free field, so the two can't disagree
+        about the same dive."""
+        self.app.last_stop6.set(True)
+        self.assertEqual(self.app._make_plan().last_stop_depth, 6.0)
+        self.app.last_stop6.set(False)
+        self.assertEqual(self.app._make_plan().last_stop_depth, 3.0)
+        # …and the free field can still express what the switch cannot
+        self.app.last_stop.set("9")
+        self.assertEqual(self.app._make_plan().last_stop_depth, 9.0)
+
+
+if __name__ == "__main__":
+    unittest.main()

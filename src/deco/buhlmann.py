@@ -212,10 +212,11 @@ class Tissues:
     pHe: list[float] = field(default_factory=lambda: [0.0] * N_COMP)
 
     @classmethod
-    def at_surface(cls, surface_p: float = P_ATM, gas: Gas = AIR) -> Tissues:
+    def at_surface(cls, surface_p: float = P_ATM, gas: Gas = AIR,
+                   p_h2o: float = P_H2O) -> Tissues:
         """Fully saturated at surface on the given gas (default air)."""
-        p_insp_n2 = (surface_p - P_H2O) * gas.fN2
-        p_insp_he = (surface_p - P_H2O) * gas.fHe
+        p_insp_n2 = (surface_p - p_h2o) * gas.fN2
+        p_insp_he = (surface_p - p_h2o) * gas.fHe
         return cls(pN2=[p_insp_n2] * N_COMP, pHe=[p_insp_he] * N_COMP)
 
     def copy(self) -> Tissues:
@@ -242,14 +243,14 @@ def _schreiner(p0: float, p_insp_start: float, rate_insp: float,
 
 def update_tissues(tissues: Tissues, gas: Gas,
                    p_amb_start: float, p_amb_end: float,
-                   t_min: float) -> None:
+                   t_min: float, p_h2o: float = P_H2O) -> None:
     """Update all 16 compartments over a segment of constant ascent/descent
     rate (or flat, if p_amb_start == p_amb_end). In-place."""
     if t_min <= 0:
         return
     rate_amb = (p_amb_end - p_amb_start) / t_min
-    p_insp_n2_0 = (p_amb_start - P_H2O) * gas.fN2
-    p_insp_he_0 = (p_amb_start - P_H2O) * gas.fHe
+    p_insp_n2_0 = (p_amb_start - p_h2o) * gas.fN2
+    p_insp_he_0 = (p_amb_start - p_h2o) * gas.fHe
     rate_n2 = rate_amb * gas.fN2
     rate_he = rate_amb * gas.fHe
     for i in range(N_COMP):
@@ -383,6 +384,11 @@ class DivePlan:
     gf_high: float = 0.80
     surface_p: float = P_ATM
     msw_per_bar: float = MSW_PER_BAR
+    # Alveolar water-vapour pressure (bar). Bühlmann's 0.0627 by default;
+    # Schreiner's 0.0567 is what Baker's GFDECO, MultiDeco and Shearwater use,
+    # and it is a real input to the schedule, so it is a plan field rather than
+    # a module constant nobody can reach (DECISIONS.md #19).
+    p_h2o: float = P_H2O
     # Travel (descent) gases: breathed while the bottom gas is too hypoxic to use
     # near the surface (e.g. a hypoxic trimix such as 10/70).
     travel_gases: Sequence[Gas] = field(default_factory=tuple)
@@ -410,7 +416,7 @@ class DivePlan:
         # to pressure with surface_p / msw_per_bar: zero or negative values
         # mean division-by-zero crashes or physically impossible schedules.
         for name in ("descent_rate", "ascent_rate", "stop_interval",
-                     "surface_p", "msw_per_bar"):
+                     "surface_p", "msw_per_bar", "p_h2o"):
             v = getattr(self, name)
             if v <= 0:
                 raise ValueError(f"{name} must be > 0 (got {v:g})")
@@ -519,7 +525,7 @@ def _move(tissues: Tissues, segs: list[DiveSegment], plan: DivePlan,
         p_a = depth_to_p_amb(a, plan.surface_p, plan.msw_per_bar)
         p_c = depth_to_p_amb(c, plan.surface_p, plan.msw_per_bar)
         t = abs(c - a) / rate
-        update_tissues(tissues, gas, p_a, p_c, t)
+        update_tissues(tissues, gas, p_a, p_c, t, plan.p_h2o)
         gf = (gf_at(p_c, plan.gf_low, plan.gf_high, p_first_stop, plan.surface_p)
               if kind == "ascent" and p_first_stop is not None else None)
         segs.append(DiveSegment(kind, a, c, t, gas, gf_used=gf))
@@ -574,7 +580,7 @@ def plan_multilevel(levels: Sequence[Level], bottom_gas: Gas,
                 f"cumulative, i.e. minutes since leaving the surface")
 
     tissues = (start_tissues.copy() if start_tissues
-               else Tissues.at_surface(plan.surface_p, AIR))
+               else Tissues.at_surface(plan.surface_p, AIR, plan.p_h2o))
     segs: list[DiveSegment] = []
     def descent_gas_for(d: float) -> Gas:
         return plan.descent_gas(d, bottom_gas)
@@ -617,7 +623,8 @@ def plan_multilevel(levels: Sequence[Level], bottom_gas: Gas,
         # legs; on a normal dive it simply is the bottom gas.
         gas_here = plan.descent_gas(depth, bottom_gas)
         p_level = depth_to_p_amb(depth, plan.surface_p, plan.msw_per_bar)
-        update_tissues(tissues, gas_here, p_level, p_level, t_flat)
+        update_tissues(tissues, gas_here, p_level, p_level, t_flat,
+                       plan.p_h2o)
         segs.append(DiveSegment("bottom", depth, depth, t_flat, gas_here,
                                 ceiling_m=violated))
         run = level.runtime
@@ -659,7 +666,8 @@ def plan_multilevel(levels: Sequence[Level], bottom_gas: Gas,
         # Wait at this stop in 1-minute increments until ceiling allows next stop.
         stop_minutes = 0.0
         while ceiling(tissues, gf_at_next) > p_next + 1e-6:
-            update_tissues(tissues, gas_here, p_here, p_here, 1.0)
+            update_tissues(tissues, gas_here, p_here, p_here, 1.0,
+                           plan.p_h2o)
             stop_minutes += 1.0
             if stop_minutes > 24 * 60:
                 raise RuntimeError("Stop exceeded 24h; aborting (bad input?)")
@@ -688,10 +696,10 @@ def ndl(depth_m: float, gas: Gas = AIR, plan: DivePlan | None = None,
     if plan is None:
         plan = DivePlan()
     base = (start_tissues.copy() if start_tissues
-            else Tissues.at_surface(plan.surface_p, AIR))
+            else Tissues.at_surface(plan.surface_p, AIR, plan.p_h2o))
     p_amb = depth_to_p_amb(depth_m, plan.surface_p, plan.msw_per_bar)
     for minute in range(1, max_min + 1):
-        update_tissues(base, gas, p_amb, p_amb, 1.0)
+        update_tissues(base, gas, p_amb, p_amb, 1.0, plan.p_h2o)
         if ceiling(base, plan.gf_high) > plan.surface_p + 1e-6:
             return minute - 1
     return None
@@ -699,6 +707,88 @@ def ndl(depth_m: float, gas: Gas = AIR, plan: DivePlan | None = None,
 
 def total_runtime(segments: Iterable[DiveSegment]) -> float:
     return sum(s.duration for s in segments)
+
+
+# -----------------------------------------------------------------------------
+# Printed-schedule notation — ONE definition, used by every renderer
+# -----------------------------------------------------------------------------
+
+def runtime_min(minutes: float) -> int:
+    """A runtime as a schedule shows it: **truncated** to whole minutes.
+
+    MultiDeco's convention, verified against real exports — the plan prints the
+    runtime in parentheses and every row is the floor of the true value
+    (1.61 → 1, 41.22 → 41, 42.56 → 42, 43.875 → 43, 50.44 → 50). Truncating
+    rather than rounding also fails safe: a stop is never printed as finishing
+    earlier than it does.
+
+    Re-exported as ``report.runtime_min``; it lives here so the schedule
+    notation has a single home that the dependency-free core can reach.
+    """
+    return math.floor(minutes + 1e-9)
+
+
+@dataclass(frozen=True)
+class StopLeg:
+    """One row of a printed schedule, in the notation every renderer uses.
+
+    The numbers a diver reads, and exactly what each one means:
+
+    ``depth``  the stop depth (msw).
+    ``run``    **the runtime at which you LEAVE this depth**, truncated to
+               whole minutes. Not when you arrive, and not a stopwatch
+               restarted at each stop — the ascent is flown off one runtime
+               clock.
+    ``leg``    **the time from leaving the row above to leaving this one** —
+               so the ascent down-time to the stop plus the hold on it. By
+               construction it is the difference of the printed runtimes, which
+               is the whole point: the leg column always adds up to the run
+               column.
+    ``hold``   the exact hold in minutes, for anything that needs the
+               underlying number rather than the printed one.
+
+    ``leg`` is the subtle one and the reason this type exists. The planner
+    produces whole-minute *holds* with fractional ascents on top, so the
+    runtime advances further than the hold does: a 3-minute hold at 3 m moves
+    the clock by 3 ⅓. Printing the hold beside the runtime reads as a
+    contradiction underwater — "3 minutes" against a clock that advanced 4 —
+    and a diver adding the column up surfaces one ascent early per stop.
+    MultiDeco prints the leg for the same reason (DECISIONS.md #17).
+
+    ``leg`` is measured from the previous **stop**, and for the first stop from
+    leaving the bottom — never from whatever else a particular view happens to
+    print. That is what lets the runtime card, the GUI's stop table and the
+    contingency cut table show identical numbers for one dive: a gas-switch row
+    on the card is an annotation, not a row the clock is measured from.
+    """
+    depth: float
+    leg: int
+    run: int
+    hold: float
+    gas: Gas
+
+
+def stop_legs(segments: Sequence[DiveSegment]) -> list[StopLeg]:
+    """The deco stops of a planned dive as printable rows — see `StopLeg`.
+
+    Renderer-independent by construction: the first leg runs from leaving the
+    bottom phase, each later one from the previous stop. Every view of the same
+    dive therefore prints the same minutes for the same stop.
+    """
+    segs = list(segments)
+    be = _bottom_phase_end(segs)
+    prev = runtime_min(sum(s.duration for s in segs[:be]))
+    legs: list[StopLeg] = []
+    run = float(sum(s.duration for s in segs[:be]))
+    for s in segs[be:]:
+        run += s.duration
+        if s.kind != "stop" or s.duration <= 0:
+            continue
+        printed = runtime_min(run)
+        legs.append(StopLeg(depth=s.depth_start, leg=printed - prev,
+                            run=printed, hold=s.duration, gas=s.gas))
+        prev = printed
+    return legs
 
 
 def max_depth(levels: Sequence[Level]) -> float:
@@ -881,7 +971,7 @@ def ceiling_profile(segments: Sequence[DiveSegment],
         plan = DivePlan()
     segs = list(segments)
     tissues = (start_tissues.copy() if start_tissues
-               else Tissues.at_surface(plan.surface_p, AIR))
+               else Tissues.at_surface(plan.surface_p, AIR, plan.p_h2o))
     bottom_end = _bottom_phase_end(segs)
     p_first_stop: float | None = None       # unknown until the deco ascent
     out = [(0.0, ceiling_depth(tissues, plan.gf_low,
@@ -906,7 +996,8 @@ def ceiling_profile(segments: Sequence[DiveSegment],
         for k in range(1, n + 1):
             p0 = p_a + (p_b - p_a) * (k - 1) / n
             p1 = p_a + (p_b - p_a) * k / n
-            update_tissues(tissues, s.gas, p0, p1, s.duration / n)
+            update_tissues(tissues, s.gas, p0, p1, s.duration / n,
+                           plan.p_h2o)
             gf = (plan.gf_low if p_first_stop is None
                   else gf_at(p1, plan.gf_low, plan.gf_high,
                              p_first_stop, plan.surface_p))
@@ -945,11 +1036,16 @@ class ContingencyCell:
 
     def text(self) -> str:
         """Wetnotes cell text: stops deep→shallow as 'depth:min', then the TTS
-        rounded UP ('· N′'); 'no deco' when clean, 'n/a' when unplannable."""
+        rounded UP ('· N′'); 'no deco' when clean, 'n/a' when unplannable.
+
+        'min' is the `StopLeg` leg — ascent to the stop plus the hold — the
+        same notation as the runtime card and the GUI's stop table, so a cut
+        table and a plan for the same profile never print different numbers.
+        The first stop shows its bare hold: nothing precedes it in a cell.
+        TTS is rounded UP, unlike a runtime: it is a budget, not a clock."""
         if self.segments is None:
             return "n/a"
-        stops = [f"{s.depth_start:g}:{s.duration:g}" for s in self.segments
-                 if s.kind == "stop" and s.duration > 0]
+        stops = [f"{leg.depth:g}:{leg.leg:g}" for leg in stop_legs(self.segments)]
         tts = math.ceil(time_to_surface(self.segments) - 1e-9)
         return f"{' '.join(stops) if stops else 'no deco'} · {tts:g}′"
 
@@ -1015,7 +1111,6 @@ class GasPlan:
     divers: int = 1                       # divers sharing the supply in an
                                           # emergency (2 = buddy out of gas,
                                           # shared until the first gas switch)
-    tank_liters: float | None = None   # total cylinder volume, for bar output
     # Separate SAC for gas breathed off a designated deco cylinder — hanging on
     # a stop is not working the bottom, and MultiDeco/Shearwater plan the two
     # rates apart. None = one rate for the whole dive (see DECISIONS.md #16).
@@ -1036,9 +1131,6 @@ class GasPlan:
                 f"problem_minutes must be >= 0 (got {self.problem_minutes:g})")
         if self.divers < 1:
             raise ValueError(f"divers must be >= 1 (got {self.divers})")
-        if self.tank_liters is not None and self.tank_liters <= 0:
-            raise ValueError(
-                f"tank_liters must be > 0 when set (got {self.tank_liters:g})")
 
     def sac_for(self, gas: Gas, deco_gases: Sequence[Gas] = ()) -> float:
         """The consumption rate to bill `gas` at: `sac_deco` when `gas` is one

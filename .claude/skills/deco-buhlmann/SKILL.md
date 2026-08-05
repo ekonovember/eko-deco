@@ -65,13 +65,18 @@ Defaults: GF 30/70 on the CLI (the library `DivePlan` uses 30/80), descent
 BAR`) plan fresh water and altitude dives, and they move the schedule, ppO2,
 MOD, END, density, CNS/OTU and gas volumes together — say so when relaying a
 plan for a lake. Altitude assumes an acclimatised diver. `--sac-deco` bills gas
-breathed off a deco cylinder at its own rate. Deco-gas switches snap to standard stop depths (O2 at
+breathed off a deco cylinder at its own rate. Every algorithm input is settable
+from the CLI, `dive_plan.json` and the GUI alike (DECISIONS #19) — including
+`--p-h2o` (0.0627 Bühlmann / 0.0567 Schreiner) and `--ppo2-switch-tol`. Deco-gas switches snap to standard stop depths (O2 at
 the 6 m stop, EAN50 at 21 m). On Windows set `PYTHONUTF8=1` for clean output.
 Every plan prints ppO2/density/ceiling warnings (`warnings` in `--json`),
 CNS%/OTU, END + gas density — quote the warnings when relaying a schedule; with
-no disclaimer in the output they are the only caveat the user sees. Runtimes are
-rendered truncated to whole minutes (`report.runtime_min`, MultiDeco's
-convention). GF-low > GF-high is rejected. `plan <config>` errors out (exit 2) on a missing/corrupt file and
+no disclaimer in the output they are the only caveat the user sees. Printed schedules use one notation everywhere (`buhlmann.stop_legs`,
+DECISIONS #17): **`run` is the runtime you LEAVE that depth**, truncated to
+whole minutes; the stop minutes are the **leg** — the ascent to the stop plus
+the hold, measured from the previous stop — so they add up to the runtimes;
+TTS rounds UP. Quote it that way: "leave 6 m at 43", not "stop 3 min".
+`--json` carries it as `stops`. GF-low > GF-high is rejected. `plan <config>` errors out (exit 2) on a missing/corrupt file and
 ignores other CLI flags.
 
 ## Library use

@@ -90,13 +90,10 @@ def _plan(scenario: int, decos=(EAN50, O2), **kw) -> list[b.DiveSegment]:
     """The scenario's 32 m / 40 min square dive. Defaults to eko-deco's own
     environment; pass surface_p / msw_per_bar for MultiDeco's display one."""
     _label, gas, gf, *_ = SCENARIOS[scenario]
+    kw.setdefault("p_h2o", MD_P_H2O)
     plan = b.DivePlan(gf_low=gf[0], gf_high=gf[1], descent_rate=8.0,
                       ascent_rate=9.0, deco_gases=tuple(decos), **kw)
-    saved, b.P_H2O = b.P_H2O, MD_P_H2O
-    try:
-        return b.plan_dive(32, 40, gas, plan)[0]
-    finally:
-        b.P_H2O = saved
+    return b.plan_dive(32, 40, gas, plan)[0]
 
 
 class TestPrintedEnvironment(unittest.TestCase):

@@ -1,6 +1,7 @@
 """Tests for the shared report layer (report.py)."""
 from __future__ import annotations
 
+import math
 import unittest
 
 from deco import buhlmann as b
@@ -156,17 +157,23 @@ class TestWetnotesRows(unittest.TestCase):
         return b.plan_dive(32, 40, b.Gas(0.36), plan)[0]
 
     def test_stop_column_reconciles_with_the_run_column(self):
-        """The property the format exists for: every STOP is the difference of
-        the RUN cells around it, so a diver adding the column up lands on the
-        printed runtime instead of a minute early."""
+        """The property the format exists for: a diver adding the STOP column
+        up lands on the printed runtime instead of a minute early.
+
+        The clock runs bottom row → stop → stop. A gas-switch row is an
+        annotation carrying the runtime of the switch, not a row the legs are
+        measured from — that is what keeps the card, the GUI stop table and the
+        cut table printing identical minutes (see `buhlmann.StopLeg`)."""
         for segs in (self._scenario_1(),
                      b.plan_dive(45, 25, b.AIR,
                                  b.DivePlan(deco_gases=(b.Gas(0.50),)))[0]):
             rows = rp.wetnotes_rows(segs)
             prev_run = 0
             for depth, stop, run, _gas in rows:
+                if stop == "gas":               # annotation; clock unaffected
+                    continue
                 run_i = int(run)
-                if stop not in ("-", "gas"):
+                if stop != "-":
                     self.assertEqual(int(stop), run_i - prev_run,
                                      f"row {depth}: STOP {stop} != "
                                      f"{run_i} - {prev_run}")
@@ -176,8 +183,10 @@ class TestWetnotesRows(unittest.TestCase):
         rows = rp.wetnotes_rows(self._scenario_1())
         self.assertEqual([r[:3] for r in rows], [
             ["32 m", "-", "40"],     # bottom, leaving at runtime 40
-            ["21 m", "gas", "41"],   # EAN50 switch on the way up
-            ["6 m", "2", "43"],      # MultiDeco: 9 m (43) then 6 m 1:00 (44)
+            ["21 m", "gas", "41"],   # EAN50 switch on the way up (annotation)
+            ["6 m", "3", "43"],      # 40 -> 43: the ascent from the bottom
+                                     # plus the 1 min hold. MultiDeco splits
+                                     # the same 3 min as 9 m (43) + 6 m 1:00.
             ["3 m", "4", "47"],      # MultiDeco: 3 m 4:00 (48)
             ["surf", "-", "47"],
         ])
@@ -199,3 +208,69 @@ class TestWetnotesRows(unittest.TestCase):
         segs, _ = b.plan_dive(18, 30, b.AIR)
         rows = rp.wetnotes_rows(segs)
         self.assertEqual([r[0] for r in rows], ["18 m", "surf"])
+
+
+class TestOneNotationEverywhere(unittest.TestCase):
+    """Every view of one dive prints the same numbers for the same thing.
+
+    The runtime card, the GUI's stop table and the contingency cut table are
+    three renderings of one schedule, and they used to disagree: the card
+    showed the *leg* (ascent to the stop plus the hold, per DECISIONS.md #17)
+    while the other two showed the bare hold, so the same 3 m stop read as
+    "4" on the card and "3" in the results table. All three now render
+    `buhlmann.stop_legs`.
+    """
+
+    def _dive(self):
+        plan = b.DivePlan(gf_low=0.40, gf_high=0.85, descent_rate=8.0,
+                          ascent_rate=9.0,
+                          deco_gases=(b.Gas(0.50), b.Gas(1.0)))
+        return b.plan_dive(32, 40, b.Gas(0.36), plan)[0]
+
+    def test_run_is_when_you_leave_the_stop(self):
+        """The definition worth being sure of: `run` is the moment you leave,
+        so it is the arrival runtime plus the hold — never the arrival."""
+        segs = self._dive()
+        run = 0.0
+        arrivals, departures = [], []
+        for s in segs:
+            if s.kind == "stop" and s.duration > 0:
+                arrivals.append(run)
+                departures.append(run + s.duration)
+            run += s.duration
+        for leg, arrive, leave in zip(b.stop_legs(segs), arrivals, departures,
+                                      strict=True):
+            self.assertEqual(leg.run, rp.runtime_min(leave))
+            self.assertNotEqual(leg.run, rp.runtime_min(arrive))
+            self.assertAlmostEqual(leave - arrive, leg.hold, places=9)
+
+    def test_card_and_stop_table_agree_stop_for_stop(self):
+        segs = self._dive()
+        card = {r[0]: (r[1], r[2]) for r in rp.wetnotes_rows(segs)
+                if r[1] not in ("-", "gas")}
+        table = {f"{leg.depth:.0f} m": (str(leg.leg), str(leg.run))
+                 for leg in b.stop_legs(segs)}
+        self.assertEqual(card, table)
+
+    def test_cut_table_cell_uses_the_same_legs(self):
+        segs = self._dive()
+        cell = b.ContingencyCell(32.0, 40.0, segs).text()
+        for leg in b.stop_legs(segs):
+            self.assertIn(f"{leg.depth:g}:{leg.leg:g}", cell)
+
+    def test_legs_sum_to_the_runtime_in_every_view(self):
+        segs = self._dive()
+        run_bottom = rp.runtime_min(b.total_runtime(segs)
+                                    - b.time_to_surface(segs))
+        legs = b.stop_legs(segs)
+        self.assertEqual(run_bottom + sum(l.leg for l in legs), legs[-1].run)
+
+    def test_tts_rounds_up_while_runtimes_truncate(self):
+        """Deliberately different directions: a runtime is a clock reading, a
+        TTS is a budget you must not underestimate."""
+        segs = self._dive()
+        tts = b.time_to_surface(segs)
+        cell = b.ContingencyCell(32.0, 40.0, segs).text()
+        self.assertIn(f"{math.ceil(tts - 1e-9):g}′", cell)
+        self.assertLess(rp.runtime_min(b.total_runtime(segs)),
+                        b.total_runtime(segs))

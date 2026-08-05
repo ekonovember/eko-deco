@@ -276,10 +276,15 @@ on the path. The suite has two tiers:
 - **26 cross-check tests** — these compile the reference implementations
   (Subsurface's `deco.cpp` with **g++**, Baker's `GFDECO` with **gfortran**) and
   run eko-deco against them. Without those compilers the two modules skip
-  themselves and you see `Ran 233 tests` — that is a *missing compiler*, not
+  themselves and you see `Ran 258 tests` — that is a *missing compiler*, not
   missing data; the skip message says so and tells you what to install. On
   Windows, install MSYS2/MinGW-w64 (or just run the suite under WSL) to get all
-  259.
+  284.
+
+Every input the model takes is settable from all three front ends — the config
+file, the CLI and the GUI — and `tests/test_input_coverage.py` enumerates
+`DivePlan`/`GasPlan` by reflection and fails if one is not *binding*, i.e. set
+through a front end and actually arriving in the plan the planner is handed.
 
 Beyond comparing outputs, `tests/planner_diff.py` compares the *inputs*: it
 keeps a registry of every model constant and planner setting, fails the suite if

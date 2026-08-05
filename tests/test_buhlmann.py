@@ -892,13 +892,13 @@ class TestDomainValidation(unittest.TestCase):
                    {"sac": 20.0, "sac_multiplier": 0.5},
                    {"sac": 20.0, "problem_minutes": -1.0},
                    {"sac": 20.0, "divers": 0},
-                   {"sac": 20.0, "tank_liters": 0.0}):
+                   {"sac": 20.0, "sac_deco": 0.0}):
             with self.assertRaises(ValueError, msg=kw):
                 b.GasPlan(**kw)
 
     def test_gasplan_accepts_sane_inputs(self):
         b.GasPlan(sac=20.0, sac_multiplier=1.0, problem_minutes=0.0,
-                  divers=2, tank_liters=24.0)
+                  divers=2, sac_deco=12.0)
 
 
 class TestGasFractionClamp(unittest.TestCase):

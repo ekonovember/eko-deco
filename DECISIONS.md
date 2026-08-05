@@ -308,25 +308,43 @@ reserve on a deco gas scales with it (`sac_for` × `sac_multiplier`), but **rock
 bottom does not move**: that is back gas by definition, and a regression test
 pins it.
 
-## #17 — The printed card's STOP column is the leg, not the hold
+## #17 — One printed-schedule notation, defined once
 
-On the wetnotes runtime card (`report.wetnotes_rows`), a stop row's STOP cell
-is the time from leaving the previous row to leaving this one — the ascent to
-the stop *plus* the hold — taken as the difference of the printed runtimes.
+`buhlmann.StopLeg` / `stop_legs` define what the numbers on a printed schedule
+mean, and every renderer uses them: the runtime card
+(`report.wetnotes_rows`), the GUI's stop table, and the contingency cut-table
+cell (`ContingencyCell.text`).
 
-**Why.** Our stop durations are whole-minute holds with the ascents on top, so
-the runtime advances further than the hold: a 3-minute hold at 3 m moves the
-runtime by 3 ⅓. Printing the hold alone left the card's two columns
-irreconcilable — 6 m "1" at run 43 then 3 m "3" at run 47 — and a diver adding
-the STOP column up surfaces early by one ascent per stop. Taking the difference
-of the printed runtimes makes the columns agree by construction and is exactly
-how MultiDeco prints a schedule (verified against both `examples/` exports,
-where the "0:27" first-stop rows are its padding to a whole runtime minute).
+* **`run` is the runtime at which you LEAVE that depth**, truncated to whole
+  minutes (`runtime_min`). Not when you arrive, and not a stopwatch restarted
+  at each stop — the ascent is flown off one runtime clock.
+* **`leg` is the ascent to the stop plus the hold on it**, measured from the
+  previous stop, and from leaving the bottom for the first stop.
+* **TTS rounds UP** while runtimes truncate. Deliberately opposite directions:
+  a runtime is a clock reading, a TTS is a budget you must not underestimate.
 
-**Scope.** Rendering only — the planner's stop durations are unchanged, and the
-CLI's segment table still lists ascents as their own rows, which is the right
-shape for a full schedule dump. `tests/test_report.py` pins the reconciliation
-as a property over whole cards, not just the one example.
+**Why the leg and not the hold.** The planner produces whole-minute holds with
+fractional ascents on top, so the runtime advances further than the hold does —
+a 3-minute hold at 3 m moves the clock by 3 ⅓. Printing the hold beside the
+runtime reads as a contradiction underwater ("3 minutes" against a clock that
+advanced 4), and a diver adding the column up surfaces one ascent early on
+every stop. MultiDeco prints the leg for the same reason, verified against both
+exports in `examples/`.
+
+**Why measured from the previous stop, not from the previous printed row.**
+The first version measured each leg against whatever row the renderer happened
+to print above it. That reconciles within one view but makes views disagree:
+the card prints a gas-switch row, the GUI's stop table does not, so the same
+6 m stop read "2" on one and "3" on the other. A gas-switch row is an
+**annotation** — it carries the runtime the switch happens at, and the clock is
+not measured from it. The legs still sum to the runtime in every view.
+
+**Scope.** Rendering only; the planner's stop durations are unchanged and
+`StopLeg.hold` still carries the exact one. The CLI's segment table stays a raw
+dump with explicit ascent rows and untruncated runtimes — a different artifact,
+for reading the model rather than diving the plan — but `deco plan` also prints
+the card notation as a line, and `--json` carries it as `stops`.
+`tests/test_report.py` pins that all three views print identical numbers.
 
 ## #18 — Divergences are enumerated, not noticed
 
@@ -373,3 +391,36 @@ the absolute numbers gave, but now actually comparable between the two.
 **Consequence.** Adding a constant to `buhlmann` without registering it fails
 the suite. That is deliberate friction, and it is the only thing making "we can
 detect all possible differences" a checkable claim.
+
+## #19 — Every algorithm input is binding, in all three front ends
+
+Every field of `DivePlan` and `GasPlan` is settable from the config file, the
+CLI and the GUI, and `tests/test_input_coverage.py` enumerates them by
+reflection and fails if one is not.
+
+**Why.** "Supported" had three different meanings. `ppo2_switch_tol` was
+reachable from nothing at all. `P_H2O` was not a parameter — a module global
+that the cross-check tests monkeypatched, so the water-vapour constant, which
+genuinely differs between planners (Bühlmann 0.0627, Schreiner/Baker/MultiDeco
+0.0567), could not be set on a dive. And the GUI *read* the ascent/descent
+rates, the stop interval and the ppO₂ window from `dive_plan.json` and wrote
+them back untouched: present in the file, invisible in the app, unchangeable
+there. A hand-edited `ascent_rate` reshaped every schedule with nothing on
+screen even hinting at it.
+
+**Binding, not merely present.** The test does not check that a flag parses or
+a key exists; it sets a distinctive value through each front end and asserts it
+arrives in the `DivePlan`/`GasPlan` the planner is handed. Fields carried as
+gas-stack roles (`travel_gases`, `deco_gases`) are checked the same way through
+the role mechanism.
+
+**Consequence.** A new plan field fails the suite until it is wired everywhere
+and given a probe value — the same deliberate friction as the constant registry
+(#18). `GasPlan.tank_liters` was deleted rather than wired: it was declared and
+validated but never read, superseded by the per-cylinder tanks on the gas
+stack, and a field that looks like an input and is not is worse than no field.
+
+**Not everything is a per-dive knob.** The GUI groups the rates, the stop
+interval, the ppO₂ window, the switch tolerance and P_H₂O into an "Algorithm &
+rates" panel, collapsed by default. Visible and editable, without implying they
+are things to fiddle with per dive.

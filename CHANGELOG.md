@@ -49,6 +49,17 @@ pre-1.0, so anything may still move.
   and MultiDeco's stop-time printing).
 - `report.wetnotes_rows` — the printable runtime card's rows, moved out of the
   GUI into the shared layer so they are testable without a display.
+- **Every algorithm input is now settable from the config, the CLI and the
+  GUI** ([DECISIONS.md #19](DECISIONS.md)), with
+  `tests/test_input_coverage.py` enumerating `DivePlan`/`GasPlan` by reflection
+  and failing if one is not *binding* — set through a front end and arriving in
+  the plan the planner is handed. New: `DivePlan.p_h2o` (the alveolar
+  water-vapour pressure was a module global the tests monkeypatched;
+  `--p-h2o`, `p_h2o_bar`), `ppo2_switch_tol` (previously reachable from
+  nothing; `--ppo2-switch-tol`), and GUI controls for the ascent/descent rates,
+  stop interval, free last-stop depth and the whole ppO₂ window — all of which
+  the GUI had been reading from `dive_plan.json` and writing back untouched,
+  invisible and unchangeable in the app.
 - **A constant/variable divergence harness**, `tests/planner_diff.py`. The
   fresh-water environment was found by a manual parameter scan; this makes that
   mechanical. It keeps a registry of every model constant and planner setting —
@@ -75,15 +86,25 @@ pre-1.0, so anything may still move.
 - [`DECISIONS.md`](DECISIONS.md) — the numbered decision log the code cites.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md), this changelog, and a `.pre-commit-config.yaml`.
 
+### Removed
+
+- `GasPlan.tank_liters`, which was declared and validated but never read —
+  superseded by the per-cylinder tanks on the gas stack. A field that looks
+  like an input and is not is worse than no field.
+
 ### Fixed
 
-- The wetnotes runtime card's **STOP column now reconciles with its RUN
-  column** ([DECISIONS.md #17](DECISIONS.md)). It printed the hold alone while
-  the runtime also advanced by the ascent, so a card could read `6 m | 1 | 43`
-  then `3 m | 3 | 47` — 4 minutes of runtime for a printed 3, and a diver
-  adding the column up surfaced a minute early per stop. STOP is now the leg
-  (ascent to the stop + hold), taken as the difference of the printed
-  runtimes, which is also how MultiDeco prints a schedule.
+- **One printed-schedule notation, defined once** in `buhlmann.StopLeg` /
+  `stop_legs` and rendered by all three views — the runtime card, the GUI's
+  stop table and the contingency cut-table cell
+  ([DECISIONS.md #17](DECISIONS.md)). `run` is the runtime you **leave** a
+  stop (truncated); the minutes are the **leg**, the ascent to the stop plus
+  the hold, so the column adds up to the runtimes. Previously the card showed
+  the leg while the stop table and cut table showed the bare hold, so one 3 m
+  stop read `4` on the card and `3` in the results table. A gas-switch row is
+  an annotation and the legs are not measured from it, which is what lets
+  views that show switches and views that don't agree. `deco plan` prints the
+  same notation as a line and `--json` carries it as `stops`.
 - `report.gas_report` is now overloaded, so callers that pass a `GasPlan` get a
   non-optional `GasReport` back.
 - The whole tree passes `ruff check` and `mypy` clean: PEP 585/604 annotations
