@@ -24,6 +24,7 @@ import math
 import os
 import re
 import sys
+import textwrap
 import tkinter as tk
 from dataclasses import dataclass, replace
 from tkinter import ttk
@@ -1195,7 +1196,22 @@ class DecoApp:
                       f" m/min · stops {plan.stop_interval:g} m"],
             ["ppO₂ limits", f"{plan.ppo2_bottom:g} bottom · {plan.ppo2_deco:g}"
                             f" deco · {plan.ppo2_min:g} min"],
+            # The environment moves every pressure below it, so it cannot be
+            # the one setting the readout stays silent about — least of all
+            # once the panel above makes it editable.
+            ["water", f"{rp.water_name(plan.msw_per_bar)}"
+                      f" · {plan.msw_per_bar:.4g} m/bar"],
+            ["surface", f"{plan.surface_p:g} bar"
+                        + (f" · ~{alt:.0f} m alt"
+                           if (alt := b.altitude_at_surface_p(plan.surface_p))
+                           >= 50 else "")],
         ], aligns=["<", "<"]))
+        # A non-default environment means the schedule no longer matches a
+        # planner set to sea-level salt — say so where the schedule is read.
+        if (env_note := rp.environment_note(plan)):
+            cards.append(format_card(["⚠ ENVIRONMENT"],
+                                     [[line] for line in textwrap.wrap(env_note, 46)],
+                                     aligns=["<"]))
 
         # --- GAS PLAN (per-cylinder + rock bottom) — every litre/bar/SHORT/turn
         # figure comes from the shared report layer, the SAME accounting the CLI

@@ -26,6 +26,14 @@ pre-1.0, so anything may still move.
 
 ### Added
 
+- `report.environment_note` — one line stating a dive's water type and surface
+  pressure, and that a non-default environment means the schedule will no
+  longer match a planner set to sea-level salt water. Shown by the CLI header
+  and as a GUI card, because the two `examples/` exports print fresh-water
+  pressures yet compute at sea-level salt, so choosing the physics costs ~2 min
+  of agreement with MultiDeco on the same dive. The GUI's DIVE card also gained
+  water/surface rows: the environment was the one input the readout stayed
+  silent about.
 - **Water type and altitude are settings now** ([DECISIONS.md #15](DECISIONS.md)).
   `surface_p` and `msw_per_bar` existed in the library but nothing outside it
   could reach them, so every dive planned as sea-level salt water. Now:

@@ -471,12 +471,9 @@ def _plan_text(res: rp.PlanResult, model_label: str, gas_lines, cont_lines,
     # Only worth a line when the dive is NOT sea-level salt water: those two
     # constants move every pressure below, so a fresh-water or altitude plan
     # must say so rather than look like a plain sea dive.
-    if (plan.msw_per_bar != b.MSW_PER_BAR or plan.surface_p != b.P_ATM):
-        alt = b.altitude_at_surface_p(plan.surface_p)
-        lines.append(f"Water: {rp.water_name(plan.msw_per_bar)} "
-                     f"({plan.msw_per_bar:.4g} m/bar) · "
-                     f"surface {plan.surface_p:g} bar"
-                     + (f" (~{alt:.0f} m altitude)" if alt >= 50 else ""))
+    note = rp.environment_note(plan)
+    if note:
+        lines.append(f"Water: {note}")
     if plan.travel_gases:
         lines.append("Travel gases: "
                      + ", ".join(repr(g) for g in plan.travel_gases))

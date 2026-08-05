@@ -204,6 +204,72 @@ class TestGasVolumes(unittest.TestCase):
             / MD_LITERS[2]["OK"][EAN50], 0.10)
 
 
+class TestDefaultsReproduceTheExports(unittest.TestCase):
+    """At eko-deco's own defaults — sea-level salt water — a plan of these two
+    dives lands on MultiDeco's runtime.
+
+    That is the reason the defaults are what they are, and it is pinned as a
+    *runtime*, not just as per-stop tolerances: the runtime is the number a
+    diver compares against the plan in their pocket.
+
+    Scenario 2 matches exactly; scenario 1 comes out one minute short because
+    MultiDeco holds 3:40 at the 3 m stop where we hold 3:00. That is stop
+    discretisation, not a model difference — we are 0.77 min under on one dive
+    and 0.23 min over on the other, so there is no bias to correct — but it is
+    asserted with its sign so a change in either direction is visible.
+    """
+
+    #: (scenario, MultiDeco's printed surface runtime, our expected runtime)
+    CASES = ((1, 48, 47), (2, 66, 66))
+
+    def test_surface_runtime(self):
+        for scenario, multideco, ours in self.CASES:
+            with self.subTest(scenario=scenario):
+                segs = _plan(scenario)          # defaults: salt, sea level
+                got = rp.runtime_min(b.total_runtime(segs))
+                self.assertEqual(got, ours)
+                self.assertLessEqual(abs(got - multideco), 1)
+
+    def test_the_shallow_stops_match_minute_for_minute(self):
+        """Where it matters most — the long shallow holds are identical."""
+        segs = _plan(2)
+        legs = {round(l.depth): l.leg for l in b.stop_legs(segs)}
+        for depth, minutes in ((9, 5), (6, 5), (3, 10)):
+            with self.subTest(depth=depth):
+                self.assertEqual(legs[depth], minutes)
+
+    def test_what_the_fresh_water_environment_costs(self):
+        """The trade the environment settings buy, quantified.
+
+        Planning scenario 2 in the fresh water MultiDeco *prints* takes 2 min
+        off the runtime — and with it the agreement with MultiDeco's own
+        schedule. Water is the dominant term; 150 m of altitude moves the
+        result by at most a minute and its sign is not the obvious one.
+
+        Altitude does two opposing things: the tissues start the dive *less*
+        loaded (saturation is `surface_p - p_h2o`), which shortens deco, while
+        the surfacing target is lower, which lengthens it. At 150 m the head
+        start wins or cancels; only at real altitude does the second dominate
+        (`test_buhlmann.TestEnvironment.test_altitude_lengthens_deco` pins that
+        at 1500 m). They are also not additive here, because a whole-minute
+        stop grid swallows sub-minute changes.
+        """
+        alt150 = b.surface_p_at_altitude(150)
+        for p_h2o, alt_delta in ((b.P_H2O, 0.0), (MD_P_H2O, -1.0)):
+            with self.subTest(p_h2o=p_h2o):
+                base = b.total_runtime(_plan(2, p_h2o=p_h2o))
+                fresh = b.total_runtime(
+                    _plan(2, msw_per_bar=MD_MSW_PER_BAR, p_h2o=p_h2o))
+                altitude = b.total_runtime(
+                    _plan(2, surface_p=alt150, p_h2o=p_h2o))
+                both = b.total_runtime(
+                    _plan(2, surface_p=alt150, msw_per_bar=MD_MSW_PER_BAR,
+                          p_h2o=p_h2o))
+                self.assertAlmostEqual(fresh - base, -2.0, places=6)
+                self.assertAlmostEqual(altitude - base, alt_delta, places=6)
+                self.assertAlmostEqual(both - base, -2.0, places=6)
+
+
 class TestPrintingConventions(unittest.TestCase):
     def test_runtimes_are_truncated(self):
         """Both exports confirm report.runtime_min: MultiDeco prints (41) for

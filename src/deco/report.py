@@ -44,6 +44,30 @@ def water_name(msw_per_bar: float) -> str:
                  if abs(v - msw_per_bar) < 1e-3), "custom")
 
 
+def environment_note(plan: b.DivePlan) -> str | None:
+    """One line describing the dive's environment, or None at the defaults.
+
+    The defaults — sea-level salt water — are what MultiDeco, Shearwater and
+    GFDECO plan with, so a schedule made at them is comparable with a plan from
+    any of those. Changing water type or surface pressure is a real physical
+    correction and moves every pressure the plan derives, but it also means the
+    schedule will NO LONGER match another planner's for the same dive: the two
+    exports in `examples/` print fresh-water pressures yet compute their
+    schedules at sea-level salt, so eko-deco's fresh-water plan for that dive
+    is ~2 min shorter than MultiDeco's. Saying so is the difference between an
+    informed choice and a surprise on the boat.
+    """
+    if plan.msw_per_bar == b.MSW_PER_BAR and plan.surface_p == b.P_ATM:
+        return None
+    alt = b.altitude_at_surface_p(plan.surface_p)
+    where = (f"{water_name(plan.msw_per_bar)} water ({plan.msw_per_bar:.4g} m/bar)"
+             f" · surface {plan.surface_p:g} bar")
+    if alt >= 50:
+        where += f" (~{alt:.0f} m altitude)"
+    return (f"{where} — non-default environment, so this schedule will differ "
+            f"from a planner set to sea-level salt water")
+
+
 def wetnotes_rows(segments: Sequence[b.DiveSegment]) -> list[list[str]]:
     """The printed schedule as ``[depth, stop, run, gas]`` string rows — the
     wetnotes/runtime-card format (see ``cards/README.md``).
