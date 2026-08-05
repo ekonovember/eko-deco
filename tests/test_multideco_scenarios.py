@@ -41,17 +41,30 @@ SCENARIOS = {
     2: ("scenario_2", b.Gas(0.28), (0.05, 0.50), 84, 33.8, 5.0),
 }
 
-# Every "N ppO2" the two exports print: (gas, depth_m, printed value).
-PRINTED_PPO2 = [
-    (b.Gas(0.36), 32, 1.47), (EAN50, 9, 0.94), (O2, 6, 1.58), (O2, 3, 1.29),
-    (b.Gas(0.28), 32, 1.15), (EAN50, 18, 1.37), (EAN50, 15, 1.23),
-    (EAN50, 12, 1.08),
-]
-# Every "N m ead" the two exports print: (gas, depth_m, printed value).
-PRINTED_EAD = [
-    (b.Gas(0.36), 32, 24), (EAN50, 9, 2), (b.Gas(0.28), 32, 28),
-    (EAN50, 18, 8), (EAN50, 15, 6), (EAN50, 12, 4),
-]
+# Every "N ppO2" each export prints: {scenario: [(gas, depth_m, printed)]}.
+# Kept PER SCENARIO on purpose. The two plans are different dives — different
+# bottom mix (EAN36 vs EAN28) and very different conservatism (GF 40/85 vs
+# 5/50) — so pooling their printed values into one list silently lets one
+# dive's evidence stand in for the other's. It happens to be harmless here
+# because both were planned at the same site, but that is a fact to state, not
+# to rely on: see COMBINED_ENVIRONMENT_EVIDENCE below.
+PRINTED_PPO2 = {
+    1: [(b.Gas(0.36), 32, 1.47), (EAN50, 9, 0.94), (O2, 6, 1.58), (O2, 3, 1.29)],
+    2: [(b.Gas(0.28), 32, 1.15), (EAN50, 18, 1.37), (EAN50, 15, 1.23),
+        (EAN50, 12, 1.08), (EAN50, 9, 0.94), (O2, 6, 1.58), (O2, 3, 1.29)],
+}
+# Every "N m ead" each export prints. (Scenario 1 also prints 0 m ead for the
+# two oxygen stops, which constrains nothing.)
+PRINTED_EAD = {
+    1: [(b.Gas(0.36), 32, 24), (EAN50, 9, 2)],
+    2: [(b.Gas(0.28), 32, 28), (EAN50, 18, 8), (EAN50, 15, 6), (EAN50, 12, 4)],
+}
+
+#: Both exports print "Wysokość = 150m (s)" — the same site, same water. That,
+#: and only that, is what licenses intersecting their two feasible environment
+#: regions into a tighter one. Stated here so the combination is a claim about
+#: the dives rather than an accident of sharing a list.
+COMBINED_ENVIRONMENT_EVIDENCE = True
 
 # MultiDeco's per-cylinder litres, per lost-gas column. The bottom-gas figure
 # is identical in both scenarios because the bottom phase is identical.
@@ -90,24 +103,26 @@ class TestPrintedEnvironment(unittest.TestCase):
     """Every ppO2 and ead the exports print, reproduced to the last digit."""
 
     def test_ppo2(self):
-        for gas, depth, printed in PRINTED_PPO2:
-            with self.subTest(gas=repr(gas), depth=depth):
-                got = gas.ppo2(depth, MD_SURFACE_P, MD_MSW_PER_BAR)
-                self.assertEqual(round(got, 2), printed)
+        for scenario, rows in PRINTED_PPO2.items():
+            for gas, depth, printed in rows:
+                with self.subTest(scenario=scenario, gas=repr(gas), depth=depth):
+                    got = gas.ppo2(depth, MD_SURFACE_P, MD_MSW_PER_BAR)
+                    self.assertEqual(round(got, 2), printed)
 
     def test_ead(self):
         # MultiDeco labels this "ead": equivalent AIR depth, so N2 only —
         # not the O2-narcotic END eko-deco shows by default.
-        for gas, depth, printed in PRINTED_EAD:
-            with self.subTest(gas=repr(gas), depth=depth):
-                got = gas.end(depth, MD_SURFACE_P, MD_MSW_PER_BAR,
-                              o2_narcotic=False)
-                self.assertEqual(round(got), printed)
+        for scenario, rows in PRINTED_EAD.items():
+            for gas, depth, printed in rows:
+                with self.subTest(scenario=scenario, gas=repr(gas), depth=depth):
+                    got = gas.end(depth, MD_SURFACE_P, MD_MSW_PER_BAR,
+                                  o2_narcotic=False)
+                    self.assertEqual(round(got), printed)
 
     def test_sea_level_salt_would_not_match(self):
         """The point of the water/altitude settings: our defaults do NOT
         reproduce these figures, so a fresh-water plan has to be told so."""
-        gas, depth, printed = PRINTED_PPO2[0]
+        gas, depth, printed = PRINTED_PPO2[1][0]
         self.assertNotEqual(round(gas.ppo2(depth), 2), printed)
 
     def test_environment_reaches_the_planner(self):

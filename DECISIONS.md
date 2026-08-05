@@ -283,8 +283,10 @@ eko-deco's fresh-water plan differs from MultiDeco's on the same settings.
 `tests/test_multideco_scenarios.py` pins both halves of that, and
 `tests/test_planner_diff.py` pins the stronger statement: **no single
 configuration reproduces both halves**. Set the environment MultiDeco prints
-and its schedule stops matching (by 2 min/stop on scenario 1, 5 on scenario 2);
-keep the one its schedule implies and its printed pressures stop matching. The
+and its schedule stops matching (21–31 % of each dive's own TTS, against 6 % at
+our defaults); keep the one its schedule implies and its printed pressures stop
+matching. Both dives say this independently, which matters because they are
+different dives — different bottom mix and very different conservatism. The
 tempting "improvement" is to chase one half and silently lose the other.
 
 ## #16 — A separate deco SAC
@@ -353,6 +355,20 @@ inverts to nothing: it is a joint function of the halftimes, the a/b sets,
 P_H2O, the GF convention and the environment at once, so those get `JOINT_OK`
 — the group agrees, no member is separately identified. Claiming more would be
 the same error in the other direction.
+
+**Evidence is per dive, and error is relative.** Two things the first cut got
+wrong, both from treating two exports as interchangeable when they are
+different dives — EAN36 at GF 40/85 against EAN28 at GF 5/50. Their printed
+values were pooled into one list, so each dive's conclusion was partly credited
+to the other's data; they are partitioned now, and each one pins the
+environment on its own. Combining them is still allowed — both were shot at the
+same site — but through `intersect()` and an explicit claim
+(`COMBINED_ENVIRONMENT_EVIDENCE`), never by accident. And schedule error is
+judged relative to each dive's own TTS as well as in absolute minutes: 8
+minutes of deco against 26 means "minutes out" silently penalises the longer
+dive. Relatively, both agree to **6 %** of their own TTS at our defaults and
+diverge by 21–31 % at MultiDeco's printed environment — the same conclusion as
+the absolute numbers gave, but now actually comparable between the two.
 
 **Consequence.** Adding a constant to `buhlmann` without registering it fails
 the suite. That is deliberate friction, and it is the only thing making "we can

@@ -56,8 +56,13 @@ pre-1.0, so anything may still move.
   "every possible difference" is checkable rather than hoped for — and grades
   each against a reference export as `DIVERGES` / `UNDETERMINED` / `SETTING` /
   `JOINT_OK` / `MATCH`. `UNDETERMINED` is the point: a constant the evidence
-  cannot speak to must not read as agreement. `python -m tests.planner_diff`
-  prints a report; adding a planner means writing one `Evidence`.
+  cannot speak to must not read as agreement. Evidence is kept per dive (the
+  two exports are different dives — EAN36 at GF 40/85 vs EAN28 at GF 5/50 — so
+  pooling their printed values would credit one's conclusion to the other's
+  data), and schedule error is judged relative to each dive's own TTS as well
+  as in absolute minutes, since 8 minutes of deco and 26 are not comparable on
+  a single tolerance. `python -m tests.planner_diff` prints a report; adding a
+  planner means writing one `Evidence`.
 - `buhlmann.OTU_THRESHOLD_PPO2` and `OTU_EXPONENT` — the Repex dose constants
   were inline literals, and a constant that exists only as a literal cannot be
   enumerated or compared.

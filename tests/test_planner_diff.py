@@ -39,9 +39,11 @@ DIVERGES_AT_OUR_DEFAULTS = DIVERGES_ALWAYS | {
 }
 
 #: Planned in the environment MultiDeco's own printout implies, the pressures
-#: match and the SCHEDULE stops matching — by 2 min/stop on scenario 1 and
-#: 5 min on scenario 2. Everything the schedule jointly constrains is therefore
-#: flagged. This is the evidence for DECISIONS.md #15's caveat: MultiDeco
+#: match and the SCHEDULE stops matching — by 31 % of scenario 1's TTS and 21 %
+#: of scenario 2's, against 6 % for both at our defaults. (Relative, because
+#: the two are different dives: 8 minutes of deco against 26, so "minutes out"
+#: is not comparable between them.) Everything the schedule jointly constrains
+#: is therefore flagged. This is the evidence for DECISIONS.md #15's caveat: MultiDeco
 #: appears to apply water type and altitude to what it displays but not to its
 #: model, so no single configuration reproduces both halves of the export.
 DIVERGES_AT_MULTIDECOS_ENVIRONMENT = DIVERGES_ALWAYS | {
@@ -232,3 +234,74 @@ class TestKnownDivergences(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestEvidenceIsPerDive(unittest.TestCase):
+    """The two exports are different dives — EAN36 at GF 40/85 against EAN28 at
+    GF 5/50 — and the harness must keep their evidence apart. Pooling them once
+    looked harmless (both were planned at the same site, so the pooled region
+    was just the intersection) but it credited each dive's conclusion to the
+    other's data, and would be silently wrong for two exports from different
+    sites."""
+
+    def test_a_scenarios_evidence_holds_only_its_own_mixes(self):
+        for scenario, own, foreign in ((1, b.Gas(0.36), b.Gas(0.28)),
+                                       (2, b.Gas(0.28), b.Gas(0.36))):
+            with self.subTest(scenario=scenario):
+                ev = pd.multideco_evidence(scenario, surface_p=MD_ENV[0],
+                                           msw_per_bar=MD_ENV[1])
+                mixes = {g for g, _d, _p in ev.ppo2}
+                self.assertIn(own, mixes)
+                self.assertNotIn(foreign, mixes,
+                                 "the other dive's bottom mix leaked in")
+                self.assertLessEqual(mixes, set(ev.gases_used))
+
+    def test_each_dive_pins_the_environment_on_its_own(self):
+        """Neither dive is carrying the other: each one's printed pressures
+        alone bracket MultiDeco's environment and exclude our defaults."""
+        for scenario in (1, 2):
+            with self.subTest(scenario=scenario):
+                ev = pd.multideco_evidence(scenario, surface_p=MD_ENV[0],
+                                           msw_per_bar=MD_ENV[1])
+                box = pd.infer_environment(ev)
+                self.assertTrue(box.contains(*MD_ENV))
+                self.assertFalse(box.contains(b.P_ATM, b.MSW_PER_BAR))
+
+    def test_combining_them_is_a_stated_claim_and_tightens_the_answer(self):
+        """Both exports print the same site, which is what licenses an
+        intersection; it is narrower than either dive alone."""
+        self.assertTrue(md.COMBINED_ENVIRONMENT_EVIDENCE)
+        boxes = [pd.infer_environment(
+            pd.multideco_evidence(s, surface_p=MD_ENV[0], msw_per_bar=MD_ENV[1]))
+            for s in (1, 2)]
+        both = pd.intersect(*boxes)
+        self.assertTrue(both.contains(*MD_ENV))
+        assert both.msw_per_bar
+        for one in boxes:
+            assert one.msw_per_bar
+            self.assertGreaterEqual(both.msw_per_bar[0], one.msw_per_bar[0])
+            self.assertLessEqual(both.msw_per_bar[1], one.msw_per_bar[1])
+
+
+class TestScheduleErrorIsComparableAcrossDives(unittest.TestCase):
+    """A single absolute tolerance is not comparable across dives of different
+    length: scenario 2 decompresses for 26 minutes against scenario 1's 8, so
+    "minutes out" penalises it for being longer."""
+
+    def test_relative_error_matches_across_two_very_different_dives(self):
+        rel = []
+        for scenario in (1, 2):
+            ev = pd.multideco_evidence(scenario, surface_p=DEFAULT_ENV[0],
+                                       msw_per_bar=DEFAULT_ENV[1])
+            rel.append(ev.schedule.tts_relative)
+        # ~6 % each, despite 3x the deco and a different gas and GF — a much
+        # stronger statement than "0.44 min and 1.44 min"
+        self.assertAlmostEqual(rel[0], rel[1], delta=0.01)
+        self.assertLess(max(rel), 0.10)
+
+    def test_absolute_and_relative_must_both_pass(self):
+        tight = pd.ScheduleDelta(0.0, 5.0, 10.0, 1.0, 9.0, 0.10)
+        self.assertFalse(tight.agrees, "20 % of TTS should fail on relative")
+        loose = pd.ScheduleDelta(0.0, 5.0, 500.0, 1.0, 1.0, 0.10)
+        self.assertFalse(loose.agrees, "5 min > 1 min should fail on absolute")
+        self.assertTrue(pd.ScheduleDelta(0.5, 0.5, 30.0, 1.0, 1.0, 0.10).agrees)

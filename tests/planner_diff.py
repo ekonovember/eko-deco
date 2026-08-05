@@ -218,6 +218,41 @@ def registry_gaps() -> list[str]:
 # ---------------------------------------------------------------------------
 
 @dataclass(frozen=True)
+class ScheduleDelta:
+    """How far our schedule is from the export's, absolutely and relative to
+    that dive's own decompression.
+
+    Both, because a single absolute tolerance is not comparable across dives.
+    These two exports are different dives by nature — EAN36 at GF 40/85 against
+    EAN28 at GF 5/50, so 8 minutes of deco against 26 — and judging both by
+    "minutes out" quietly penalises the longer one for being longer. Relative
+    to each dive's own TTS the two agree to the *same* fraction, which is the
+    stronger statement and the one that survives comparing unlike dives.
+    """
+    worst_stop_min: float
+    tts_min: float
+    tts_reference_min: float     # the export's own TTS, for the relative term
+    stop_tol_min: float
+    tts_tol_min: float
+    tts_rel_tol: float = 0.10
+
+    @property
+    def tts_relative(self) -> float:
+        return self.tts_min / self.tts_reference_min if self.tts_reference_min else 0.0
+
+    @property
+    def agrees(self) -> bool:
+        return (self.worst_stop_min <= self.stop_tol_min
+                and self.tts_min <= self.tts_tol_min
+                and self.tts_relative <= self.tts_rel_tol)
+
+    def describe(self) -> str:
+        return (f"{self.worst_stop_min:.2g} min/stop, {self.tts_min:.2g} min TTS "
+                f"({self.tts_relative * 100:.0f} % of this dive's "
+                f"{self.tts_reference_min:.0f} min)")
+
+
+@dataclass(frozen=True)
 class Evidence:
     """What a reference export actually prints, per observable kind.
 
@@ -230,9 +265,8 @@ class Evidence:
     ead: tuple[tuple[b.Gas, float, float, bool], ...] = ()
     #: (gas, depth_m, printed density g/L)
     density: tuple[tuple[b.Gas, float, float], ...] = ()
-    #: worst per-stop and TTS disagreement in minutes, and the tolerances that
-    #: count as agreement — computed by the caller from the golden schedules
-    schedule: tuple[float, float, float, float] | None = None
+    #: schedule disagreement; None when the export carries no schedule
+    schedule: ScheduleDelta | None = None
     #: (printed CNS %, printed OTU, ours, ours, relative tolerance)
     oxtox: tuple[float, float, float, float, float] | None = None
     #: (printed litres, our litres at SAC 1, relative tolerance) per cylinder
@@ -320,6 +354,23 @@ def _fits(ev: Evidence, surface_p: float, msw_per_bar: float) -> bool:
         if abs(round(got) - printed) > 1e-9:
             return False
     return True
+
+
+def intersect(*boxes: Box) -> Box:
+    """Intersect feasible environment regions from several exports.
+
+    Only legitimate when the exports really were planned at the same site —
+    combining two dives' evidence tightens the answer, but if they were made
+    at different altitudes or in different water the intersection is a
+    fabrication. Callers must assert the shared-site claim, not assume it
+    (`test_multideco_scenarios.COMBINED_ENVIRONMENT_EVIDENCE`)."""
+    lo_s = max((bx.surface_p[0] for bx in boxes if bx.surface_p), default=None)
+    hi_s = min((bx.surface_p[1] for bx in boxes if bx.surface_p), default=None)
+    lo_m = max((bx.msw_per_bar[0] for bx in boxes if bx.msw_per_bar), default=None)
+    hi_m = min((bx.msw_per_bar[1] for bx in boxes if bx.msw_per_bar), default=None)
+    if None in (lo_s, hi_s, lo_m, hi_m) or lo_s > hi_s or lo_m > hi_m:
+        return Box(None, None)
+    return Box((lo_s, hi_s), (lo_m, hi_m))
 
 
 def infer_density_molar_volume(ev: Evidence, surface_p: float,
@@ -478,11 +529,10 @@ def _judge(t: Tunable, ev: Evidence, pins: set[str], box: Box,
                        f"gas volumes agree to {worst * 100:.1f} %; "
                        "rate and billing convention not separately identified")
     if SCHEDULE in pins and ev.schedule is not None:
-        stop_d, tts_d, stop_tol, tts_tol = ev.schedule
-        ok = stop_d <= stop_tol and tts_d <= tts_tol
-        return Finding(t, JOINT_OK if ok else DIVERGES,
-                       f"schedule agrees to {stop_d:.2g} min/stop, {tts_d:.2g} "
-                       f"min TTS; joint with every other model constant")
+        sd = ev.schedule
+        return Finding(t, JOINT_OK if sd.agrees else DIVERGES,
+                       f"schedule {'agrees to' if sd.agrees else 'is out by'} "
+                       f"{sd.describe()}; joint with every other model constant")
     return Finding(t, UNDETERMINED, "pinned in principle, not by this export")
 
 
@@ -500,7 +550,7 @@ def format_report(findings: Sequence[Finding], title: str = "") -> str:
 # ---------------------------------------------------------------------------
 
 def _schedule_delta(scenario: int, surface_p: float, msw_per_bar: float
-                    ) -> tuple[float, float, float, float]:
+                    ) -> ScheduleDelta:
     """Worst per-stop and TTS disagreement against the golden fixtures for this
     scenario, **measured now** rather than transcribed.
 
@@ -518,6 +568,7 @@ def _schedule_delta(scenario: int, surface_p: float, msw_per_bar: float
     tag = f"scenario_{scenario}"
     worst_stop = worst_tts = 0.0
     stop_tol = tts_tol = 0.0
+    planned_tts = 0.0            # the export's own TTS, for the relative term
     for dive in dives:
         if tag not in (dive.get("source") or "") or not dive.get("expected"):
             continue
@@ -535,7 +586,11 @@ def _schedule_delta(scenario: int, surface_p: float, msw_per_bar: float
                         abs(b.time_to_surface(segs) - dive["expected"]["tts_min"]))
         stop_tol = max(stop_tol, dive.get("stop_tol_min", 2.0))
         tts_tol = max(tts_tol, dive.get("tts_tol_min", 3.0))
-    return worst_stop, worst_tts, stop_tol, tts_tol
+        # The no-loss plan is the dive itself; its TTS is what a relative
+        # error should be measured against, not a lost-gas contingency's.
+        if not any(w in dive["name"] for w in ("lost", "only")):
+            planned_tts = float(dive["expected"]["tts_min"])
+    return ScheduleDelta(worst_stop, worst_tts, planned_tts, stop_tol, tts_tol)
 
 
 def multideco_evidence(scenario: int, *, surface_p: float, msw_per_bar: float,
@@ -549,8 +604,11 @@ def multideco_evidence(scenario: int, *, surface_p: float, msw_per_bar: float,
 
     gas = md.SCENARIOS[scenario][1]
     e50, o2 = md.EAN50, md.O2
-    ppo2 = tuple((g, d, p) for g, d, p in md.PRINTED_PPO2)
-    ead = tuple((g, d, float(p), False) for g, d, p in md.PRINTED_EAD)
+    # This scenario's printed values ONLY. The two exports are different dives
+    # (EAN36/GF 40-85 vs EAN28/GF 5-50); letting one stand in for the other
+    # would credit a conclusion to evidence that came from somewhere else.
+    ppo2 = tuple((g, d, p) for g, d, p in md.PRINTED_PPO2[scenario])
+    ead = tuple((g, d, float(p), False) for g, d, p in md.PRINTED_EAD[scenario])
     segs = md._plan(scenario, surface_p=surface_p, msw_per_bar=msw_per_bar)
     cns, otu = b.cns_otu(segs, surface_p, msw_per_bar)
     _l, _g, _gf, otu_t, cns_t, dens_t = md.SCENARIOS[scenario]
@@ -570,7 +628,8 @@ def multideco_evidence(scenario: int, *, surface_p: float, msw_per_bar: float,
         stated={"DivePlan.gf_low": md.SCENARIOS[scenario][2][0],
                 "DivePlan.gf_high": md.SCENARIOS[scenario][2][1],
                 "DivePlan.descent_rate": 8.0, "DivePlan.ascent_rate": 9.0},
-        gases_used=(gas, e50, o2),
+        gases_used=tuple({g for g, _d, _p in md.PRINTED_PPO2[scenario]}
+                         | {gas, e50, o2}),
     )
 
 
