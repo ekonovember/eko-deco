@@ -1,0 +1,64 @@
+Model dekompresji: ZHL16-C + GF
+
+PLAN NURKOWY
+Przerwa na powierzchni = 5 d 0 hr 0 min.
+Wysokość = 150m  (s)
+Konserwatyzm = GF 5/50
+
+Zanurz. do	32m		(4)	Nitrox 28	8m/min zanurz.
+Poziom    	32m	 35:59	(40)	Nitrox 28	1,15  ppO2,  28m ead
+Wynurz.do	21m		(41)	Nitrox 28	-9m/min wynurz.
+Wynurz.do	18m		(41)	Nitrox 50	-9m/min wynurz.
+Przyst. na	18m	  0:27	(42)	Nitrox 50	1,37  ppO2,  8m ead
+Przyst. na	15m	  2:00	(44)	Nitrox 50	1,23  ppO2,  6m ead
+Przyst. na	12m	  2:00	(46)	Nitrox 50	1,08  ppO2,  4m ead
+Przyst. na	9m	  5:00	(51)	Nitrox 50	0,94  ppO2,  2m ead
+Przyst. na	6m	  5:00	(56)	Oxygen	1,58  ppO2,  0m ead
+Przyst. na	3m	 10:00	(66)	Oxygen	1,29  ppO2,  0m ead
+Powierzchnia			(66)	Oxygen	-9m/min wynurz.
+
+OTU''s tego planu: 84
+CNS Razem: 33,8%
+Gęstość gazu: 5,0g/l
+
+3206,7 ltr  Nitrox 28
+371,2 ltr  Nitrox 50
+352,4 ltr  Oxygen
+3930,4 ltr  TOTAL
+
+____________________________________________________________________________
+
+--  utrata gazu  -->
+
+	   OK	50	         100	 Obie	
+
+  32	   (40)	   (40)	   (40)	   (40)	
+  18	0 (42)	1 (43)	0 (42)	1 (43)	
+  15	2 (44)	2 (45)	2 (44)	2 (45)	
+  12	2 (46)	4 (49)	2 (46)	4 (49)	
+   9	5 (51)	8 (57)	5 (51)	8 (57)	
+   6	5 (56)	6 (63)	8 (59)	15 (72)	
+   3	10 (66)	11 (74)	20 (79)	36 (108)	
+
+
+    Zużycie gazu
+
+Bez defektów - normalne nurkowanie - OK
+  3206,7 ltr  Nitrox 28
+  371,2 ltr  Nitrox 50
+  352,4 ltr  Oxygen
+  3930,4 ltr  TOTAL
+
+Utrata lub brak miesznki dekompresyjnej: 50
+  3801,1 ltr  Nitrox 28
+  401,2 ltr  Oxygen
+  4202,3 ltr  TOTAL
+
+Utrata lub brak miesznki dekompresyjnej: 100
+  3206,7 ltr  Nitrox 28
+  1023,6 ltr  Nitrox 50
+  4230,3 ltr  TOTAL
+
+Utrata lub brak miesznki dekompresyjnej: Obie
+  4992,5 ltr  Nitrox 28
+  4992,5 ltr  TOTAL

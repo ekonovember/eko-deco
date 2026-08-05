@@ -15,9 +15,11 @@ Schema::
         {"depth_m": 30, "runtime_min": 40}
       ],
       "gf_low": 30, "gf_high": 70,
-      "sac_normal": 20, "sac_multiplier": 2.0, "problem_minutes": 1, "divers": 1,
+      "sac_normal": 20, "sac_deco": null,
+      "sac_multiplier": 2.0, "problem_minutes": 1, "divers": 1,
       "ascent_rate": 10, "descent_rate": 18, "stop_interval": 3, "last_stop_m": 3,
       "ppo2_bottom": 1.4, "ppo2_deco": 1.6, "ppo2_min": 0.18,
+      "surface_p_bar": 1.01325, "msw_per_bar": 10.0,
       "contingency": {"time_before": 1, "time_after": 1,
                       "depth_before": 1, "depth_after": 1},
       "gases": [
@@ -46,6 +48,14 @@ become one level; any legacy per-level gas reference (a level ``gas_id`` or an
 inline ``{"o2", "he"}`` mix), any legacy ``Level``-role gas and any legacy
 ``start_min`` arrival time are dropped — gas is automatic-by-role now, and
 levels no longer carry an arrival time.
+
+``sac_deco`` is an optional second consumption rate for gas breathed off a
+designated ``Deco`` cylinder (``null`` = one rate for the whole dive, the
+previous behaviour). ``surface_p_bar`` and ``msw_per_bar`` are the environment:
+surface pressure and how many metres of water make a bar — 10.0 for salt water
+(the default), 10 1/3 for fresh (``buhlmann.WATER_TYPES``). They move every
+pressure the plan derives, so ppO₂, MOD, END, density, CNS/OTU, gas volumes and
+the schedule itself all follow.
 
 ``contingency`` sizes the backup cut-table matrix as step counts on the fixed
 3 min × 3 m grid: ``time_before``/``time_after`` bottom-time rows shorter/longer
@@ -103,6 +113,7 @@ def default_config() -> dict:
         "gf_low": 30,
         "gf_high": 70,
         "sac_normal": 20.0,
+        "sac_deco": None,
         "sac_multiplier": 2.0,
         "problem_minutes": 1.0,
         "divers": 1,
@@ -113,6 +124,8 @@ def default_config() -> dict:
         "ppo2_bottom": 1.4,
         "ppo2_deco": 1.6,
         "ppo2_min": 0.18,
+        "surface_p_bar": b.P_ATM,
+        "msw_per_bar": b.MSW_PER_BAR,
         "contingency": {"time_before": 1, "time_after": 1,
                         "depth_before": 1, "depth_after": 1},
         "gases": [
@@ -298,8 +311,12 @@ def to_buhlmann(cfg: dict) -> tuple[b.Gas, b.DivePlan, b.GasPlan, list[tuple]]:
                       ppo2_bottom=cfg.get("ppo2_bottom", 1.4),
                       ppo2_deco=cfg.get("ppo2_deco", 1.6),
                       ppo2_min=cfg.get("ppo2_min", 0.18),
+                      surface_p=cfg.get("surface_p_bar", b.P_ATM),
+                      msw_per_bar=cfg.get("msw_per_bar", b.MSW_PER_BAR),
                       travel_gases=travel, deco_gases=deco)
+    sac_deco = cfg.get("sac_deco")
     gp = b.GasPlan(sac=cfg["sac_normal"],
+                   sac_deco=None if sac_deco is None else float(sac_deco),
                    sac_multiplier=cfg.get("sac_multiplier", 2.0),
                    problem_minutes=cfg.get("problem_minutes", 1.0),
                    divers=int(cfg.get("divers", 1)))

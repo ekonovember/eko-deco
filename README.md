@@ -48,7 +48,15 @@ Erik Baker's gradient factors — a zero-dependency core, plus a CLI and a Tkint
   (Anthony & Mitchell) warns too. Each plan reports **CNS%** (NOAA clock),
   **OTU**, **END** and gas density, and swapped gradient factors
   (GF-low > GF-high) are rejected as input errors.
-- Rock-bottom / minimum-gas planning: one basic SAC plus an emergency SAC
+- **Fresh water and altitude**, not just sea-level salt: pick the water type
+  (`--water salt|fresh`, or a metres-per-bar constant of your own) and the site
+  altitude (`--altitude 1500`, or the surface pressure directly). Both move
+  every pressure the plan derives — the schedule, ppO₂, MOD, END, gas density,
+  CNS/OTU and gas volumes — so a mountain lake plans as a mountain lake.
+  (It assumes you are *acclimatised*: the tissues start at the site's surface
+  pressure. Drove up this morning? Add margin the model doesn't.)
+- Rock-bottom / minimum-gas planning: one basic SAC — plus an optional separate
+  **deco SAC** for gas breathed off a stage — an emergency SAC
   multiplier (e.g. 1.5), a problem-solving time and a diver count. Rock bottom
   is the back-gas reserve to survive a problem at the worst moment and follow
   the real ascent/deco to the first gas switch (to the surface, through every
@@ -189,8 +197,14 @@ deco plan --depth 60 --time 25 --gas 10/70@24 \
 deco plan --depth 45 --time 10 --gas air@24@232 --deco-gas 50@11@200 --sac 20 --save
 deco plan dive_plan.json     # positional config (or --load)
 
+# Fresh water at altitude, and a lower SAC on the deco cylinders
+deco plan --depth 32 --time 40 --gas ean36 --deco-gas 50 --deco-gas 100 \
+    --gf-low 0.40 --gf-high 0.85 --water fresh --altitude 150 \
+    --sac 20 --sac-deco 16
+
 # NDL & tissue report
 deco ndl     --depth 30 --gas air
+deco ndl     --depth 30 --gas air --altitude 1500     # shorter up a mountain
 deco tissues --depth 40 --time 20 --gas ean32 --json
 ```
 
@@ -216,7 +230,8 @@ deeper, add a level for the shallow depth.
 
 There are more knobs than shown above — ascent/descent/stop rates, the
 shallowest-stop depth (`--last-stop`), the ppO₂
-window (`--ppo2-bottom` / `--ppo2-deco` / `--ppo2-min`), the emergency SAC
+window (`--ppo2-bottom` / `--ppo2-deco` / `--ppo2-min`), the environment
+(`--water`, `--msw-per-bar`, `--altitude`, `--surface-p`), the emergency SAC
 multiplier, problem time and diver count for rock bottom and the emergency gas
 need (`--sac-multiplier`, `--problem-time`, `--divers`) — see
 `deco plan -h` (or `ndl -h`, …) for the full list. Ready-to-run
@@ -261,10 +276,10 @@ on the path. The suite has two tiers:
 - **26 cross-check tests** — these compile the reference implementations
   (Subsurface's `deco.cpp` with **g++**, Baker's `GFDECO` with **gfortran**) and
   run eko-deco against them. Without those compilers the two modules skip
-  themselves and you see `Ran 174 tests` — that is a *missing compiler*, not
+  themselves and you see `Ran 218 tests` — that is a *missing compiler*, not
   missing data; the skip message says so and tells you what to install. On
   Windows, install MSYS2/MinGW-w64 (or just run the suite under WSL) to get all
-  200.
+  244.
 
 The oracles are compiled on demand from Python, so no `make` step is needed.
 CI runs the core suite on Python 3.10–3.14 across Linux, macOS and Windows, and
@@ -291,6 +306,7 @@ claim is enforced by tests, not asserted:
 | [Subsurface](https://github.com/subsurface/subsurface) `deco.cpp` | its **unmodified C++** compiled on the fly into a test oracle and driven over ctypes | tissue loading, M-value ceilings and the GF line to **machine precision**; NDLs exact at GF 100/100 |
 | Erik Baker's `GFDECO` | his **original Fortran** — the published reference for the GF convention — compiled and run | ≤ **1 min** per stop, ≤ 1.3 min TTS — **square *and* multi-level** |
 | MultiDeco | golden schedules, including every lost-gas column | no-loss plan matches **to the minute** |
+| MultiDeco 4.24, two real exports | the plans in [`examples/`](examples/) — 8 schedules, the printed ppO₂/ead/CNS/OTU, and the gas volumes | every stop within **1 min** (3 on the 68-min all-gas-lost worst case), TTS within **1.5 min**; ppO₂ and ead reproduced **exactly**; bottom-gas litres within **1 %** at a single RMV |
 | Shearwater | the worked planner example in the Perdix 2 manual (GF 30/70, its stated rates) | runtime and TTS match **exactly** |
 
 - `tests/test_subsurface_crosscheck.py` — the Subsurface oracle (`tests/subsurface_oracle/`,

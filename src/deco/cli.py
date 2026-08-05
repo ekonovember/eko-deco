@@ -125,8 +125,24 @@ def _args_levels(args) -> list[b.Level]:
     return [b.Level(args.depth, args.time)]
 
 
+def _msw_per_bar(args) -> float:
+    """Metres of water per bar: explicit --msw-per-bar wins over --water."""
+    if getattr(args, "msw_per_bar", None) is not None:
+        return args.msw_per_bar
+    return b.WATER_TYPES[getattr(args, "water", "salt")]
+
+
+def _surface_p(args) -> float:
+    """Surface pressure in bar: explicit --surface-p wins over --altitude."""
+    if getattr(args, "surface_p", None) is not None:
+        return args.surface_p
+    return b.surface_p_at_altitude(getattr(args, "altitude", 0.0) or 0.0)
+
+
 def _build_plan(args) -> b.DivePlan:
     return b.DivePlan(
+        surface_p=_surface_p(args),
+        msw_per_bar=_msw_per_bar(args),
         descent_rate=args.descent_rate,
         ascent_rate=args.ascent_rate,
         stop_interval=args.stop_interval,
@@ -157,7 +173,8 @@ def _args_gas_context(args):
                       pr if pr is not None else rp.DEFAULT_FILL_BAR))
     if args.sac is None:
         return None, gases
-    gp = b.GasPlan(sac=args.sac, sac_multiplier=args.sac_multiplier,
+    gp = b.GasPlan(sac=args.sac, sac_deco=args.sac_deco,
+                   sac_multiplier=args.sac_multiplier,
                    problem_minutes=args.problem_time, divers=args.divers)
     return gp, gases
 
@@ -181,7 +198,8 @@ def _config_from_args(args) -> dict:
     return {
         "levels": levels,
         "gf_low": round(args.gf_low * 100), "gf_high": round(args.gf_high * 100),
-        "sac_normal": sac, "sac_multiplier": args.sac_multiplier,
+        "sac_normal": sac, "sac_deco": args.sac_deco,
+        "sac_multiplier": args.sac_multiplier,
         "problem_minutes": args.problem_time, "divers": args.divers,
         "ascent_rate": args.ascent_rate,
         "descent_rate": args.descent_rate,
@@ -190,6 +208,8 @@ def _config_from_args(args) -> dict:
         "ppo2_bottom": args.ppo2_bottom,
         "ppo2_deco": args.ppo2_deco,
         "ppo2_min": args.ppo2_min,
+        "surface_p_bar": _surface_p(args),
+        "msw_per_bar": _msw_per_bar(args),
         "contingency": {k: (n if n is not None else c_default[k])
                         for k, n in zip(dc.CONTINGENCY_KEYS, counts, strict=True)},
         "gases": gas_entries,
@@ -209,6 +229,9 @@ def _gas_output(rep, max_depth: float):
     lines = [f"Gas  need vs have (emrg in parens = need + rock-bottom reserve:"
              f" problem {gp.problem_minutes:g} min @ max depth + ascent/deco to"
              f" the next switch at {sac_e:g} L/min{shared}):"]
+    if gp.sac_deco is not None:
+        lines.append(f"  SAC {gp.sac:g} L/min bottom · {gp.sac_deco:g} L/min "
+                     "on the deco gases")
     cylinders = []
     for c in rep.cylinders:
         entry = {"gas": repr(c.gas), "role": c.role,
@@ -235,7 +258,8 @@ def _gas_output(rep, max_depth: float):
                 lines.append(f"  {c.role} {c.gas!r}: {used:.0f} bar need / "
                              f"{c.tank_l:.0f} L (emrg {used_e:.0f})")
         cylinders.append(entry)
-    data = {"sac_normal_l_min": gp.sac, "sac_multiplier": gp.sac_multiplier,
+    data = {"sac_normal_l_min": gp.sac, "sac_deco_l_min": gp.sac_deco,
+            "sac_multiplier": gp.sac_multiplier,
             "sac_emergency_l_min": sac_e,
             "problem_minutes": gp.problem_minutes, "divers": gp.divers,
             "cylinders": cylinders, "rock_bottom_l": round(rep.rock_bottom_l, 1)}
@@ -391,7 +415,9 @@ def _plan_json(res: rp.PlanResult, model_label: str, gas_data, cont_data,
                   "avg_depth_m": round(res.avg_depth_m, 2),
                   "gas": repr(res.bottom_gas),
                   "travel_gases": [repr(g) for g in res.plan.travel_gases],
-                  "deco_gases": [repr(g) for g in res.plan.deco_gases]},
+                  "deco_gases": [repr(g) for g in res.plan.deco_gases],
+                  "surface_p_bar": res.plan.surface_p,
+                  "msw_per_bar": res.plan.msw_per_bar},
         "segments": [s.as_dict() for s in res.segments],
         "total_runtime_min": round(res.total_runtime_min, 2),
         "tts_min": round(res.tts_min, 2),
@@ -430,6 +456,15 @@ def _plan_text(res: rp.PlanResult, model_label: str, gas_lines, cont_lines,
         f"{res.bottom_gas.ppo2(depth, plan.surface_p, plan.msw_per_bar):.2f}"
         f" bar · END {res.end_m:.0f} m (O₂ narcotic) · density "
         f"{res.density_g_l:.1f} g/L")
+    # Only worth a line when the dive is NOT sea-level salt water: those two
+    # constants move every pressure below, so a fresh-water or altitude plan
+    # must say so rather than look like a plain sea dive.
+    if (plan.msw_per_bar != b.MSW_PER_BAR or plan.surface_p != b.P_ATM):
+        alt = b.altitude_at_surface_p(plan.surface_p)
+        lines.append(f"Water: {rp.water_name(plan.msw_per_bar)} "
+                     f"({plan.msw_per_bar:.4g} m/bar) · "
+                     f"surface {plan.surface_p:g} bar"
+                     + (f" (~{alt:.0f} m altitude)" if alt >= 50 else ""))
     if plan.travel_gases:
         lines.append("Travel gases: "
                      + ", ".join(repr(g) for g in plan.travel_gases))
@@ -537,6 +572,24 @@ def main(argv: list[str] | None = None) -> int:
                         help="ppO2 ceiling for the bottom/travel gas on descent.")
     common.add_argument("--ppo2-min", type=_nonneg_float, default=0.18,
                         help="Hypoxia floor; a gas is unusable below this ppO2.")
+    common.add_argument("--water", choices=sorted(b.WATER_TYPES),
+                        default="salt",
+                        help="Water type, i.e. how many metres make a bar: "
+                             f"salt {b.MSW_PER_BAR_SALT:g} (default), fresh "
+                             f"{b.MSW_PER_BAR_FRESH:.4g}. Overridden by "
+                             "--msw-per-bar.")
+    common.add_argument("--msw-per-bar", type=_positive_float, default=None,
+                        help="Metres of water per bar, explicitly (wins over "
+                             "--water).")
+    common.add_argument("--altitude", type=_nonneg_float, default=0.0,
+                        metavar="M",
+                        help="Altitude of the dive site in m; sets the surface "
+                             "pressure by the standard atmosphere (1500 m ≈ "
+                             "0.845 bar). Overridden by --surface-p.")
+    common.add_argument("--surface-p", type=_positive_float, default=None,
+                        help=f"Surface pressure in bar, explicitly (wins over "
+                             f"--altitude). Default {b.P_ATM:g} (sea level); "
+                             "MultiDeco/GFDECO plans use 1.0.")
     common.add_argument("--json", action="store_true")
 
     sub = p.add_subparsers(dest="cmd", required=True)
@@ -559,6 +612,9 @@ def main(argv: list[str] | None = None) -> int:
                     help="bottom gas, optional @tank e.g. air@24, 21/35@24")
     sp.add_argument("--sac", type=_positive_float,
                     help="Normal surface air consumption (L/min); enables gas planning.")
+    sp.add_argument("--sac-deco", type=_positive_float,
+                    help="Separate SAC (L/min) for gas breathed off a deco "
+                         "cylinder; defaults to --sac.")
     sp.add_argument("--sac-multiplier", type=float, default=2.0,
                     help="Emergency SAC multiplier for rock bottom (e.g. 1.5); "
                          "emergency SAC = --sac x this. Default 2.0.")

@@ -318,6 +318,372 @@
       "ascent_rate": 10,
       "last_stop_m": 6,
       "expected": null
+    },
+    {
+      "name": "MD 32m/40min EAN36 +EAN50+O2 GF40/85",
+      "source": "MultiDeco 4.24 export (Polish), examples/scenario_1/data.txt \u2014 see _scenario_provenance",
+      "depth_m": 32,
+      "bottom_time_min": 40,
+      "bottom_gas": {
+        "o2": 36,
+        "he": 0
+      },
+      "deco_gases": [
+        {
+          "o2": 50,
+          "he": 0
+        },
+        {
+          "o2": 100,
+          "he": 0
+        }
+      ],
+      "gf": [
+        40,
+        85
+      ],
+      "descent_rate": 8,
+      "ascent_rate": 9,
+      "last_stop_m": 3,
+      "p_h2o": 0.0567,
+      "stop_tol_min": 1.5,
+      "tts_tol_min": 1.0,
+      "expected": {
+        "stops": [
+          [
+            6,
+            1
+          ],
+          [
+            3,
+            4
+          ]
+        ],
+        "tts_min": 8
+      }
+    },
+    {
+      "name": "MD 32m/40min EAN36 +O2 (lost EAN50) GF40/85",
+      "source": "MultiDeco 4.24 export (Polish), examples/scenario_1/data.txt \u2014 see _scenario_provenance",
+      "depth_m": 32,
+      "bottom_time_min": 40,
+      "bottom_gas": {
+        "o2": 36,
+        "he": 0
+      },
+      "deco_gases": [
+        {
+          "o2": 100,
+          "he": 0
+        }
+      ],
+      "gf": [
+        40,
+        85
+      ],
+      "descent_rate": 8,
+      "ascent_rate": 9,
+      "last_stop_m": 3,
+      "p_h2o": 0.0567,
+      "stop_tol_min": 1.5,
+      "tts_tol_min": 1.0,
+      "expected": {
+        "stops": [
+          [
+            6,
+            1
+          ],
+          [
+            3,
+            4
+          ]
+        ],
+        "tts_min": 8
+      }
+    },
+    {
+      "name": "MD 32m/40min EAN36 +EAN50 (lost O2) GF40/85",
+      "source": "MultiDeco 4.24 export (Polish), examples/scenario_1/data.txt \u2014 see _scenario_provenance",
+      "depth_m": 32,
+      "bottom_time_min": 40,
+      "bottom_gas": {
+        "o2": 36,
+        "he": 0
+      },
+      "deco_gases": [
+        {
+          "o2": 50,
+          "he": 0
+        }
+      ],
+      "gf": [
+        40,
+        85
+      ],
+      "descent_rate": 8,
+      "ascent_rate": 9,
+      "last_stop_m": 3,
+      "p_h2o": 0.0567,
+      "stop_tol_min": 1.5,
+      "tts_tol_min": 1.0,
+      "expected": {
+        "stops": [
+          [
+            6,
+            1
+          ],
+          [
+            3,
+            6
+          ]
+        ],
+        "tts_min": 10
+      }
+    },
+    {
+      "name": "MD 32m/40min EAN36 only (lost both) GF40/85",
+      "source": "MultiDeco 4.24 export (Polish), examples/scenario_1/data.txt \u2014 see _scenario_provenance",
+      "depth_m": 32,
+      "bottom_time_min": 40,
+      "bottom_gas": {
+        "o2": 36,
+        "he": 0
+      },
+      "deco_gases": [],
+      "gf": [
+        40,
+        85
+      ],
+      "descent_rate": 8,
+      "ascent_rate": 9,
+      "last_stop_m": 3,
+      "p_h2o": 0.0567,
+      "stop_tol_min": 1.5,
+      "tts_tol_min": 1.0,
+      "expected": {
+        "stops": [
+          [
+            6,
+            2
+          ],
+          [
+            3,
+            7
+          ]
+        ],
+        "tts_min": 12
+      }
+    },
+    {
+      "name": "MD 32m/40min EAN28 +EAN50+O2 GF5/50",
+      "source": "MultiDeco 4.24 export (Polish), examples/scenario_2/data.txt \u2014 see _scenario_provenance",
+      "depth_m": 32,
+      "bottom_time_min": 40,
+      "bottom_gas": {
+        "o2": 28,
+        "he": 0
+      },
+      "deco_gases": [
+        {
+          "o2": 50,
+          "he": 0
+        },
+        {
+          "o2": 100,
+          "he": 0
+        }
+      ],
+      "gf": [
+        5,
+        50
+      ],
+      "descent_rate": 8,
+      "ascent_rate": 9,
+      "last_stop_m": 3,
+      "p_h2o": 0.0567,
+      "stop_tol_min": 1.5,
+      "tts_tol_min": 1.0,
+      "expected": {
+        "stops": [
+          [
+            15,
+            2
+          ],
+          [
+            12,
+            2
+          ],
+          [
+            9,
+            5
+          ],
+          [
+            6,
+            5
+          ],
+          [
+            3,
+            10
+          ]
+        ],
+        "tts_min": 26
+      }
+    },
+    {
+      "name": "MD 32m/40min EAN28 +O2 (lost EAN50) GF5/50",
+      "source": "MultiDeco 4.24 export (Polish), examples/scenario_2/data.txt \u2014 see _scenario_provenance",
+      "depth_m": 32,
+      "bottom_time_min": 40,
+      "bottom_gas": {
+        "o2": 28,
+        "he": 0
+      },
+      "deco_gases": [
+        {
+          "o2": 100,
+          "he": 0
+        }
+      ],
+      "gf": [
+        5,
+        50
+      ],
+      "descent_rate": 8,
+      "ascent_rate": 9,
+      "last_stop_m": 3,
+      "p_h2o": 0.0567,
+      "stop_tol_min": 1.5,
+      "tts_tol_min": 1.0,
+      "expected": {
+        "stops": [
+          [
+            18,
+            1
+          ],
+          [
+            15,
+            2
+          ],
+          [
+            12,
+            4
+          ],
+          [
+            9,
+            8
+          ],
+          [
+            6,
+            6
+          ],
+          [
+            3,
+            11
+          ]
+        ],
+        "tts_min": 34
+      }
+    },
+    {
+      "name": "MD 32m/40min EAN28 +EAN50 (lost O2) GF5/50",
+      "source": "MultiDeco 4.24 export (Polish), examples/scenario_2/data.txt \u2014 see _scenario_provenance",
+      "depth_m": 32,
+      "bottom_time_min": 40,
+      "bottom_gas": {
+        "o2": 28,
+        "he": 0
+      },
+      "deco_gases": [
+        {
+          "o2": 50,
+          "he": 0
+        }
+      ],
+      "gf": [
+        5,
+        50
+      ],
+      "descent_rate": 8,
+      "ascent_rate": 9,
+      "last_stop_m": 3,
+      "p_h2o": 0.0567,
+      "stop_tol_min": 2.5,
+      "tts_tol_min": 1.0,
+      "expected": {
+        "stops": [
+          [
+            15,
+            2
+          ],
+          [
+            12,
+            2
+          ],
+          [
+            9,
+            5
+          ],
+          [
+            6,
+            8
+          ],
+          [
+            3,
+            20
+          ]
+        ],
+        "tts_min": 39
+      }
+    },
+    {
+      "name": "MD 32m/40min EAN28 only (lost both) GF5/50",
+      "source": "MultiDeco 4.24 export (Polish), examples/scenario_2/data.txt \u2014 see _scenario_provenance",
+      "depth_m": 32,
+      "bottom_time_min": 40,
+      "bottom_gas": {
+        "o2": 28,
+        "he": 0
+      },
+      "deco_gases": [],
+      "gf": [
+        5,
+        50
+      ],
+      "descent_rate": 8,
+      "ascent_rate": 9,
+      "last_stop_m": 3,
+      "p_h2o": 0.0567,
+      "stop_tol_min": 3.5,
+      "tts_tol_min": 2.0,
+      "expected": {
+        "stops": [
+          [
+            18,
+            1
+          ],
+          [
+            15,
+            2
+          ],
+          [
+            12,
+            4
+          ],
+          [
+            9,
+            8
+          ],
+          [
+            6,
+            15
+          ],
+          [
+            3,
+            36
+          ]
+        ],
+        "tts_min": 68
+      }
     }
   ],
   "_shearwater_provenance": [
@@ -332,5 +698,38 @@
     "exactly. The 30m/30min walkthrough on p.30 was evaluated and REJECTED",
     "as golden data: its table is truncated mid-schedule (runtime shown is",
     "inconsistent with the in-dive TTS on the same pages)."
+  ],
+  "_scenario_provenance": [
+    "The eight 32 m / 40 min dives below come from two real MultiDeco 4.24",
+    "plans exported in Polish, kept verbatim in examples/scenario_1/data.txt",
+    "and examples/scenario_2/data.txt. Unlike the 45 m set above, the settings",
+    "are NOT inferred: the export prints GF (40/85 and 5/50), the descent and",
+    "ascent rates (8 and 9 m/min) and the gas stack. Each scenario contributes",
+    "four dives - the plan itself plus the three columns of its own",
+    "'utrata gazu' (lost gas) table: lost EAN50, lost O2, both lost.",
+    "",
+    "Stop times are transcribed from that table, in whole minutes. Two",
+    "MultiDeco printing conventions to know when comparing by eye:",
+    "  * its segment time for a stop INCLUDES the ascent to that stop, so the",
+    "    STOP column always equals the runtime delta (see DECISIONS.md #17);",
+    "    eko-deco's stop durations are the hold alone and therefore read up to",
+    "    one ascent (~0.33 min) shorter per stop.",
+    "  * the first stop is padded so the runtime lands on a whole minute - the",
+    "    '0:27' rows at 9 m (scenario 1) and 18 m (scenario 2), printed as 0 in",
+    "    the loss table. They are a rounding artifact, not an obligation, and",
+    "    are left out of 'stops' here.",
+    "tts_min is MultiDeco's printed surface runtime minus the 40 min bottom.",
+    "",
+    "p_h2o 0.0567 is MultiDeco's own (Schreiner) water-vapour constant; it",
+    "tightens the agreement on the long columns and changes nothing on the",
+    "short ones. Environment: both plans were made for FRESH water at 150 m",
+    "altitude, and the printed ppO2/ead/density pin that display to surface",
+    "1.0 bar + 10.33 m/bar (tests/test_multideco_scenarios.py checks we",
+    "reproduce those figures exactly with --water fresh --surface-p 1.0).",
+    "The SCHEDULE, however, matches eko-deco's sea-level salt defaults far",
+    "better than those constants do - MultiDeco appears to apply fresh water",
+    "and altitude to its displayed pressures but not to the model - so these",
+    "fixtures deliberately run at the defaults. Tolerances are set just above",
+    "the deltas actually measured, so any drift trips the test."
   ]
 }

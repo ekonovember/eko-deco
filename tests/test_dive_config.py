@@ -5,6 +5,7 @@ import os
 import tempfile
 import unittest
 
+from deco import buhlmann as b
 from deco import dive_config as dc
 
 
@@ -310,3 +311,45 @@ class TestAtomicSave(unittest.TestCase):
             self.assertEqual(os.listdir(d), ["cfg.json"])
             self.assertEqual(dc.load(path), dc.normalize(dc.default_config()))
 
+
+
+class TestEnvironmentAndDecoSac(unittest.TestCase):
+    """Water type / surface pressure / deco SAC: the settings the MultiDeco
+    scenarios in examples/ needed and the config had no home for."""
+
+    def test_defaults_are_sea_level_salt_and_one_sac(self):
+        cfg = dc.default_config()
+        self.assertEqual(cfg["msw_per_bar"], b.MSW_PER_BAR)
+        self.assertEqual(cfg["surface_p_bar"], b.P_ATM)
+        self.assertIsNone(cfg["sac_deco"])
+        _bg, plan, gp, _g = dc.to_buhlmann(cfg)
+        self.assertEqual(plan.msw_per_bar, b.MSW_PER_BAR)
+        self.assertEqual(plan.surface_p, b.P_ATM)
+        self.assertIsNone(gp.sac_deco)
+
+    def test_fresh_water_and_altitude_round_trip_and_apply(self):
+        cfg = dc.default_config()
+        cfg["msw_per_bar"] = b.MSW_PER_BAR_FRESH
+        cfg["surface_p_bar"] = 0.845
+        cfg["sac_deco"] = 16.0
+        _bg, plan, gp, _g = dc.to_buhlmann(cfg)
+        self.assertAlmostEqual(plan.msw_per_bar, b.MSW_PER_BAR_FRESH)
+        self.assertAlmostEqual(plan.surface_p, 0.845)
+        self.assertAlmostEqual(gp.sac_deco, 16.0)
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "c.json")
+            dc.save(cfg, path)
+            back = dc.load(path)
+        self.assertAlmostEqual(back["msw_per_bar"], b.MSW_PER_BAR_FRESH)
+        self.assertAlmostEqual(back["surface_p_bar"], 0.845)
+        self.assertAlmostEqual(back["sac_deco"], 16.0)
+
+    def test_config_without_the_new_keys_still_loads_as_sea_level_salt(self):
+        """Every dive_plan.json written before these settings existed must
+        keep planning exactly as it did — the environment is additive."""
+        legacy = {"levels": [{"depth_m": 30, "runtime_min": 20}],
+                  "gf_low": 30, "gf_high": 70, "sac_normal": 20}
+        _bg, plan, gp, _g = dc.to_buhlmann(dc.normalize(legacy))
+        self.assertEqual(plan.surface_p, b.P_ATM)
+        self.assertEqual(plan.msw_per_bar, b.MSW_PER_BAR)
+        self.assertIsNone(gp.sac_deco)

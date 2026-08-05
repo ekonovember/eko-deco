@@ -1,0 +1,64 @@
+MultiDeco 4,24 by Ross Hemingway,
+ZHL code by Erik C. Baker.
+
+Model dekompresji: ZHL16-C + GF
+
+PLAN NURKOWY
+Przerwa na powierzchni = 5 d 0 hr 0 min.
+Wysokość = 150m  (s)
+Konserwatyzm = GF 40/85
+
+Zanurz. do	32m		(4)	Nitrox 36	8m/min zanurz.
+Poziom    	32m	 35:59	(40)	Nitrox 36	1,47  ppO2,  24m ead
+Wynurz.do	21m		(41)	Nitrox 36	-9m/min wynurz.
+Wynurz.do	9m		(42)	Nitrox 50	-9m/min wynurz.
+Przyst. na	9m	  0:27	(43)	Nitrox 50	0,94  ppO2,  2m ead
+Przyst. na	6m	  1:00	(44)	Oxygen	1,58  ppO2,  0m ead
+Przyst. na	3m	  4:00	(48)	Oxygen	1,29  ppO2,  0m ead
+Powierzchnia			(48)	Oxygen	-9m/min wynurz.
+
+OTU''s tego planu: 78
+CNS Razem: 34,2%
+Gęstość gazu: 5,0g/l
+
+3206,7 ltr  Nitrox 36
+90,9 ltr  Nitrox 50
+113,4 ltr  Oxygen
+3411 ltr  TOTAL
+
+_________________________________________________________________________________
+
+Nurkowanie #1 ze scenariuszem nieużytecznej miesznką dekompresyjną
+
+
+		--  utrata gazu  -->
+
+	OK	50	100	Obie	
+
+  32	   (40)	   (40)	   (40)	   (40)	
+   9	0 (43)	0 (43)	0 (43)	0 (43)	
+   6	1 (44)	1 (44)	1 (44)	2 (45)	
+   3	4 (48)	4 (48)	6 (50)	7 (52)	
+
+
+    Zużycie gazu
+
+Bez defektów - normalne nurkowanie - OK
+  3206,7 ltr  Nitrox 36
+  90,9 ltr  Nitrox 50
+  113,4 ltr  Oxygen
+  3411 ltr  TOTAL
+
+Utrata lub brak miesznki dekompresyjnej: 50
+  3297,7 ltr  Nitrox 36
+  113,4 ltr  Oxygen
+  3411 ltr  TOTAL
+
+Utrata lub brak miesznki dekompresyjnej: 100
+  3206,7 ltr  Nitrox 36
+  248,2 ltr  Nitrox 50
+  3454,9 ltr  TOTAL
+
+Utrata lub brak miesznki dekompresyjnej: Obie
+  3503,7 ltr  Nitrox 36
+  3503,7 ltr  TOTAL

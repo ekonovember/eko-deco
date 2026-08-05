@@ -52,13 +52,20 @@ python -m deco.cli plan --depth 45 --time 25 --gas 21/35 --deco-gas 50 --last-st
 python -m deco.cli plan --level 45:25 --level 30:40 --level 18:55 --gas 21/35 --deco-gas 50   # multi-level
 python -m deco.cli plan --level 120:20 --level 45:40 --gas 10/70 --travel-gas 35/25            # gas auto by role
 python -m deco.cli plan --depth 40 --time 25 --gas air --deco-gas 50 --contingency 0:2:0:1    # cut table +2 time steps, +1 depth step
+python -m deco.cli plan --depth 32 --time 40 --gas ean36 --deco-gas 50 --water fresh --altitude 150   # lake at altitude
+python -m deco.cli plan --depth 40 --time 25 --gas air --deco-gas 50 --sac 20 --sac-deco 16          # separate deco-cylinder SAC
 ```
 
 Gas syntax: `air`, `o2`, `ean32` / `nx32` / `32`, trimix `21/35` (fO2/fHe %).
 Defaults: GF 30/70 on the CLI (the library `DivePlan` uses 30/80), descent
 18 m/min, ascent 10 m/min, 3 m stops, last stop 3 m
 (`--last-stop 6` for the Shearwater/MultiDeco option), deco ppO2 1.6, sea level
-1.01325 bar, 10 msw/bar. Deco-gas switches snap to standard stop depths (O2 at
+1.01325 bar, salt water 10 msw/bar. The last two are settings, not constants:
+`--water salt|fresh` (or `--msw-per-bar`) and `--altitude M` (or `--surface-p
+BAR`) plan fresh water and altitude dives, and they move the schedule, ppO2,
+MOD, END, density, CNS/OTU and gas volumes together — say so when relaying a
+plan for a lake. Altitude assumes an acclimatised diver. `--sac-deco` bills gas
+breathed off a deco cylinder at its own rate. Deco-gas switches snap to standard stop depths (O2 at
 the 6 m stop, EAN50 at 21 m). On Windows set `PYTHONUTF8=1` for clean output.
 Every plan prints ppO2/density/ceiling warnings (`warnings` in `--json`),
 CNS%/OTU, END + gas density — quote the warnings when relaying a schedule; with

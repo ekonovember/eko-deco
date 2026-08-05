@@ -931,5 +931,91 @@ class TestNonePlanDefaults(unittest.TestCase):
         self.assertIsInstance(b.worst_ppo2_violations(segs), list)
 
 
+class TestEnvironment(unittest.TestCase):
+    """Water type and altitude: the constants a fresh-water or mountain dive
+    needs, added for the MultiDeco scenarios in examples/."""
+
+    def test_water_types(self):
+        self.assertEqual(b.WATER_TYPES["salt"], 10.0)
+        self.assertAlmostEqual(b.WATER_TYPES["fresh"], 31 / 3)
+        # fresh water holds less pressure per metre, so the same depth is a
+        # lower ambient pressure and a lower ppO2
+        self.assertLess(b.depth_to_p_amb(30, msw_per_bar=b.MSW_PER_BAR_FRESH),
+                        b.depth_to_p_amb(30, msw_per_bar=b.MSW_PER_BAR_SALT))
+
+    def test_surface_p_at_altitude(self):
+        self.assertEqual(b.surface_p_at_altitude(0), b.P_ATM)
+        self.assertEqual(b.surface_p_at_altitude(-100), b.P_ATM)
+        # standard atmosphere: ~0.899 bar at 1000 m, ~0.845 at 1500 m
+        self.assertAlmostEqual(b.surface_p_at_altitude(1000), 0.8988, places=3)
+        self.assertAlmostEqual(b.surface_p_at_altitude(1500), 0.8456, places=3)
+
+    def test_altitude_round_trips_through_the_inverse(self):
+        for m in (0, 150, 800, 1500, 3000):
+            self.assertAlmostEqual(
+                b.altitude_at_surface_p(b.surface_p_at_altitude(m)), m,
+                places=6)
+        self.assertEqual(b.altitude_at_surface_p(b.P_ATM + 0.02), 0.0)
+
+    def test_altitude_lengthens_deco(self):
+        plan_sea = b.DivePlan(deco_gases=(b.Gas(0.50),))
+        plan_alt = b.DivePlan(deco_gases=(b.Gas(0.50),),
+                              surface_p=b.surface_p_at_altitude(1500))
+        sea, _ = b.plan_dive(40.0, 25.0, b.AIR, plan_sea)
+        alt, _ = b.plan_dive(40.0, 25.0, b.AIR, plan_alt)
+        self.assertGreater(b.time_to_surface(alt), b.time_to_surface(sea))
+
+    def test_zero_or_negative_environment_rejected(self):
+        with self.assertRaises(ValueError):
+            b.DivePlan(surface_p=0.0)
+        with self.assertRaises(ValueError):
+            b.DivePlan(msw_per_bar=-1.0)
+
+
+class TestDecoSac(unittest.TestCase):
+    """GasPlan.sac_deco: a second consumption rate for the deco cylinders."""
+
+    def test_defaults_to_one_rate(self):
+        gp = b.GasPlan(sac=20.0)
+        self.assertEqual(gp.sac_for(b.Gas(0.50), (b.Gas(0.50),)), 20.0)
+        self.assertEqual(gp.sac_for(b.AIR, (b.Gas(0.50),)), 20.0)
+
+    def test_applies_only_to_designated_deco_gases(self):
+        gp = b.GasPlan(sac=20.0, sac_deco=12.0)
+        self.assertEqual(gp.sac_for(b.Gas(0.50), (b.Gas(0.50),)), 12.0)
+        self.assertEqual(gp.sac_for(b.AIR, (b.Gas(0.50),)), 20.0)
+        # not in the plan's deco stack -> the bottom rate, whatever the mix
+        self.assertEqual(gp.sac_for(b.Gas(0.50), ()), 20.0)
+
+    def test_non_positive_deco_sac_rejected(self):
+        with self.assertRaises(ValueError):
+            b.GasPlan(sac=20.0, sac_deco=0.0)
+        with self.assertRaises(ValueError):
+            b.GasPlan(sac=20.0, sac_deco=-5.0)
+
+    def test_reserve_follows_the_deco_rate(self):
+        """The rock-bottom reserve on a deco gas is held at that gas's own
+        emergency rate, so a lower deco SAC lowers the reserve too."""
+        plan = b.DivePlan(deco_gases=(b.Gas(0.50),))
+        segs, _ = b.plan_dive(40.0, 25.0, b.AIR, plan)
+        one = b.emergency_gas_liters(segs, b.Gas(0.50), b.GasPlan(sac=20.0),
+                                     deco_gases=(b.Gas(0.50),))
+        two = b.emergency_gas_liters(segs, b.Gas(0.50),
+                                     b.GasPlan(sac=20.0, sac_deco=10.0),
+                                     deco_gases=(b.Gas(0.50),))
+        self.assertAlmostEqual(two, one / 2.0, places=6)
+
+    def test_rock_bottom_is_unaffected_by_the_deco_rate(self):
+        """Rock bottom is back gas: it must not move when the deco SAC does."""
+        plan = b.DivePlan(deco_gases=(b.Gas(0.50),))
+        segs, _ = b.plan_dive(40.0, 25.0, b.AIR, plan)
+        args = {"deco_gases": (b.Gas(0.50),)}
+        self.assertAlmostEqual(
+            b.rock_bottom_liters(segs, b.AIR, b.GasPlan(sac=20.0), **args),
+            b.rock_bottom_liters(segs, b.AIR,
+                                 b.GasPlan(sac=20.0, sac_deco=10.0), **args),
+            places=9)
+
+
 if __name__ == "__main__":
     unittest.main()

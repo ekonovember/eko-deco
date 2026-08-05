@@ -40,6 +40,64 @@ def runtime_min(minutes: float) -> int:
     return math.floor(minutes + 1e-9)
 
 
+def water_name(msw_per_bar: float) -> str:
+    """The water-type label for a metres-per-bar constant: ``salt``, ``fresh``
+    or ``custom``. Shared so the CLI header and the GUI dropdown agree.
+
+    The tolerance is 0.001 m/bar — six-significant-digit round trips through
+    the config and the GUI spinboxes must still read as the preset they came
+    from, and a difference that small is far below anything physical."""
+    return next((n for n, v in b.WATER_TYPES.items()
+                 if abs(v - msw_per_bar) < 1e-3), "custom")
+
+
+def wetnotes_rows(segments: Sequence[b.DiveSegment]) -> list[list[str]]:
+    """The printed schedule as ``[depth, stop, run, gas]`` string rows — the
+    wetnotes/runtime-card format (see ``cards/README.md``).
+
+    Two conventions, both MultiDeco's and both verified against real exports
+    (``examples/scenario_1``, ``examples/scenario_2``):
+
+    * ``run`` is the runtime on **leaving** that depth, truncated to whole
+      minutes by `runtime_min`.
+    * ``stop`` is the **leg** time — the ascent to that stop plus the hold —
+      taken as the difference of the printed runtimes, so the STOP column
+      always adds up to the RUN column. Printing the hold alone reads as a lie
+      underwater: a 3-minute hold at 3 m still advances the runtime by 4, and a
+      diver adding up the STOP column would surface a minute early on every
+      stop (see DECISIONS.md #17).
+
+    A zero-duration bottom segment gets no row — a level whose whole time is
+    transit would otherwise print a duplicate of the depth above it.
+    """
+    rows: list[list[str]] = []
+    run, prev_run = 0.0, 0
+    prev: b.Gas | None = None
+
+    def emit(depth: str, stop: str | None, run_min: int, gas: str) -> None:
+        nonlocal prev_run
+        rows.append([depth,
+                     f"{run_min - prev_run:d}" if stop is None else stop,
+                     f"{run_min:d}", gas])
+        prev_run = run_min
+
+    for s in segments:
+        # A gas switch with no stop at that depth (EAN50 at 21 m on a 40 m dive
+        # whose first stop is shallower) must still get a row — this card is
+        # what the diver takes underwater. A switch *at* a stop already shows
+        # on the stop row's gas column.
+        if prev is not None and repr(s.gas) != repr(prev) and s.kind != "stop":
+            emit(f"{s.depth_start:.0f} m", "gas", runtime_min(run), repr(s.gas))
+        run += s.duration
+        if s.kind == "bottom" and s.duration > 0:
+            emit(f"{s.depth_end:.0f} m", "-", runtime_min(run), repr(s.gas))
+        elif s.kind == "stop" and s.duration > 0:
+            emit(f"{s.depth_start:.0f} m", None, runtime_min(run), repr(s.gas))
+        prev = s.gas
+    emit("surf", "-", runtime_min(run), "")
+    return rows
+
+
 # -----------------------------------------------------------------------------
 # Warnings (shared wording)
 # -----------------------------------------------------------------------------
@@ -178,7 +236,8 @@ def gas_report(segments: Sequence[b.DiveSegment],
                bottom_gas: b.Gas, gas_plan: b.GasPlan,
                gases: Sequence[tuple[str, b.Gas, float, float]],
                surface_p: float = ...,
-               msw_per_bar: float = ...) -> GasReport: ...
+               msw_per_bar: float = ...,
+               deco_gases: Sequence[b.Gas] = ...) -> GasReport: ...
 
 
 @overload
@@ -186,17 +245,22 @@ def gas_report(segments: Sequence[b.DiveSegment],
                bottom_gas: b.Gas, gas_plan: None,
                gases: Sequence[tuple[str, b.Gas, float, float]],
                surface_p: float = ...,
-               msw_per_bar: float = ...) -> None: ...
+               msw_per_bar: float = ...,
+               deco_gases: Sequence[b.Gas] = ...) -> None: ...
 
 
 def gas_report(segments: Sequence[b.DiveSegment],
                bottom_gas: b.Gas, gas_plan: b.GasPlan | None,
                gases: Sequence[tuple[str, b.Gas, float, float]],
                surface_p: float = b.P_ATM,
-               msw_per_bar: float = b.MSW_PER_BAR) -> GasReport | None:
+               msw_per_bar: float = b.MSW_PER_BAR,
+               deco_gases: Sequence[b.Gas] = ()) -> GasReport | None:
     """Per-mix need/have accounting for a planned dive, or None without a
     ``GasPlan``. Mixes appear in the order they are first breathed; same-mix
     cylinders act as one bank (`aggregate_banks`).
+
+    ``deco_gases`` is the plan's designated deco stack: gas breathed off one of
+    those mixes is billed at ``GasPlan.sac_deco`` when the dive sets one.
 
     Overloaded so a caller that *has* a ``GasPlan`` (the GUI always does) gets
     a plain ``GasReport`` back and does not have to re-prove non-None at every
@@ -211,13 +275,13 @@ def gas_report(segments: Sequence[b.DiveSegment],
             continue
         seen.append(s.gas)
         liters = b.segment_gas_liters(
-            [x for x in segments if x.gas == s.gas], gas_plan.sac,
-            surface_p, msw_per_bar)
+            [x for x in segments if x.gas == s.gas],
+            gas_plan.sac_for(s.gas, deco_gases), surface_p, msw_per_bar)
         # Emergency TOTAL for this gas = the normal need plus the rock-bottom
         # reserve held on top for the worst-moment issue (the diver carries
         # both — the reserve is not dipped into on a normal dive).
         reserve = b.emergency_gas_liters(segments, s.gas, gas_plan,
-                                         surface_p, msw_per_bar)
+                                         surface_p, msw_per_bar, deco_gases)
         liters_e = liters + reserve
         bank = banks.get(s.gas)
         role = (bank.role if bank
@@ -228,7 +292,7 @@ def gas_report(segments: Sequence[b.DiveSegment],
             pressure_bar=bank.pressure_bar if bank else 0.0))
     back = banks.get(bottom_gas)
     rock = b.rock_bottom_liters(segments, bottom_gas, gas_plan,
-                                surface_p, msw_per_bar)
+                                surface_p, msw_per_bar, deco_gases)
     return GasReport(plan=gas_plan, cylinders=cylinders, rock_bottom_l=rock,
                      back_tank_l=back.tank_l if back else 0.0,
                      back_pressure_bar=back.pressure_bar if back else 0.0)
@@ -293,7 +357,8 @@ def compute_plan_result(levels: Sequence[b.Level], bottom_gas: b.Gas,
                                            plan.msw_per_bar)
     result.warnings = warning_lines(segments, plan, bottom_gas, depth)
     result.gas = gas_report(segments, bottom_gas, gas_plan, gases,
-                            plan.surface_p, plan.msw_per_bar)
+                            plan.surface_p, plan.msw_per_bar,
+                            plan.deco_gases)
     if contingency is not None:
         tb, ta, db, da = contingency
         result.contingency = b.contingency_schedules(

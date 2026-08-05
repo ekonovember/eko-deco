@@ -140,3 +140,62 @@ class TestPlanResult(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestWetnotesRows(unittest.TestCase):
+    """The printable runtime card's row format (report.wetnotes_rows).
+
+    Verified against two real MultiDeco 4.24 exports — examples/scenario_1 and
+    examples/scenario_2, whose schedules are pinned in shearwater_golden.json.
+    """
+
+    def _scenario_1(self):
+        plan = b.DivePlan(gf_low=0.40, gf_high=0.85, descent_rate=8.0,
+                          ascent_rate=9.0,
+                          deco_gases=(b.Gas(0.50), b.Gas(1.0)))
+        return b.plan_dive(32, 40, b.Gas(0.36), plan)[0]
+
+    def test_stop_column_reconciles_with_the_run_column(self):
+        """The property the format exists for: every STOP is the difference of
+        the RUN cells around it, so a diver adding the column up lands on the
+        printed runtime instead of a minute early."""
+        for segs in (self._scenario_1(),
+                     b.plan_dive(45, 25, b.AIR,
+                                 b.DivePlan(deco_gases=(b.Gas(0.50),)))[0]):
+            rows = rp.wetnotes_rows(segs)
+            prev_run = 0
+            for depth, stop, run, _gas in rows:
+                run_i = int(run)
+                if stop not in ("-", "gas"):
+                    self.assertEqual(int(stop), run_i - prev_run,
+                                     f"row {depth}: STOP {stop} != "
+                                     f"{run_i} - {prev_run}")
+                prev_run = run_i
+
+    def test_scenario_1_matches_the_multideco_rows(self):
+        rows = rp.wetnotes_rows(self._scenario_1())
+        self.assertEqual([r[:3] for r in rows], [
+            ["32 m", "-", "40"],     # bottom, leaving at runtime 40
+            ["21 m", "gas", "41"],   # EAN50 switch on the way up
+            ["6 m", "2", "43"],      # MultiDeco: 9 m (43) then 6 m 1:00 (44)
+            ["3 m", "4", "47"],      # MultiDeco: 3 m 4:00 (48)
+            ["surf", "-", "47"],
+        ])
+
+    def test_runs_are_truncated_not_rounded(self):
+        """MultiDeco's convention, re-confirmed by both exports: the runtime
+        cell is the floor, so a stop is never printed as finishing early."""
+        rows = rp.wetnotes_rows(self._scenario_1())
+        self.assertEqual(rows[-1][2], "47")     # true total runtime 47.56
+
+    def test_gas_switch_without_a_stop_still_gets_a_row(self):
+        rows = rp.wetnotes_rows(self._scenario_1())
+        switch = [r for r in rows if r[1] == "gas"]
+        self.assertEqual(len(switch), 1)
+        self.assertEqual(switch[0][0], "21 m")
+        self.assertEqual(switch[0][3], "EAN50")
+
+    def test_no_deco_dive_is_bottom_then_surface(self):
+        segs, _ = b.plan_dive(18, 30, b.AIR)
+        rows = rp.wetnotes_rows(segs)
+        self.assertEqual([r[0] for r in rows], ["18 m", "surf"])

@@ -402,6 +402,15 @@ class DecoApp:
                                   unit_width=5)
         self.sac_mult = self._add_spin(sacrow, "Emergency ×", 1.0, 9.0, 0.05, 2.0,
                                        fmt="%.2f")
+        # Deco SAC: 0 = "same as the bottom SAC" (the whole-dive single rate).
+        # Hanging on a stop is not working the bottom, and MultiDeco/Shearwater
+        # plan the two rates apart — see DECISIONS.md #16.
+        decorow = ttk.Frame(gp)
+        decorow.pack(fill=tk.X, pady=2)
+        self.sac_deco = self._add_spin(decorow, "Deco SAC", 0, 99, 0.5, 0,
+                                       fmt="%.1f", unit="L/min", label_width=7,
+                                       unit_width=5)
+        ttk.Label(decorow, text="0 = same as SAC").pack(side=tk.LEFT)
         emrow = ttk.Frame(gp)
         emrow.pack(fill=tk.X, pady=2)
         self.problem_min = self._add_spin(emrow, "Problem", 0, 30, 0.5, 1,
@@ -617,6 +626,55 @@ class DecoApp:
                         variable=self.last_stop6).pack(side=tk.LEFT, padx=(10, 0))
         for v in (self.gf_lo, self.gf_hi, self.last_stop6):
             v.trace_add("write", lambda *_: None if self._building else self.recompute())
+        self._add_water_row(parent)
+
+    def _add_water_row(self, parent) -> None:
+        """Environment: water type, altitude and surface pressure. All of them
+        move every pressure the plan derives (schedule, ppO₂, MOD, density, gas
+        volumes), so they sit with the GF row at the top rather than in a
+        preferences dialog.
+
+        ``msw_per_bar`` and ``surface_p`` are the stored truth; the dropdown and
+        the altitude box are just convenient ways of typing them, and both stay
+        editable so a constant taken from another planner (MultiDeco's 1.0 bar
+        surface, say) can go in directly."""
+        row = ttk.Frame(parent)
+        row.pack(fill=tk.X, pady=2)
+        ttk.Label(row, text="Water").pack(side=tk.LEFT)
+        self.water = tk.StringVar(value="salt")
+        ttk.Combobox(row, textvariable=self.water, width=7, state="readonly",
+                     values=[*sorted(b.WATER_TYPES), "custom"]).pack(
+            side=tk.LEFT, padx=(6, 8))
+        self.msw_per_bar = self._add_spin(row, "m/bar", 5.0, 15.0, 0.1,
+                                          b.MSW_PER_BAR, fmt="%.6g", width=8)
+        alt = ttk.Frame(parent)
+        alt.pack(fill=tk.X, pady=2)
+        self.altitude = self._add_spin(alt, "Altitude", 0, 5000, 50, 0,
+                                       fmt="%.0f", unit="m", label_width=7,
+                                       unit_width=5)
+        self.surface_p = self._add_spin(alt, "surface", 0.4, 1.2, 0.005, b.P_ATM,
+                                        fmt="%.6g", unit="bar", width=8)
+        self.water.trace_add("write", self._on_water_type)
+        self.altitude.trace_add("write", self._on_altitude)
+
+    def _on_water_type(self, *_) -> None:
+        """Water dropdown → msw/bar. Setting the spinbox var fires its own
+        trace, so the recompute happens there; don't kick off a second one.
+        'custom' is a label for a hand-typed value, not a preset — selecting it
+        changes nothing."""
+        mpb = b.WATER_TYPES.get(self.water.get())
+        if mpb is not None:
+            self.msw_per_bar.set(f"{mpb:.6g}")
+
+    def _on_altitude(self, *_) -> None:
+        """Altitude → surface pressure by the standard atmosphere. One-way: the
+        pressure box stays hand-editable (a planner's constant may not
+        correspond to any altitude), and typing there does not rewrite the
+        altitude, which would fight the user mid-edit."""
+        if self._building:
+            return
+        self.surface_p.set(
+            f"{b.surface_p_at_altitude(self._num(self.altitude, 0.0, lo=0.0)):.6g}")
 
     def _add_level_row(self, depth: float = 30, runtime: float = 40,
                        recompute: bool = True) -> None:
@@ -786,9 +844,11 @@ class DecoApp:
                 for bank in rp.aggregate_banks(self._gas_rows_raw())}
 
     def _gas_plan(self) -> b.GasPlan:
-        """Consumption inputs (SAC, emergency multiplier, problem minutes, team
-        size) from the UI as a ``buhlmann.GasPlan``."""
+        """Consumption inputs (SAC, deco SAC, emergency multiplier, problem
+        minutes, team size) from the UI as a ``buhlmann.GasPlan``."""
+        deco = self._num(self.sac_deco, 0.0, lo=0.0)
         return b.GasPlan(sac=self._num(self.sac, 20.0, lo=1.0),
+                         sac_deco=deco if deco > 0 else None,
                          sac_multiplier=self._num(self.sac_mult, 2.0, lo=1.0),
                          problem_minutes=self._num(self.problem_min, 1.0, lo=0.0),
                          divers=2 if self.two_divers.get() else 1)
@@ -827,6 +887,8 @@ class DecoApp:
             ppo2_bottom=base.get("ppo2_bottom", 1.4),
             ppo2_deco=base.get("ppo2_deco", 1.6),
             ppo2_min=base.get("ppo2_min", 0.18),
+            surface_p=self._num(self.surface_p, b.P_ATM, lo=0.1),
+            msw_per_bar=self._num(self.msw_per_bar, b.MSW_PER_BAR, lo=1.0),
             deco_gases=tuple(deco),
             travel_gases=tuple(travel),
         )
@@ -1262,31 +1324,7 @@ class DecoApp:
         else:
             profile = f"{depth:.0f} m / {bottom_time:.0f} min"
 
-        # Every "run" cell goes through report.runtime_min — truncated to whole
-        # minutes, MultiDeco's convention (see that helper). A zero-duration
-        # bottom segment never gets a row: a level whose whole time is transit
-        # would otherwise print a duplicate of the depth above it.
-        def rows_for(ss):
-            rows, run, prev = [], 0.0, None
-            for s in ss:
-                # A gas switch with no stop at that depth (EAN50 at 21 m on a
-                # 40 m dive whose first stop is shallower) must still get a
-                # row — this card is what the diver takes underwater. A switch
-                # *at* a stop already shows on the stop row's gas column.
-                if (prev is not None and repr(s.gas) != repr(prev)
-                        and s.kind != "stop"):
-                    rows.append([f"{s.depth_start:.0f} m", "gas",
-                                 f"{rp.runtime_min(run):d}", repr(s.gas)])
-                run += s.duration
-                if s.kind == "bottom" and s.duration > 0:
-                    rows.append([f"{s.depth_end:.0f} m", "-",
-                                 f"{rp.runtime_min(run):d}", repr(s.gas)])
-                elif s.kind == "stop" and s.duration > 0:
-                    rows.append([f"{s.depth_start:.0f} m", f"{s.duration:.0f}",
-                                 f"{rp.runtime_min(run):d}", repr(s.gas)])
-                prev = s.gas
-            rows.append(["surf", "-", f"{rp.runtime_min(run):d}", ""])
-            return rows
+        rows_for = rp.wetnotes_rows
 
         cards: list[str] = []
         for label, ss in scen:
@@ -1395,9 +1433,19 @@ class DecoApp:
             self.gf_hi.set(str(cfg["gf_high"]))
             self.last_stop6.set(cfg.get("last_stop_m", 3.0) >= 6.0)
             self.sac.set(f"{cfg['sac_normal']:g}")
+            self.sac_deco.set(f"{cfg.get('sac_deco') or 0:g}")
             self.sac_mult.set(f"{cfg.get('sac_multiplier', 2.0):.2f}")
             self.problem_min.set(f"{cfg.get('problem_minutes', 1.0):g}")
             self.two_divers.set(int(cfg.get("divers", 1)) >= 2)
+            # msw/bar is the stored truth; the dropdown and the altitude box are
+            # only ways of typing it, so set them FROM the numbers, not the
+            # other way round (a custom value must survive a round-trip).
+            mpb = float(cfg.get("msw_per_bar", b.MSW_PER_BAR))
+            surf = float(cfg.get("surface_p_bar", b.P_ATM))
+            self.msw_per_bar.set(f"{mpb:.6g}")
+            self.surface_p.set(f"{surf:.6g}")
+            self.water.set(rp.water_name(mpb))
+            self.altitude.set(f"{b.altitude_at_surface_p(surf):.0f}")
             cont = cfg.get("contingency", {})
             for var, key in zip((self.cont_tb, self.cont_ta,
                                  self.cont_db, self.cont_da),
@@ -1440,9 +1488,13 @@ class DecoApp:
             "gf_high": round(self._pct(self.gf_hi, 0.70) * 100),
             "last_stop_m": 6.0 if self.last_stop6.get() else 3.0,
             "sac_normal": self._num(self.sac, 20.0, lo=1.0),
+            "sac_deco": (sd if (sd := self._num(self.sac_deco, 0.0, lo=0.0)) > 0
+                         else None),
             "sac_multiplier": round(self._num(self.sac_mult, 2.0, lo=1.0), 2),
             "problem_minutes": self._num(self.problem_min, 1.0, lo=0.0),
             "divers": 2 if self.two_divers.get() else 1,
+            "surface_p_bar": self._num(self.surface_p, b.P_ATM, lo=0.1),
+            "msw_per_bar": self._num(self.msw_per_bar, b.MSW_PER_BAR, lo=1.0),
             "contingency": dict(zip(dc.CONTINGENCY_KEYS,
                                     (int(self.cont_tb.get()),
                                      int(self.cont_ta.get()),

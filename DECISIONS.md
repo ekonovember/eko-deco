@@ -243,3 +243,80 @@ formatter flattens all of it into something correct and less readable.
 **Consequence.** Line length is 96 and layout is a human decision. The one
 place that exemption is written down is the per-file `E501` ignore for
 `tests/test_subsurface_crosscheck.py`, whose CASES table is one dive per line.
+
+## #15 — Water type and altitude are settings, not constants
+
+`DivePlan.surface_p` and `DivePlan.msw_per_bar` have always existed, but only
+the library could reach them: the config, the CLI and the GUI all planned every
+dive at sea level in salt water. They are now first-class settings —
+`surface_p_bar` / `msw_per_bar` in `dive_plan.json`, `--water` / `--msw-per-bar`
+/ `--altitude` / `--surface-p` on the CLI, a water dropdown plus altitude and
+surface-pressure boxes in the GUI.
+
+**Why.** Two real MultiDeco plans (`examples/scenario_1`, `examples/scenario_2`)
+are fresh-water dives at 150 m, and eko-deco could not express either. This is
+not cosmetic: lower surface pressure means the same tissue loading sits closer
+to its surfacing ceiling, so altitude *lengthens* deco, and fresh water is less
+pressure per metre, so it shortens it. Both move ppO₂, MOD, END, density,
+CNS/OTU and gas volumes as well as the schedule.
+
+**The constants.** `WATER_TYPES` is `salt` 10.0 (EN 13319, the default) and
+`fresh` 10 ⅓ m/bar. The fresh figure is the old "1 atm = 10.33 m of water"
+value, chosen because it is what real MultiDeco fresh-water plans were measured
+to print: the ppO₂ and ead figures in those two exports admit only surface
+0.9986–1.0059 bar with 10.327–10.378 m/bar, and MultiDeco (Baker-derived) uses
+1.0 bar. The textbook column of a bar is 10.20 m; pass `--msw-per-bar 10.197`
+for it. Altitude → surface pressure uses the standard-atmosphere barometric
+formula (`surface_p_at_altitude`).
+
+**What this does NOT do.** It does not model acclimatisation. The tissues start
+the dive equilibrated at the plan's surface pressure, which describes a diver
+who has been at altitude for many hours, not one who drove up that morning.
+`surface_p_at_altitude`'s docstring says so; a same-day altitude dive needs
+margin the model does not add.
+
+**One caveat about MultiDeco.** Those two exports print fresh-water pressures
+but their *schedules* match eko-deco's sea-level salt defaults far better than
+the fresh-water constants do — MultiDeco appears to apply water type and
+altitude to what it displays and not to its model. We follow the physics, so
+eko-deco's fresh-water plan differs from MultiDeco's on the same settings.
+`tests/test_multideco_scenarios.py` pins both halves of that.
+
+## #16 — A separate deco SAC
+
+`GasPlan.sac_deco` is an optional second consumption rate, applied to gas
+breathed off one of the plan's designated deco mixes (`GasPlan.sac_for`).
+`None` — the default — keeps the previous single-rate behaviour.
+
+**Why.** Hanging on a stop is not working the bottom, and every planner people
+cross-check against models the two separately. Backing the rates out of the
+`examples/` exports shows MultiDeco billed the bottom gas at ~19.25 L/min and
+the deco cylinders at ~16; with one rate our deco-gas litres are ~20 % high
+against real plans, which is the wrong direction for a gas figure.
+
+**Scope.** It follows the *role*, not the mix: membership is the plan's
+`deco_gases`, so a mix carried as both bottom and deco gas bills at the deco
+rate wherever it is breathed — MultiDeco's simplification too. The emergency
+reserve on a deco gas scales with it (`sac_for` × `sac_multiplier`), but **rock
+bottom does not move**: that is back gas by definition, and a regression test
+pins it.
+
+## #17 — The printed card's STOP column is the leg, not the hold
+
+On the wetnotes runtime card (`report.wetnotes_rows`), a stop row's STOP cell
+is the time from leaving the previous row to leaving this one — the ascent to
+the stop *plus* the hold — taken as the difference of the printed runtimes.
+
+**Why.** Our stop durations are whole-minute holds with the ascents on top, so
+the runtime advances further than the hold: a 3-minute hold at 3 m moves the
+runtime by 3 ⅓. Printing the hold alone left the card's two columns
+irreconcilable — 6 m "1" at run 43 then 3 m "3" at run 47 — and a diver adding
+the STOP column up surfaces early by one ascent per stop. Taking the difference
+of the printed runtimes makes the columns agree by construction and is exactly
+how MultiDeco prints a schedule (verified against both `examples/` exports,
+where the "0:27" first-stop rows are its padding to a whole runtime minute).
+
+**Scope.** Rendering only — the planner's stop durations are unchanged, and the
+CLI's segment table still lists ascents as their own rows, which is the right
+shape for a full schedule dump. `tests/test_report.py` pins the reconciliation
+as a property over whole cards, not just the one example.

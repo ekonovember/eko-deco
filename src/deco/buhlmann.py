@@ -63,6 +63,46 @@ P_ATM = 1.01325
 # msw per bar (sea water). Use 10.0 for "metric-friendly" rounding.
 MSW_PER_BAR = 10.0
 
+# Water types as msw-per-bar. `salt` is the EN 13319 / dive-planner convention
+# (1 msw = 0.1 bar exactly) and is the default. `fresh` is 10 1/3 m per bar —
+# the old "1 atm = 10.33 m of water" figure, which is the constant real
+# MultiDeco fresh-water plans were measured to print (see DECISIONS.md #15),
+# rather than the textbook 10.20 m column of a bar. The difference is ~1.3 % of
+# ambient pressure; pass msw_per_bar=10.197 explicitly for the textbook value.
+MSW_PER_BAR_SALT = 10.0
+MSW_PER_BAR_FRESH = 31.0 / 3.0
+WATER_TYPES = {"salt": MSW_PER_BAR_SALT, "fresh": MSW_PER_BAR_FRESH}
+
+
+def surface_p_at_altitude(altitude_m: float) -> float:
+    """Atmospheric pressure (bar) at `altitude_m` above sea level, by the
+    international barometric formula for the standard troposphere::
+
+        P = P_ATM * (1 - 2.25577e-5 * h) ** 5.25588
+
+    This is the surface pressure to plan an altitude dive with — a mountain
+    lake at 1500 m sits near 0.845 bar, so the same tissue loading is far
+    closer to its surfacing ceiling than at sea level.
+
+    It does NOT model **acclimatisation**: the tissues start the dive
+    equilibrated at this pressure, which is true of a diver who has been up
+    there for many hours, not of one who drove up that morning and is still
+    carrying sea-level nitrogen. Arriving unacclimatised is the conservative
+    error in the ascent direction but not in the loading direction, so treat
+    same-day altitude dives with extra margin."""
+    if altitude_m <= 0:
+        return P_ATM
+    return P_ATM * (1.0 - 2.25577e-5 * altitude_m) ** 5.25588
+
+
+def altitude_at_surface_p(surface_p: float) -> float:
+    """Inverse of `surface_p_at_altitude`: the altitude (m) whose standard
+    atmosphere is `surface_p` bar. 0 at or above sea-level pressure. Front ends
+    use it to show an altitude next to a stored surface pressure."""
+    if surface_p >= P_ATM:
+        return 0.0
+    return (1.0 - (surface_p / P_ATM) ** (1.0 / 5.25588)) / 2.25577e-5
+
 
 def depth_to_p_amb(depth_m: float, surface_p: float = P_ATM,
                    msw_per_bar: float = MSW_PER_BAR) -> float:
@@ -965,10 +1005,17 @@ class GasPlan:
                                           # emergency (2 = buddy out of gas,
                                           # shared until the first gas switch)
     tank_liters: float | None = None   # total cylinder volume, for bar output
+    # Separate SAC for gas breathed off a designated deco cylinder — hanging on
+    # a stop is not working the bottom, and MultiDeco/Shearwater plan the two
+    # rates apart. None = one rate for the whole dive (see DECISIONS.md #16).
+    sac_deco: float | None = None
 
     def __post_init__(self) -> None:
         if self.sac <= 0:
             raise ValueError(f"SAC must be > 0 L/min (got {self.sac:g})")
+        if self.sac_deco is not None and self.sac_deco <= 0:
+            raise ValueError(
+                f"deco SAC must be > 0 L/min when set (got {self.sac_deco:g})")
         if self.sac_multiplier < 1.0:
             raise ValueError(
                 f"emergency SAC multiplier must be >= 1 "
@@ -981,6 +1028,18 @@ class GasPlan:
         if self.tank_liters is not None and self.tank_liters <= 0:
             raise ValueError(
                 f"tank_liters must be > 0 when set (got {self.tank_liters:g})")
+
+    def sac_for(self, gas: Gas, deco_gases: Sequence[Gas] = ()) -> float:
+        """The consumption rate to bill `gas` at: `sac_deco` when `gas` is one
+        of the dive's designated deco mixes and a deco SAC is set, else `sac`.
+
+        Membership is by the frozen `Gas` value, so it follows the *role* the
+        mix was given in the plan — a mix carried as both bottom and deco gas
+        is billed at the deco rate wherever it is breathed, which is the same
+        simplification MultiDeco makes."""
+        if self.sac_deco is not None and gas in tuple(deco_gases):
+            return self.sac_deco
+        return self.sac
 
 
 def segment_gas_liters(segments: Iterable[DiveSegment], sac: float,
@@ -1000,7 +1059,8 @@ def segment_gas_liters(segments: Iterable[DiveSegment], sac: float,
 
 def emergency_gas_liters(segments: Iterable[DiveSegment], gas: Gas,
                          gas_plan: GasPlan, surface_p: float = P_ATM,
-                         msw_per_bar: float = MSW_PER_BAR) -> float:
+                         msw_per_bar: float = MSW_PER_BAR,
+                         deco_gases: Sequence[Gas] = ()) -> float:
     """Litres of `gas` that must be held in reserve ("rock bottom" logic) for a
     problem striking at the worst moment of the dive — the end of the bottom
     phase, where tissue loading and therefore the deco obligation are greatest.
@@ -1010,8 +1070,9 @@ def emergency_gas_liters(segments: Iterable[DiveSegment], gas: Gas,
     worst moment the diver spends `problem_minutes` at max depth, then follows
     the **real planned ascent + deco** — up to the next gas switch on that gas,
     or, with no switch, all the way to the surface including every deco stop —
-    all at the emergency SAC (`sac * sac_multiplier`). The problem minutes are
-    billed to the gas breathed at the deepest point (the bottom gas).
+    all at the emergency SAC (that gas's `sac_for` × `sac_multiplier`, so a
+    deco mix reserves at the deco rate when one is set). The problem minutes
+    are billed to the gas breathed at the deepest point (the bottom gas).
 
     With `divers > 1` the team shares the supply (a buddy out of gas): the
     problem minutes and the ascent up to the first planned gas switch are
@@ -1026,7 +1087,7 @@ def emergency_gas_liters(segments: Iterable[DiveSegment], gas: Gas,
     shallowest-last approximation, not a guaranteed absolute worst case."""
     segs = list(segments)
     be = _bottom_phase_end(segs)
-    sac_e = gas_plan.sac * gas_plan.sac_multiplier
+    sac_e = gas_plan.sac_for(gas, deco_gases) * gas_plan.sac_multiplier
     asc = segs[be:]
     total = 0.0
     if asc:
@@ -1053,7 +1114,8 @@ def emergency_gas_liters(segments: Iterable[DiveSegment], gas: Gas,
 
 def rock_bottom_liters(segments: Iterable[DiveSegment], bottom_gas: Gas,
                        gas_plan: GasPlan, surface_p: float = P_ATM,
-                       msw_per_bar: float = MSW_PER_BAR) -> float:
+                       msw_per_bar: float = MSW_PER_BAR,
+                       deco_gases: Sequence[Gas] = ()) -> float:
     """Minimum gas ("rock bottom") in litres of the back/bottom gas: the reserve
     needed to survive a problem at the worst moment (end of the bottom phase)
     and follow the **real ascent + deco** on the bottom gas — up to the next gas
@@ -1068,4 +1130,4 @@ def rock_bottom_liters(segments: Iterable[DiveSegment], bottom_gas: Gas,
     realistic back-gas reserve rather than the whole schedule billed to back
     gas."""
     return emergency_gas_liters(segments, bottom_gas, gas_plan,
-                                surface_p, msw_per_bar)
+                                surface_p, msw_per_bar, deco_gases)

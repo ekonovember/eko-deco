@@ -26,6 +26,29 @@ pre-1.0, so anything may still move.
 
 ### Added
 
+- **Water type and altitude are settings now** ([DECISIONS.md #15](DECISIONS.md)).
+  `surface_p` and `msw_per_bar` existed in the library but nothing outside it
+  could reach them, so every dive planned as sea-level salt water. Now:
+  `--water salt|fresh`, `--msw-per-bar`, `--altitude M` and `--surface-p BAR`
+  on the CLI (explicit values win over the preset/altitude); `surface_p_bar`
+  and `msw_per_bar` in `dive_plan.json`; a water dropdown plus altitude and
+  surface-pressure boxes in the GUI. They move the schedule, ppO₂, MOD, END,
+  density, CNS/OTU and gas volumes alike. New helpers
+  `buhlmann.surface_p_at_altitude` / `altitude_at_surface_p` /
+  `WATER_TYPES`, and `report.water_name`.
+- **An optional separate deco SAC** ([DECISIONS.md #16](DECISIONS.md)):
+  `GasPlan.sac_deco` + `sac_for`, `--sac-deco` on the CLI, `sac_deco` in the
+  config (`null` = one rate, unchanged behaviour), a "Deco SAC" box in the GUI
+  (0 = same as SAC). Applies to gas breathed off a designated deco mix, and to
+  that gas's emergency reserve; **rock bottom is unaffected** — it is back gas.
+- Two real MultiDeco 4.24 exports in [`examples/`](examples/) as cross-check
+  evidence, plus 44 tests over them: 8 golden schedules (each dive and its
+  three lost-gas columns) in `tests/shearwater_golden.json`, and
+  `tests/test_multideco_scenarios.py` for the printed ppO₂/ead/CNS/OTU, the
+  gas volumes, and two deliberate divergences (gas-density reference state,
+  and MultiDeco's stop-time printing).
+- `report.wetnotes_rows` — the printable runtime card's rows, moved out of the
+  GUI into the shared layer so they are testable without a display.
 - `pyproject.toml`: project metadata, `deco` / `deco-gui` entry points,
   `[gui]` and `[dev]` extras, ruff and mypy configuration, `py.typed`.
 - GitHub Actions CI: the stdlib-only suite across Python 3.10–3.14 on Linux,
@@ -37,6 +60,13 @@ pre-1.0, so anything may still move.
 
 ### Fixed
 
+- The wetnotes runtime card's **STOP column now reconciles with its RUN
+  column** ([DECISIONS.md #17](DECISIONS.md)). It printed the hold alone while
+  the runtime also advanced by the ascent, so a card could read `6 m | 1 | 43`
+  then `3 m | 3 | 47` — 4 minutes of runtime for a printed 3, and a diver
+  adding the column up surfaced a minute early per stop. STOP is now the leg
+  (ascent to the stop + hold), taken as the difference of the printed
+  runtimes, which is also how MultiDeco prints a schedule.
 - `report.gas_report` is now overloaded, so callers that pass a `GasPlan` get a
   non-optional `GasReport` back.
 - The whole tree passes `ruff check` and `mypy` clean: PEP 585/604 annotations

@@ -86,6 +86,72 @@ class TestLevelWindows(unittest.TestCase):
 
 
 @unittest.skipUnless(_HAVE_GUI, "Tk/matplotlib GUI not available")
+class TestEnvironmentAndDecoSacWidgets(unittest.TestCase):
+    """Water type / altitude / surface pressure / deco SAC in the GUI. The
+    stored truth is msw-per-bar and surface pressure; the dropdown and the
+    altitude box only write them, so a hand-typed constant (MultiDeco's 1.0 bar
+    surface, say) has to survive a save/load round trip untouched."""
+
+    def setUp(self):
+        self.root = tk.Tk()
+        self.root.withdraw()
+        self.app = app.DecoApp(self.root)
+
+    def tearDown(self):
+        self.root.destroy()
+
+    def test_defaults_are_sea_level_salt_and_one_sac(self):
+        from deco import buhlmann as b
+
+        cfg = self.app._collect_config()
+        self.assertEqual(cfg["msw_per_bar"], b.MSW_PER_BAR)
+        self.assertEqual(cfg["surface_p_bar"], b.P_ATM)
+        self.assertIsNone(cfg["sac_deco"])
+
+    def test_water_dropdown_writes_msw_per_bar(self):
+        from deco import buhlmann as b
+
+        self.app.water.set("fresh")
+        self.assertAlmostEqual(float(self.app.msw_per_bar.get()),
+                               b.MSW_PER_BAR_FRESH, places=3)
+        self.assertAlmostEqual(self.app._make_plan().msw_per_bar,
+                               b.MSW_PER_BAR_FRESH, places=3)
+
+    def test_altitude_writes_surface_pressure(self):
+        from deco import buhlmann as b
+
+        self.app.altitude.set("1500")
+        self.assertAlmostEqual(float(self.app.surface_p.get()),
+                               b.surface_p_at_altitude(1500), places=4)
+        self.assertLess(self.app._make_plan().surface_p, b.P_ATM)
+
+    def test_hand_typed_environment_round_trips(self):
+        from deco import buhlmann as b
+
+        self.app.msw_per_bar.set("10.33")
+        self.app.surface_p.set("1")
+        self.app.sac_deco.set("16")
+        cfg = self.app._collect_config()
+        self.assertAlmostEqual(cfg["msw_per_bar"], 10.33)
+        self.assertEqual(cfg["surface_p_bar"], 1.0)
+        self.assertEqual(cfg["sac_deco"], 16.0)
+        self.app._apply_config(cfg)
+        self.assertAlmostEqual(float(self.app.msw_per_bar.get()), 10.33)
+        self.assertEqual(float(self.app.surface_p.get()), 1.0)
+        self.assertEqual(float(self.app.sac_deco.get()), 16.0)
+        # a value that is neither preset is labelled, not silently snapped
+        self.assertEqual(self.app.water.get(), "custom")
+        self.assertAlmostEqual(self.app._make_plan().msw_per_bar, 10.33)
+        self.assertEqual(b.altitude_at_surface_p(1.0) > 0, True)
+
+    def test_zero_deco_sac_means_one_rate(self):
+        self.app.sac_deco.set("0")
+        self.assertIsNone(self.app._gas_plan().sac_deco)
+        self.app.sac_deco.set("12")
+        self.assertEqual(self.app._gas_plan().sac_deco, 12.0)
+
+
+@unittest.skipUnless(_HAVE_GUI, "Tk/matplotlib GUI not available")
 class TestGeometryClamp(unittest.TestCase):
     """A window geometry saved on a monitor that is no longer attached — or that
     lands in a gap between vertically offset monitors — must be pulled onto a

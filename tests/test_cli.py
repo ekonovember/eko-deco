@@ -9,7 +9,9 @@ import io
 import json
 import os
 import unittest
+from typing import ClassVar
 
+from deco import buhlmann as b
 from deco import cli
 
 
@@ -131,3 +133,108 @@ class TestSaveReloadRoundTrip(unittest.TestCase):
         for g in cfg["gases"]:
             self.assertNotIn("id", g)
             self.assertIn(g["role"], ("Bottom", "Travel", "Deco"))
+
+
+class TestEnvironmentFlags(unittest.TestCase):
+    """--water / --msw-per-bar / --altitude / --surface-p / --sac-deco.
+
+    These exist because two real MultiDeco plans (examples/scenario_1 and _2)
+    are fresh-water dives at altitude and the CLI had no way to say so.
+    """
+
+    BASE: ClassVar[list[str]] = [
+        "plan", "--depth", "32", "--time", "40", "--gas", "ean36",
+        "--gf-low", "0.40", "--gf-high", "0.85", "--json"]
+
+    def _plan(self, *extra):
+        code, out, _ = run_cli([*self.BASE, *extra])
+        self.assertEqual(code, 0)
+        return json.loads(out)
+
+    def test_defaults_are_sea_level_salt(self):
+        got = self._plan()
+        self.assertEqual(got["input"]["msw_per_bar"], b.MSW_PER_BAR)
+        self.assertEqual(got["input"]["surface_p_bar"], b.P_ATM)
+
+    def test_water_fresh_selects_the_fresh_constant(self):
+        got = self._plan("--water", "fresh")
+        self.assertAlmostEqual(got["input"]["msw_per_bar"], b.MSW_PER_BAR_FRESH)
+
+    def test_explicit_msw_per_bar_wins_over_water(self):
+        got = self._plan("--water", "fresh", "--msw-per-bar", "10.197")
+        self.assertAlmostEqual(got["input"]["msw_per_bar"], 10.197)
+
+    def test_altitude_sets_surface_pressure(self):
+        got = self._plan("--altitude", "1500")
+        self.assertAlmostEqual(got["input"]["surface_p_bar"],
+                               b.surface_p_at_altitude(1500), places=9)
+        self.assertLess(got["input"]["surface_p_bar"], b.P_ATM)
+
+    def test_explicit_surface_p_wins_over_altitude(self):
+        got = self._plan("--altitude", "1500", "--surface-p", "1.0")
+        self.assertEqual(got["input"]["surface_p_bar"], 1.0)
+
+    def test_altitude_lengthens_the_same_dive(self):
+        """The whole point: less pressure overhead at the surface means the
+        same loading sits closer to its ceiling, so deco gets longer."""
+        sea = self._plan("--deco-gas", "50")
+        alt = self._plan("--deco-gas", "50", "--altitude", "1500")
+        self.assertGreater(alt["tts_min"], sea["tts_min"])
+
+    def test_environment_reaches_the_reported_ppo2(self):
+        """MultiDeco prints 1.47 ppO2 for EAN36 at 32 m in fresh water at
+        1.0 bar; at our sea-level salt defaults the same gas reads 1.52."""
+        fresh = self._plan("--water", "fresh", "--surface-p", "1.0")
+        p = b.Gas(0.36).ppo2(32, fresh["input"]["surface_p_bar"],
+                             fresh["input"]["msw_per_bar"])
+        self.assertEqual(round(p, 2), 1.47)
+
+    def test_environment_shows_in_the_text_header_only_when_it_differs(self):
+        _c, plain, _e = run_cli(self.BASE[:-1])
+        self.assertNotIn("Water:", plain)
+        _c, fresh, _e = run_cli([*self.BASE[:-1], "--water", "fresh",
+                                 "--altitude", "1500"])
+        self.assertIn("Water: fresh", fresh)
+        self.assertIn("1500 m altitude", fresh)
+
+    def test_sac_deco_bills_the_deco_gas_separately(self):
+        both = self._plan("--deco-gas", "50", "--sac", "20", "--sac-deco", "10")
+        one = self._plan("--deco-gas", "50", "--sac", "20")
+        by_gas = {c["gas"]: c for c in both["gas"]["cylinders"]}
+        base = {c["gas"]: c for c in one["gas"]["cylinders"]}
+        self.assertEqual(both["gas"]["sac_deco_l_min"], 10.0)
+        # (the JSON rounds litres to 0.1, hence the delta)
+        self.assertAlmostEqual(by_gas["EAN50"]["liters"],
+                               base["EAN50"]["liters"] / 2.0, delta=0.1)
+        # the bottom gas is untouched by the deco rate
+        self.assertAlmostEqual(by_gas["EAN36"]["liters"],
+                               base["EAN36"]["liters"], delta=0.1)
+
+    def test_zero_sac_deco_rejected(self):
+        code, _, _err = run_cli(["plan", "--depth", "30", "--time", "20",
+                                 "--sac", "20", "--sac-deco", "0"])
+        self.assertEqual(code, 2)
+
+    def test_environment_and_sac_deco_survive_a_save_load_round_trip(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "plan.json")
+            code, _, _ = run_cli(["plan", "--depth", "32", "--time", "40",
+                                  "--gas", "ean36", "--deco-gas", "50",
+                                  "--water", "fresh", "--altitude", "1500",
+                                  "--sac", "20", "--sac-deco", "16",
+                                  "--save", path])
+            self.assertEqual(code, 0)
+            with open(path, encoding="utf-8") as fh:
+                cfg = json.load(fh)
+            self.assertAlmostEqual(cfg["msw_per_bar"], b.MSW_PER_BAR_FRESH)
+            self.assertAlmostEqual(cfg["surface_p_bar"],
+                                   b.surface_p_at_altitude(1500))
+            self.assertEqual(cfg["sac_deco"], 16.0)
+            code, out, _ = run_cli(["plan", path, "--json"])
+            self.assertEqual(code, 0)
+            back = json.loads(out)
+        self.assertAlmostEqual(back["input"]["msw_per_bar"], b.MSW_PER_BAR_FRESH)
+        self.assertAlmostEqual(back["input"]["surface_p_bar"],
+                               b.surface_p_at_altitude(1500))
+        self.assertEqual(back["gas"]["sac_deco_l_min"], 16.0)
