@@ -1,0 +1,6 @@
+# Generated cards - regenerate with make_cards.py, never commit.
+*.pdf
+*.png
+
+# Third-party manuals are cited, never redistributed - see reference/README.md.
+reference/*.pdf

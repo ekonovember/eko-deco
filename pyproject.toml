@@ -92,6 +92,8 @@ ignore = [
 # wrappers may only be imported after a compiler probe has succeeded, so the
 # cross-checks can skip instead of erroring on a machine with no g++/gfortran.
 "src/deco/app.py" = ["E402"]
+# Same reason: the card generator must select the headless backend before pyplot.
+"cards/make_cards.py" = ["E402"]
 "tests/test_baker_crosscheck.py" = ["E402"]
 "tests/test_subsurface_crosscheck.py" = [
   "E402",

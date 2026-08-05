@@ -49,6 +49,19 @@ pre-1.0, so anything may still move.
   and MultiDeco's stop-time printing).
 - `report.wetnotes_rows` — the printable runtime card's rows, moved out of the
   GUI into the shared layer so they are testable without a display.
+- **`cards/`** — the print-ready 90 × 64 mm wetnotes runtime-card engine, now
+  fed by the planner rather than by hand: `table_from_plans` builds a card's
+  rows straight from `deco plan --json` and `gas_line` derives the switch
+  depths from the same plan, so a cell cannot end up holding a raw *hold*
+  copied out of the segment table. `fit_size` auto-fits the type to the row
+  count — the layout was drawn around three stops and a real trimix schedule
+  has seven, which used to write the TTS row over the summary.
+  `tests/test_cards_format.py` pins that a card cell equals
+  `buhlmann.stop_legs` and that the card, the GUI's runtime card and the
+  contingency cut table all print the same numbers.
+  **No PDFs are committed**: generated cards are gitignored, and the vendor
+  MultiDeco-X1 manual is cited by URL + SHA-256 in `cards/reference/README.md`
+  instead of being redistributed.
 - **Every algorithm input is now settable from the config, the CLI and the
   GUI** ([DECISIONS.md #19](DECISIONS.md)), with
   `tests/test_input_coverage.py` enumerating `DivePlan`/`GasPlan` by reflection
