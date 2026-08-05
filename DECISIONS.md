@@ -424,3 +424,38 @@ stack, and a field that looks like an input and is not is worse than no field.
 interval, the ppO₂ window, the switch tolerance and P_H₂O into an "Algorithm &
 rates" panel, collapsed by default. Visible and editable, without implying they
 are things to fiddle with per dive.
+
+## #20 — The defaults are the planners divers carry, not Bühlmann's book
+
+`P_H2O` defaults to Schreiner's **0.0567**, not Bühlmann's 0.0627, and
+`PLANNER_PROFILES` names the constant sets that reproduce each reference
+planner (`--planner multideco|shearwater|gfdeco|subsurface|buhlmann`).
+
+**Why.** Every planner in this family runs the same Bühlmann + GF model and
+still prints different schedules, because each picks different values for a
+handful of constants nobody thinks of as choices. Of those, the water-vapour
+pressure is the one that moves a schedule most, and MultiDeco, Shearwater and
+Erik Baker's GFDECO all use 0.0567. Only Subsurface uses 0.0627. Defaulting to
+the book meant that reproducing a plan a diver was actually holding needed a
+flag nobody would think to pass — and repeatedly did not: every card in this
+repo's history was generated at the wrong constant while the docs cheerfully
+explained which flag would have fixed it. A default that is right in theory and
+wrong in every practical comparison is the wrong default.
+
+**It is also the conservative direction.** Alveolar inert gas is
+`(P_amb - P_H2O) * f`, so a *lower* vapour pressure means *more* inert gas
+inspired, more loading and longer deco. Switching to 0.0567 lengthens
+schedules; it cannot shorten one.
+
+**Consequence.** `tests/test_subsurface_crosscheck.py` now passes
+`SUBSURFACE_P_H2O` (0.0627) explicitly on every plan and tissue call, because
+that oracle hardcodes `WV_PRESSURE 0.0627` — the cross-check compares the
+*model*, not a constant we deliberately set differently. The Baker oracle
+already passed 0.0567. Both still agree to their pinned tolerances.
+
+**What a profile is not.** It sets constants, not conventions: it will not make
+eko-deco pad the first stop the way MultiDeco does, and it does not chase a
+planner's display quirks (see #15 on MultiDeco showing fresh water it does not
+compute in). It closes the gap that is a number; the rest stays visible in
+`tests/planner_diff.py` so the remaining differences can be argued about with
+evidence rather than guessed at.

@@ -56,8 +56,19 @@ HE_B = (
 
 N_COMP = 16
 
-# Bühlmann uses 0.0627 bar for water-vapor pressure in the alveoli (37 °C).
-P_H2O = 0.0627
+# Alveolar water-vapour pressure (bar, 37 °C). Schreiner's 0.0567 is the
+# default because it is what every planner these schedules are compared against
+# uses — MultiDeco, Shearwater and Erik Baker's GFDECO — so a plan made here
+# sits beside one of theirs without a flag. Bühlmann's own figure is 0.0627,
+# which Subsurface uses (WV_PRESSURE in its deco.cpp) and which the Subsurface
+# cross-check therefore passes explicitly. Lower vapour pressure means MORE
+# inspired inert gas, so this default is also the conservative one of the two
+# (see DECISIONS.md #20).
+P_H2O = 0.0567
+#: Bühlmann's value, for a plan that wants it (Subsurface's convention).
+P_H2O_BUHLMANN = 0.0627
+#: Schreiner's value — the default; MultiDeco / Shearwater / GFDECO.
+P_H2O_SCHREINER = 0.0567
 # Atmospheric pressure at sea level (bar).
 P_ATM = 1.01325
 # msw per bar (sea water). Use 10.0 for "metric-friendly" rounding.
@@ -72,6 +83,34 @@ MSW_PER_BAR = 10.0
 MSW_PER_BAR_SALT = 10.0
 MSW_PER_BAR_FRESH = 31.0 / 3.0
 WATER_TYPES = {"salt": MSW_PER_BAR_SALT, "fresh": MSW_PER_BAR_FRESH}
+
+
+#: Named constant sets that reproduce a given planner's output.
+#:
+#: Every planner in this family runs the same Bühlmann + gradient-factor model
+#: and still prints different schedules, because each picks different values
+#: for a handful of constants nobody thinks of as choices. Naming those sets
+#: turns "why is theirs two minutes longer" into a question with an answer, and
+#: lets a schedule be planned deliberately in someone else's convention rather
+#: than by hunting flags (DECISIONS.md #20).
+#:
+#: `default` IS `multideco`: the planners divers actually carry — MultiDeco,
+#: Shearwater, and Erik Baker's GFDECO, which both descend from — agree on
+#: these, so agreeing with them out of the box is worth more than matching
+#: Bühlmann's book. `subsurface` is the odd one out and is what its
+#: cross-check oracle pins.
+PLANNER_PROFILES: dict[str, dict[str, float]] = {
+    "multideco":  {"p_h2o": P_H2O_SCHREINER, "surface_p": P_ATM,
+                   "msw_per_bar": MSW_PER_BAR_SALT},
+    "shearwater": {"p_h2o": P_H2O_SCHREINER, "surface_p": P_ATM,
+                   "msw_per_bar": MSW_PER_BAR_SALT},
+    "gfdeco":     {"p_h2o": P_H2O_SCHREINER, "surface_p": 1.0,
+                   "msw_per_bar": MSW_PER_BAR_SALT},
+    "subsurface": {"p_h2o": P_H2O_BUHLMANN, "surface_p": 1.013,
+                   "msw_per_bar": MSW_PER_BAR_SALT},
+    "buhlmann":   {"p_h2o": P_H2O_BUHLMANN, "surface_p": P_ATM,
+                   "msw_per_bar": MSW_PER_BAR_SALT},
+}
 
 
 def surface_p_at_altitude(altitude_m: float) -> float:

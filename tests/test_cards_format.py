@@ -5,7 +5,7 @@ nothing and is fed numbers. That is exactly where a notation drifts — someone
 reads the CLI's segment table, copies the *hold* into a cell, and the card is
 quietly one ascent per stop out of step with the schedule it claims to be.
 
-`table_from_plans` removes the transcription step by building the rows from
+`rows_from_scenarios` removes the transcription step by building the rows from
 `deco plan --json`, and these tests pin that what lands in a cell is what
 `buhlmann.stop_legs` says: the leg and the leave-at runtime.
 
@@ -15,7 +15,6 @@ Skips without matplotlib, like the other rendering suites.
 from __future__ import annotations
 
 import json
-import math
 import os
 import sys
 import unittest
@@ -51,6 +50,10 @@ def _plan_json(*extra: str) -> dict:
 
 @unittest.skipUnless(_HAVE_CARDS, "cards/make_cards.py (matplotlib) unavailable")
 class TestCardMatchesThePlanner(unittest.TestCase):
+    """The card carries the planner's own numbers, in MultiDeco's compressed
+    layout (`examples/scenario_2` — depth rows, scenario columns, `min (run)`
+    cells, the bottom depth carrying only its runtime)."""
+
     def setUp(self):
         self.plan = _plan_json()
         self.segs = b.plan_dive(
@@ -62,24 +65,32 @@ class TestCardMatchesThePlanner(unittest.TestCase):
     def test_cells_are_the_leg_and_the_leave_at_runtime(self):
         """Every stop cell is `(leg, run)` from `buhlmann.stop_legs` — not the
         hold, which is the error this bridge exists to make impossible."""
-        _title, rows = mc.table_from_plans("t", [self.plan])
-        cells = {float(label): cellv[0]
-                 for label, cellv, kind in rows if kind == "stop"}
+        rows = mc.rows_from_scenarios([self.plan])
+        cells = {float(label): c[0] for label, c, _sw in rows[1:]}
         legs = b.stop_legs(self.segs)
         self.assertEqual(len(cells), len(legs))
         for leg in legs:
             with self.subTest(depth=leg.depth):
                 self.assertEqual(cells[leg.depth], (leg.leg, leg.run))
-                # and the hold really is a different number on some stop, so
-                # this test would catch a regression to it
         self.assertNotEqual([l.leg for l in legs], [l.hold for l in legs])
 
+    def test_first_row_is_the_bottom_carrying_only_its_runtime(self):
+        """MultiDeco prints `32  (40)`: you do not hold on the bottom, you
+        leave it at that runtime."""
+        label, cells, switch = mc.rows_from_scenarios([self.plan])[0]
+        self.assertEqual(label, "45")
+        self.assertIsNone(switch)
+        leg, run = cells[0]
+        self.assertIsNone(leg)
+        self.assertEqual(run, rp.runtime_min(self.plan["total_runtime_min"]
+                                             - self.plan["tts_min"]))
+        self.assertEqual(mc.cell(cells[0]), f"({run})")
+
     def test_card_agrees_with_the_wetnotes_card_and_the_cut_table(self):
-        """All four renderings of one dive: CLI JSON, the card engine, the
-        GUI's runtime card, and the contingency cut-table cell."""
-        _title, rows = mc.table_from_plans("t", [self.plan])
-        card = {float(label): cellv[0]
-                for label, cellv, kind in rows if kind == "stop"}
+        """Four renderings of one dive: CLI JSON, the card engine, the GUI's
+        runtime card, and the contingency cut-table cell."""
+        rows = mc.rows_from_scenarios([self.plan])
+        card = {float(label): c[0] for label, c, _sw in rows[1:]}
         wet = {float(r[0][:-2]): (int(r[1]), int(r[2]))
                for r in rp.wetnotes_rows(self.segs)
                if r[1] not in ("-", "gas")}
@@ -88,46 +99,48 @@ class TestCardMatchesThePlanner(unittest.TestCase):
         for depth, (leg, _run) in card.items():
             self.assertIn(f"{depth:g}:{leg:g}", cell)
 
-    def test_surface_row_truncates_and_tts_rounds_up(self):
-        _title, rows = mc.table_from_plans("t", [self.plan])
-        by_kind = {kind: cellv for _l, cellv, kind in rows}
-        self.assertEqual(by_kind["sum"][0],
-                         rp.runtime_min(self.plan["total_runtime_min"]))
-        self.assertEqual(by_kind["tts"][0],
-                         math.ceil(self.plan["tts_min"] - 1e-9))
-        # opposite directions on purpose (DECISIONS.md #17)
-        self.assertLessEqual(by_kind["sum"][0], self.plan["total_runtime_min"])
-        self.assertGreaterEqual(by_kind["tts"][0], self.plan["tts_min"])
+    def test_gas_switches_are_flagged_on_the_row_they_apply_to(self):
+        rows = mc.rows_from_scenarios([self.plan])
+        flagged = {label: sw for label, _c, sw in rows if sw}
+        self.assertEqual(flagged, {"18": "EAN50", "6": "O2"})
+
+    def test_brackets_hug_their_digits(self):
+        """`(42)`, never `( 42)` — alignment comes from where the two fields
+        are drawn, not from padding inside them."""
+        self.assertEqual(mc.cell_fields((2, 42)), ("2", "(42)"))
+        self.assertEqual(mc.cell_fields((33, 104)), ("33", "(104)"))
+        self.assertEqual(mc.cell_fields((None, 40)), ("", "(40)"))
+        self.assertEqual(mc.cell_fields(None), ("", "-"))
 
     def test_a_depth_only_some_columns_reach_shows_a_dash(self):
         short, long_ = _plan_json("--time", "12"), _plan_json("--time", "35")
-        # --time is repeated; argparse keeps the last, so these really differ
-        _title, rows = mc.table_from_plans("t", [short, long_], mark=1)
-        stops = [(label, cellv) for label, cellv, kind in rows if kind == "stop"]
-        deepest = stops[0][1]
+        rows = mc.rows_from_scenarios([short, long_])
+        deepest = rows[1][1]
         self.assertIsNone(deepest[0], "shallow column should not reach it")
         self.assertIsNotNone(deepest[1])
-
-    def test_gas_line_names_each_switch_once_at_its_depth(self):
-        line = mc.gas_line(self.plan)
-        self.assertTrue(line.startswith("Trimix 21/35"))
-        self.assertEqual(line.count("EAN50"), 1, f"duplicate switch in {line!r}")
-        self.assertEqual(line.count("O2"), 1, f"duplicate switch in {line!r}")
-        # short enough for the title strip beside a second table
-        self.assertLessEqual(len(line), 40, line)
+        self.assertEqual(mc.cell(deepest[0]), "-")
 
     def test_a_real_seven_stop_schedule_still_fits_the_card(self):
         """The layout was drawn around three stops; a trimix dive has seven,
-        and an overflowing table writes the TTS row over the summary — on the
-        one artifact that goes underwater."""
-        _title, rows = mc.table_from_plans("t", [self.plan])
-        self.assertGreaterEqual(len([r for r in rows if r[2] == "stop"]), 6)
-        size = mc.fit_size(len(rows))
-        used = len(rows) * (size * 0.62 + 0.55)
+        and an overflowing table writes rows over the summary — on the one
+        artifact that goes underwater."""
+        rows = mc.rows_from_scenarios([self.plan])
+        self.assertGreaterEqual(len(rows), 7)
+        size = mc.fit_size(len(rows) + 1)
+        used = (len(rows) + 1) * (size * 0.62 + 0.55)
         self.assertLessEqual(used, mc.TABLE_H + 1e-9)
         self.assertGreater(size, 3.6, "type would be too small to read wet")
-        # a short card still gets the full design size, not a ballooned one
-        self.assertEqual(mc.fit_size(6), mc.SIZE_MAX)
+
+    def test_it_renders(self):
+        import tempfile
+        from pathlib import Path
+        spec = {"tag": "T", "subtitle": "s", "columns": ["OK"],
+                "rows": mc.rows_from_scenarios([self.plan]),
+                "extra": [], "summary": "x", "footer": "y", "accent": "#222"}
+        with tempfile.TemporaryDirectory() as d:
+            out = Path(d) / "c.pdf"
+            mc.save_card(spec, out)
+            self.assertTrue(out.exists() and out.stat().st_size > 0)
 
 
 if __name__ == "__main__":

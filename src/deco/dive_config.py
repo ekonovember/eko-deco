@@ -20,7 +20,7 @@ Schema::
       "ascent_rate": 10, "descent_rate": 18, "stop_interval": 3, "last_stop_m": 3,
       "ppo2_bottom": 1.4, "ppo2_deco": 1.6, "ppo2_min": 0.18,
       "ppo2_switch_tol": 0.05,
-      "surface_p_bar": 1.01325, "msw_per_bar": 10.0, "p_h2o_bar": 0.0627,
+      "surface_p_bar": 1.01325, "msw_per_bar": 10.0, "p_h2o_bar": 0.0567,
       "contingency": {"time_before": 1, "time_after": 1,
                       "depth_before": 1, "depth_after": 1},
       "gases": [
@@ -57,7 +57,8 @@ surface pressure and how many metres of water make a bar — 10.0 for salt water
 (the default), 10 1/3 for fresh (``buhlmann.WATER_TYPES``). They move every
 pressure the plan derives, so ppO₂, MOD, END, density, CNS/OTU, gas volumes and
 the schedule itself all follow. ``p_h2o_bar`` is the alveolar water-vapour
-pressure (Bühlmann 0.0627; Schreiner/MultiDeco/Baker use 0.0567) and
+pressure — 0.0567 (Schreiner), what MultiDeco, Shearwater and GFDECO use;
+Bühlmann's own 0.0627 is what Subsurface uses — and
 ``ppo2_switch_tol`` how far above ``ppo2_deco`` a gas switch may be rounded
 deeper to land on a stop depth — both are real algorithm inputs, so both are
 settable rather than baked in (DECISIONS #19).

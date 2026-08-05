@@ -31,7 +31,9 @@ from deco import report as rp
 # printed figure, and 1.0 / 10 1/3 is the pair MultiDeco (Baker-derived) uses.
 MD_SURFACE_P = 1.0
 MD_MSW_PER_BAR = b.MSW_PER_BAR_FRESH
-MD_P_H2O = 0.0567
+#: MultiDeco's water-vapour constant — and, since it is what every planner
+#: these schedules are compared against uses, eko-deco's default too.
+MD_P_H2O = b.P_H2O_SCHREINER
 
 EAN50, O2 = b.Gas(0.50), b.Gas(1.0)
 
@@ -255,7 +257,7 @@ class TestDefaultsReproduceTheExports(unittest.TestCase):
         stop grid swallows sub-minute changes.
         """
         alt150 = b.surface_p_at_altitude(150)
-        for p_h2o, alt_delta in ((b.P_H2O, 0.0), (MD_P_H2O, -1.0)):
+        for p_h2o, alt_delta in ((b.P_H2O_BUHLMANN, 0.0), (MD_P_H2O, -1.0)):
             with self.subTest(p_h2o=p_h2o):
                 base = b.total_runtime(_plan(2, p_h2o=p_h2o))
                 fresh = b.total_runtime(

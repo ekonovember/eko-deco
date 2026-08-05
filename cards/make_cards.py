@@ -32,7 +32,7 @@ import matplotlib
 
 matplotlib.use("Agg")   # headless: must precede the pyplot import
 import matplotlib.pyplot as plt
-from matplotlib.patches import Rectangle
+from matplotlib.patches import Polygon, Rectangle
 
 W, H = 90.0, 64.0          # card, mm (90 wide = landscape)
 MONO = "DejaVu Sans Mono"
@@ -54,6 +54,22 @@ class Pen:
         self.ax.text(self.ox + x, self.oy + y, s, fontsize=size, fontweight=weight,
                      color=color, ha=ha, va="baseline", family=MONO, rotation=rotation)
 
+    def arrow(self, x, y, length, color=INK, lw=0.9):
+        """Solid arrow pointing LEFT, its tip at (x, y), `length` mm long.
+
+        Drawn pointing back into the table so it indicates the row it sits
+        beside, rather than gesturing off the edge of the card.
+        """
+        head = min(1.6, length * 0.45)
+        self.ax.plot([self.ox + x + head * 0.8, self.ox + x + length],
+                     [self.oy + y, self.oy + y],
+                     lw=lw, color=color, solid_capstyle="butt")
+        self.ax.add_patch(Polygon(
+            [(self.ox + x, self.oy + y),
+             (self.ox + x + head, self.oy + y + head * 0.62),
+             (self.ox + x + head, self.oy + y - head * 0.62)],
+            closed=True, facecolor=color, edgecolor="none"))
+
     def rule(self, y, x0=2.0, x1=W - 2.0, lw=0.4, color=RULE):
         self.ax.plot([self.ox + x0, self.ox + x1], [self.oy + y, self.oy + y],
                      lw=lw, color=color, solid_capstyle="butt")
@@ -62,87 +78,99 @@ class Pen:
         self.ax.add_patch(Rectangle((self.ox + x, self.oy + y), w, h, **kw))
 
 
-LABEL_W = 5.6              # depth-label column, mm
-COL_W = 8.7                # one bottom-time column, mm
+LABEL_W = 7.0              # depth-label column, mm
+MARK_W = 6.0               # gas-switch marker gutter on the right, mm
 BAND = "#eeeeee"           # zebra fill, so a row stays trackable across columns
+CHAR_W = 0.2124            # DejaVu Sans Mono advance, mm per point of type size
+
+#: Vertical room the table has between the header strip and the summary rule.
+TABLE_H = 45.5
+SIZE_MAX = 9.5             # design type size; a short card does not balloon past it
 
 
 def cell(v):
-    """Every cell is exactly 5 characters, so the columns line up on the slash.
+    """A cell as text, for logs and tests — `runtime_table` draws it in two
+    separately aligned fields so the columns line up on the card itself."""
+    if v is None:
+        return "-"
+    leg, run = v
+    return f"({run})" if leg is None else f"{leg} ({run})"
 
-    `(leg, run)` renders as `leg/run`, the notation the whole toolchain prints
-    (`deco.buhlmann.StopLeg`, DECISIONS.md #17):
 
-    * `run` is the runtime you **leave** that stop on - not when you arrive;
-    * `leg` is the ascent to the stop plus the hold, measured from the previous
-      stop, so the column adds up to the runtimes beside it.
+def cell_fields(v):
+    """`(minutes, runtime)` as the two strings a cell is drawn from.
 
-    Feeding the bare *hold* here instead is the classic error and the card goes
-    quietly wrong by one ascent per stop - use `table_from_plans`, which takes
-    `deco plan --json` output and cannot get it wrong. A bare number (SUR, TTS)
-    is padded to sit under the runtime digits, `None` is a dash.
+    Brackets hug their digits — `(42)`, `(104)`, never `( 42)`. Alignment comes
+    from *where* the fields are drawn, not from padding inside them: both are
+    right-aligned on fixed rules, so units sit under units and the closing
+    bracket lines up down the column, which is the convention a numeric column
+    is read by. The opening bracket is the one thing left ragged, and it is the
+    right thing to give up.
     """
     if v is None:
-        return "  -  "
-    if isinstance(v, tuple):
-        return f"{v[0]:>2}/{v[1]:>2}"
-    return f"   {v:>2}"
-
-
-#: Vertical room a table has between the header strip and the summary rule.
-TABLE_H = 43.0
-SIZE_MAX = 7.4             # design type size; short cards do not balloon past it
+        return ("", "-")
+    leg, run = v
+    return ("" if leg is None else f"{leg}", f"({run})")
 
 
 def fit_size(n_rows, height=TABLE_H, size_max=SIZE_MAX):
-    """Largest type size whose rows still fit `height` mm.
-
-    A real deco schedule is six or seven stops, not the three the layout was
-    first drawn around, and an overflowing table silently writes the TTS row
-    over the summary - on the one artifact that goes underwater. So the type
-    shrinks to fit rather than the rows running off the card.
-    """
+    """Largest type size whose rows still fit `height` mm."""
     pitch = height / max(1, n_rows)
     return max(3.6, min(size_max, (pitch - 0.55) / 0.62))
 
 
-def table(pen, x, y, title, rows, size=None):
-    """One contingency table; rows are (label, cells, kind).
+def runtime_table(pen, x, y, columns, rows, width, size=None):
+    """MultiDeco's compressed runtime table.
 
-    `size` defaults to whatever fits the row count (`fit_size`)."""
+    `columns` are the scenario headings (`OK`, `-50`, …); `rows` are
+    `(depth_label, cells, switch)` where `switch` is a gas name to flag on that
+    row, or None. A switch is drawn as a filled black triangle in the gutter on
+    the right, at the row where that mix starts being breathed.
+    """
     if size is None:
-        size = fit_size(len(rows))
-    width = LABEL_W + 4 * COL_W
-    pitch = size * 0.62 + 0.55          # rows breathe with the type size
-    pen.txt(x, y, title, size=4.2, weight="bold", color=GREY)
-    y -= pitch * 0.95
+        size = fit_size(len(rows) + 1)
+    pitch = size * 0.62 + 0.55
+    col_w = (width - LABEL_W - MARK_W) / len(columns)
 
-    band, y_head, prev = False, y, None
-    for label, cells, kind in rows:
-        if kind == "sum" and prev == "stop":                 # stops end here
-            pen.rule(y + 1.9, x0=x - 0.6, x1=x + width + 0.6, lw=0.35, color=INK)
-        if kind == "stop":
-            if band:
-                pen.rect(x - 0.6, y - 1.4, width + 1.2, pitch, facecolor=BAND,
-                         edgecolor="none")
-            band = not band
-        color = RED if kind == "tts" else INK
-        pen.txt(x + LABEL_W - 1.4, y, label, size=size * 0.80, weight="bold",
-                color=GREY if kind == "head" else color, ha="right")
+    pen.txt(x + LABEL_W + col_w * 0.5, y, columns[0], size=size * 0.82,
+            weight="bold", color=GREY, ha="center")
+    for i, head in enumerate(columns[1:], start=1):
+        pen.txt(x + LABEL_W + (i + 0.5) * col_w, y, head, size=size * 0.82,
+                weight="bold", color=GREY, ha="center")
+    y_head = y - 1.9
+    pen.rule(y_head, x0=x - 0.6, x1=x + width + 0.6, lw=0.5, color=INK)
+    y -= pitch
+
+    band = False
+    for label, cells, switch in rows:
+        if band:
+            pen.rect(x - 0.6, y - 1.4, width + 1.2, pitch, facecolor=BAND,
+                     edgecolor="none")
+        band = not band
+        pen.txt(x + LABEL_W - 1.6, y, label, size=size * 0.90, weight="bold",
+                ha="right")
         for i, c in enumerate(cells):
-            pen.txt(x + LABEL_W + (i + 0.5) * COL_W, y, c if kind == "head" else cell(c),
-                    size=size * (0.86 if kind == "head" else 1.0), weight="bold",
-                    color=GREY if kind == "head" else color, ha="center")
-        if kind == "head":
-            y_head = y - 1.9
-            pen.rule(y_head, x0=x - 0.6, x1=x + width + 0.6, lw=0.5, color=INK)
-            band = True
+            x_col = x + LABEL_W + i * col_w
+            mins, run = cell_fields(c)
+            # Two fixed rules per column: minutes right-aligned on one, the
+            # bracketed runtime right-aligned on the next. Centring the pair as
+            # a single string is what left "2 (42)" and "33 (104)" ragged.
+            if mins:
+                pen.txt(x_col + col_w * 0.42, y, mins, size=size,
+                        weight="bold", ha="right")
+            pen.txt(x_col + col_w * 0.97, y, run, size=size, weight="bold",
+                    ha="right")
+        if switch:
+            # Arrow in the right gutter, pointing back at the row: this is
+            # where you change gas. Marker only - a mix name here either
+            # collides with it or steals width from the numbers, and the
+            # numbers are the card. Which mix is in the legend, keyed by depth.
+            pen.arrow(x + width - MARK_W + 0.8, y + size * 0.10, MARK_W - 1.8)
         y -= pitch
-        prev = kind
 
     y_foot = y + pitch - 1.9
     pen.rule(y_foot, x0=x - 0.6, x1=x + width + 0.6, lw=0.5, color=INK)
-    pen.ax.plot([pen.ox + x + LABEL_W - 0.7] * 2,          # depth labels | data
+    pen.ax.plot([pen.ox + x + LABEL_W - 0.9] * 2,
                 [pen.oy + y_foot, pen.oy + y_head],
                 lw=0.35, color=INK, solid_capstyle="butt")
     return y
@@ -158,16 +186,11 @@ def draw_card(pen, spec):
     pen.txt(W - 2.8, H - 5.0, spec["subtitle"], size=5.8, weight="bold",
             color="#ffffff", ha="right")
 
-    top = H - 10.4
-    # One size for both halves: a diver reads across them, so rows must line up
-    # even when one scenario has an extra stop.
-    size = fit_size(max(len(spec["left"][1]), len(spec["right"][1])))
-    yl = table(pen, LEFT, top, spec["left"][0], spec["left"][1], size)
-    table(pen, RIGHT, top, spec["right"][0], spec["right"][1], size)
-    y = yl - 0.6
-
-    for s, size, weight, color in spec["extra"]:
-        pen.txt(2.8, y, s, size=size, weight=weight, color=color)
+    y = runtime_table(pen, 2.4, H - 10.6, spec["columns"], spec["rows"],
+                      width=W - 4.8)
+    y -= 0.6
+    for s_, size, weight, color in spec.get("extra", []):
+        pen.txt(2.8, y, s_, size=size, weight=weight, color=color)
         y -= size * 0.64 + 0.6
 
     pen.rule(6.4)
@@ -236,54 +259,58 @@ def save_sheet(specs, path):
 
 
 # --------------------------------------------------------------------------
-def table_from_plans(title, plans, mark=0):
-    """Build a table `(title, rows)` straight from `deco plan --json` output.
+def rows_from_scenarios(plans):
+    """Compressed runtime rows from several `deco plan --json` results.
 
-    `plans` is one parsed JSON dict per contingency column, left to right, all
-    of the same dive with one thing varied (bottom time, depth, or a lost deco
-    gas). `mark` is the index of the planned column, flagged with `*`.
+    `plans` is one parsed plan per column, left to right — MultiDeco's own
+    `utrata gazu` layout is `OK / lost 50 / lost 100 / both`, and the columns
+    here are whatever scenarios you pass. Returns rows shaped for
+    `runtime_table`.
 
-    This exists so the card cannot disagree with the planner. Every number
-    comes from the `stops` key, which carries the printed notation already
-    resolved - leg and leave-at runtime - so there is no transcription step to
-    get wrong and no chance of pasting a raw hold from the segment table.
-
-    Columns need not share a stop list: a depth only some columns reach shows
-    `-` in the others, exactly like the GUI's scenario table.
+    The first row is the bottom depth carrying only its runtime, exactly as
+    MultiDeco prints `32  (40)`: you do not hold on the bottom, you leave it.
+    Gas switches are flagged on the row where that mix is first breathed, taken
+    from the planned (first) column.
     """
     per = [{s["depth_m"]: (s["leg_min"], s["run_min"]) for s in p["stops"]}
            for p in plans]
     depths = sorted({d for col in per for d in col}, reverse=True)
-    head = [("BT" if len(plans) > 1 else "",
-             [("--" if i != mark else "--*") for i in range(len(plans))],
-             "head")]
-    rows = [(f"{d:g}", [col.get(d) for col in per], "stop") for d in depths]
-    rows.append(("SUR", [p["input"].get("_", 0) or _run_surface(p)
-                         for p in plans], "sum"))
-    # TTS is a budget: round UP, the opposite of a runtime (DECISIONS.md #17).
-    rows.append(("TTS", [math.ceil(p["tts_min"] - 1e-9) for p in plans], "tts"))
-    return (title, head + rows)
+
+    lead = plans[0]
+    bottom_depth = lead["input"]["max_depth_m"]
+    bottom_run = [_bottom_run(p) for p in plans]
+    rows = [(f"{bottom_depth:g}", [(None, r) for r in bottom_run], None)]
+
+    switch_at = _switch_depths(lead)
+    for d in depths:
+        rows.append((f"{d:g}", [col.get(d) for col in per], switch_at.get(d)))
+    return rows
 
 
-def _run_surface(plan):
-    """Runtime on surfacing, truncated - the same floor the stops use."""
-    return math.floor(plan["total_runtime_min"] + 1e-9)
+def _bottom_run(plan):
+    """Runtime on leaving the bottom phase = total runtime minus TTS."""
+    return math.floor(plan["total_runtime_min"] - plan["tts_min"] + 1e-9)
+
+
+def _switch_depths(plan):
+    """{stop depth: mix} for each gas switch, at the row it first applies to.
+
+    A switch made on the ascent (EAN50 at 21 m) has no row of its own in a
+    compressed table, so it is flagged on the first stop breathing it — which
+    is where the diver acts on it anyway.
+    """
+    out, seen = {}, plan["input"]["gas"]
+    for s in plan["stops"]:
+        if s["gas"] != seen:
+            out[s["depth_m"]] = s["gas"]
+            seen = s["gas"]
+    return out
 
 
 def gas_line(plan):
-    """The gas plan as one short string: bottom mix, then each switch depth.
-
-    The printed card has no room for a per-row GAS column beside four
-    contingency columns, so the switches live in the table title - derived from
-    the plan rather than typed, so they cannot drift from the schedule. Kept
-    terse ("21/35 EAN50@21 O2@6") because the title strip is about 40
-    characters wide at the card's type size.
-    """
+    """The gas plan as one short string: bottom mix, then each switch depth."""
     bottom = plan["input"]["gas"]
     out, seen = [], bottom
-    # A switch can happen on the ascent (before the first stop) or at a stop;
-    # walk the segments once so each mix is named at the depth it starts, and
-    # only once.
     for seg in plan["segments"]:
         if seg["gas"] == seen or seg["kind"] in ("descent", "bottom"):
             continue
@@ -293,42 +320,31 @@ def gas_line(plan):
     return " ".join([bottom, *out])
 
 
-# Card spec shape. Placeholder numbers only - NOT a dive plan. Replace the
-# tables with real `deco.cli` output before printing anything you dive.
+# Card spec shape. Placeholder numbers only - NOT a dive plan. Replace with
+# real `deco.cli` output (via rows_from_scenarios) before printing anything you
+# dive.
 #
-# A table row is (label, cells, kind); kind is "head" | "stop" | "sum" | "tts".
-# A stop cell is (stop_minutes, runtime_you_leave_on) or None for "not planned";
-# sum/tts cells are bare numbers. Columns are the contingency axis - here
-# bottom time; `*` marks the planned column.
-EXAMPLE_HDR = ("BT", ["--*", "--", "--", "--"], "head")
-
+# "columns" are the scenario headings; "rows" are (depth label, cells, switch)
+# from rows_from_scenarios - a cell is (leg_minutes, runtime), (None, runtime)
+# for the bottom row, or None where that column never reaches the depth.
 EXAMPLE = {
     "tag": "EXAMPLE",
     "subtitle": "-- m / -- min   GF --/--",
-    "left": ("ON PLAN  <bottom gas> -> <deco gas> @ -- m", [
-        EXAMPLE_HDR,
-        ("9", [None, None, (1, 0), (1, 0)], "stop"),
-        ("6", [(1, 0), (2, 0), (2, 0), (3, 0)], "stop"),
-        ("3", [(3, 0), (4, 0), (6, 0), (8, 0)], "stop"),
-        ("SUR", [0, 0, 0, 0], "sum"),
-        ("TTS", [0, 0, 0, 0], "tts"),
-    ]),
-    "right": ("LOST <deco gas>  all on <bottom gas>", [
-        EXAMPLE_HDR,
-        ("9", [(1, 0), (1, 0), (2, 0), (2, 0)], "stop"),
-        ("6", [(2, 0), (3, 0), (4, 0), (5, 0)], "stop"),
-        ("3", [(8, 0), (11, 0), (14, 0), (18, 0)], "stop"),
-        ("SUR", [0, 0, 0, 0], "sum"),
-        ("TTS", [0, 0, 0, 0], "tts"),
-    ]),
+    "columns": ["OK", "-50", "-O2", "BOTH"],
+    "rows": [
+        ("--", [(None, 0)] * 4, None),
+        ("9",  [(0, 0), (0, 0), (0, 0), (0, 0)], "<deco gas>"),
+        ("6",  [(0, 0), (0, 0), (0, 0), (0, 0)], "<deco gas>"),
+        ("3",  [(0, 0), (0, 0), (0, 0), (0, 0)], None),
+    ],
     "extra": [],
     "summary": "MIN GAS -- b (2 div --)   TURN -- b (2 div --)   CNS --%",
-    "footer": "depth m | cell = leg min / leave-at runtime | placeholder - not a plan",
+    "footer": "depth m | cell = min (runtime you leave on) | placeholder - not a plan",
     "accent": "#444444",
 }
 
 
 if __name__ == "__main__":
     save_card(EXAMPLE, OUT / "example_card.pdf")
-    save_sheet([EXAMPLE, EXAMPLE], OUT / "example_a4.pdf")
+    save_sheet([EXAMPLE], OUT / "example_a4.pdf")
     print("wrote example_card.pdf/.png and example_a4.pdf")

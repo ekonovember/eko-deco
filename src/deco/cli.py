@@ -125,18 +125,39 @@ def _args_levels(args) -> list[b.Level]:
     return [b.Level(args.depth, args.time)]
 
 
+def _profile(args) -> dict[str, float]:
+    """The --planner constant set, or an empty dict. Individual flags win."""
+    name = getattr(args, "planner", None)
+    return dict(b.PLANNER_PROFILES[name]) if name else {}
+
+
 def _msw_per_bar(args) -> float:
-    """Metres of water per bar: explicit --msw-per-bar wins over --water."""
+    """Metres of water per bar: explicit --msw-per-bar wins, then --water if it
+    was given, then the --planner profile."""
     if getattr(args, "msw_per_bar", None) is not None:
         return args.msw_per_bar
+    prof = _profile(args)
+    if prof and getattr(args, "water", "salt") == "salt":
+        return prof["msw_per_bar"]
     return b.WATER_TYPES[getattr(args, "water", "salt")]
 
 
 def _surface_p(args) -> float:
-    """Surface pressure in bar: explicit --surface-p wins over --altitude."""
+    """Surface pressure in bar: explicit --surface-p wins, then --altitude,
+    then the --planner profile."""
     if getattr(args, "surface_p", None) is not None:
         return args.surface_p
-    return b.surface_p_at_altitude(getattr(args, "altitude", 0.0) or 0.0)
+    if getattr(args, "altitude", 0.0):
+        return b.surface_p_at_altitude(args.altitude)
+    prof = _profile(args)
+    return prof["surface_p"] if prof else b.P_ATM
+
+
+def _p_h2o(args) -> float:
+    """Alveolar water vapour: explicit --p-h2o wins over the profile."""
+    if getattr(args, "p_h2o", None) is not None:
+        return args.p_h2o
+    return _profile(args).get("p_h2o", b.P_H2O)
 
 
 def _build_plan(args) -> b.DivePlan:
@@ -155,7 +176,7 @@ def _build_plan(args) -> b.DivePlan:
         ppo2_bottom=args.ppo2_bottom,
         ppo2_min=args.ppo2_min,
         ppo2_switch_tol=args.ppo2_switch_tol,
-        p_h2o=args.p_h2o,
+        p_h2o=_p_h2o(args),
     )
 
 
@@ -213,7 +234,7 @@ def _config_from_args(args) -> dict:
         "ppo2_switch_tol": args.ppo2_switch_tol,
         "surface_p_bar": _surface_p(args),
         "msw_per_bar": _msw_per_bar(args),
-        "p_h2o_bar": args.p_h2o,
+        "p_h2o_bar": _p_h2o(args),
         "contingency": {k: (n if n is not None else c_default[k])
                         for k, n in zip(dc.CONTINGENCY_KEYS, counts, strict=True)},
         "gases": gas_entries,
@@ -593,10 +614,17 @@ def main(argv: list[str] | None = None) -> int:
                         help="How far over --ppo2-deco a gas switch may be "
                              "rounded deeper to land on a stop depth (bar). "
                              "0.05 is what puts O2 on the 6 m stop.")
-    common.add_argument("--p-h2o", type=_positive_float, default=b.P_H2O,
+    common.add_argument("--p-h2o", type=_positive_float, default=None,
                         help=f"Alveolar water-vapour pressure (bar). Default "
                              f"{b.P_H2O:g} (Buhlmann); MultiDeco, Shearwater "
                              "and Baker's GFDECO use 0.0567 (Schreiner).")
+    common.add_argument("--planner", choices=sorted(b.PLANNER_PROFILES),
+                        help="Plan in another planner's constants, so the "
+                             "schedule can sit beside one of theirs: sets "
+                             "P_H2O, surface pressure and metres-per-bar "
+                             "together. The default already matches multideco "
+                             "/ shearwater; use subsurface or buhlmann for "
+                             "0.0627 water vapour. Individual flags override.")
     common.add_argument("--water", choices=sorted(b.WATER_TYPES),
                         default="salt",
                         help="Water type, i.e. how many metres make a bar: "

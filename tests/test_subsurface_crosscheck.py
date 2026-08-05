@@ -68,13 +68,22 @@ def msw_per_bar(salinity: int = SEA) -> float:
     return 1.0 / (salinity * 0.981 / 1e5)
 
 
+#: Subsurface hardcodes WV_PRESSURE 0.0627 (Buhlmann) in its deco.cpp, while
+#: eko-deco defaults to Schreiner's 0.0567 like the planners it is normally
+#: compared against. Every plan built here passes Subsurface's value, so the
+#: oracle comparison stays a comparison of the *model* rather than of a
+#: constant we deliberately set differently (DECISIONS.md #20).
+SUBSURFACE_P_H2O = b.P_H2O_BUHLMANN
+
+
 def surface_tissues(surface_mbar: int = 1013) -> b.Tissues:
     """eko-deco tissues saturated like Subsurface's clear_deco (fN2 = 0.781)."""
-    p = (surface_bar(surface_mbar) - b.P_H2O) * 0.781
+    p = (surface_bar(surface_mbar) - SUBSURFACE_P_H2O) * 0.781
     return b.Tissues(pN2=[p] * 16, pHe=[0.0] * 16)
 
 
 def eko_plan(gf, deco=(), surface_mbar=1013, salinity=SEA, **kw) -> b.DivePlan:
+    kw.setdefault("p_h2o", SUBSURFACE_P_H2O)
     return b.DivePlan(gf_low=gf[0] / 100, gf_high=gf[1] / 100,
                       descent_rate=18.0, surface_p=surface_bar(surface_mbar),
                       msw_per_bar=msw_per_bar(salinity),
@@ -101,7 +110,7 @@ class TestTissueLoading(unittest.TestCase):
         d = SubsurfaceDeco()
         for depth, (ge, gs), minutes in legs:
             amb = d.depth_to_bar(depth)
-            b.update_tissues(t, ge, amb, amb, float(minutes))
+            b.update_tissues(t, ge, amb, amb, float(minutes), SUBSURFACE_P_H2O)
             d.add_segment(amb, gs, int(minutes * 60))
         self.assert_tissues(t, d)
 
@@ -145,7 +154,7 @@ class TestTissueLoading(unittest.TestCase):
                 d = SubsurfaceDeco()
                 ge, gs = GAS_PAIRS[5]
                 b.update_tissues(t, ge, d.depth_to_bar(0.0),
-                                 d.depth_to_bar(60.0), 60.0 / rate)
+                                 d.depth_to_bar(60.0), 60.0 / rate, SUBSURFACE_P_H2O)
                 d.add_ramp(0.0, 60.0, rate, gs)
                 self.assert_tissues(t, d, delta=5e-3, msg=f"rate {rate}")
 
@@ -155,9 +164,9 @@ class TestTissueLoading(unittest.TestCase):
         d = SubsurfaceDeco()
         ge, gs = GAS_PAIRS[0]
         p0, p40 = d.depth_to_bar(0.0), d.depth_to_bar(40.0)
-        b.update_tissues(t, ge, p0, p40, 40 / 18.0)
-        b.update_tissues(t, ge, p40, p40, 20.0)
-        b.update_tissues(t, ge, p40, p0, 40 / 10.0)
+        b.update_tissues(t, ge, p0, p40, 40 / 18.0, SUBSURFACE_P_H2O)
+        b.update_tissues(t, ge, p40, p40, 20.0, SUBSURFACE_P_H2O)
+        b.update_tissues(t, ge, p40, p0, 40 / 10.0, SUBSURFACE_P_H2O)
         d.add_ramp(0.0, 40.0, 18.0, gs)
         d.add_flat(40.0, gs, 20 * 60)
         d.add_ramp(40.0, 0.0, 10.0, gs)
@@ -180,7 +189,7 @@ class TestCeiling(unittest.TestCase):
             for _ in range(rng.randint(1, 6)):
                 amb = d.depth_to_bar(rng.uniform(0.0, 80.0))
                 ge, _gs = rng.choice(GAS_PAIRS)
-                b.update_tissues(t, ge, amb, amb, float(rng.randint(1, 40)))
+                b.update_tissues(t, ge, amb, amb, float(rng.randint(1, 40)), SUBSURFACE_P_H2O)
             for gf in self.GFS:
                 with self.subTest(trial=trial, gf=gf):
                     o = SubsurfaceDeco(gf_low=int(gf * 100),
@@ -193,7 +202,7 @@ class TestCeiling(unittest.TestCase):
         t = surface_tissues()
         d = SubsurfaceDeco()
         amb = d.depth_to_bar(45.0)
-        b.update_tissues(t, b.Gas(0.21, 0.35), amb, amb, 25.0)
+        b.update_tissues(t, b.Gas(0.21, 0.35), amb, amb, 25.0, SUBSURFACE_P_H2O)
         for gf in (0.30, 0.80):
             with self.subTest(gf=gf):
                 o = SubsurfaceDeco(gf_low=int(gf * 100), gf_high=int(gf * 100))
@@ -409,12 +418,12 @@ class TestMultilevel(unittest.TestCase):
             rate = 18.0 if lv.depth > depth else 10.0
             travel = abs(lv.depth - depth) / rate
             b.update_tissues(eko, EKO_AIR, b.depth_to_p_amb(depth, surf, mpb),
-                             b.depth_to_p_amb(lv.depth, surf, mpb), travel)
+                             b.depth_to_p_amb(lv.depth, surf, mpb), travel, SUBSURFACE_P_H2O)
             oracle.add_ramp(depth, lv.depth, rate, SRF_AIR)
 
             flat = lv.runtime - (run + travel)
             p = b.depth_to_p_amb(lv.depth, surf, mpb)
-            b.update_tissues(eko, EKO_AIR, p, p, flat)
+            b.update_tissues(eko, EKO_AIR, p, p, flat, SUBSURFACE_P_H2O)
             oracle.add_flat(lv.depth, SRF_AIR, round(flat * 60))
             run, depth = lv.runtime, lv.depth
 
@@ -435,7 +444,7 @@ class TestRepetitiveDive(unittest.TestCase):
         plan = eko_plan((30, 80))
         _segs, t = b.plan_dive(30, 30, EKO_AIR, plan,
                               start_tissues=surface_tissues())
-        b.update_tissues(t, EKO_AIR, surface_bar(), surface_bar(), 45.0)
+        b.update_tissues(t, EKO_AIR, surface_bar(), surface_bar(), 45.0, SUBSURFACE_P_H2O)
         segs2, t2 = b.plan_dive(30, 25, EKO_AIR, plan, start_tissues=t)
         eko_stops = [(s.depth_start, s.duration) for s in segs2 if s.kind == "stop"]
         eko_tts = b.time_to_surface(segs2)

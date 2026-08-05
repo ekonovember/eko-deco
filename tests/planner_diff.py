@@ -100,6 +100,9 @@ def registry() -> list[Tunable]:
                 "setting", env, "--water fresh preset"),
         Tunable("WATER_TYPES", _v("WATER_TYPES"), "module", "setting", env,
                 "the preset table itself"),
+        Tunable("PLANNER_PROFILES", _v("PLANNER_PROFILES"), "module", "setting",
+                (SCHEDULE, PPO2, EAD), "named constant sets per reference "
+                "planner; --planner selects one"),
 
         # --- tissue model: jointly constrained by the schedule, never alone
         Tunable("N_COMP", _v("N_COMP"), "module", "hardcoded", (SCHEDULE,)),
@@ -112,8 +115,13 @@ def registry() -> list[Tunable]:
                 (SCHEDULE,)),
         Tunable("HE_A", _v("HE_A"), "module", "hardcoded", (SCHEDULE,)),
         Tunable("HE_B", _v("HE_B"), "module", "hardcoded", (SCHEDULE,)),
-        Tunable("P_H2O", _v("P_H2O"), "module", "hardcoded", (SCHEDULE,),
-                "Buhlmann 0.0627; Schreiner/MultiDeco/Baker use 0.0567"),
+        Tunable("P_H2O", _v("P_H2O"), "module", "setting", (SCHEDULE,),
+                "default = Schreiner 0.0567 (MultiDeco/Shearwater/GFDECO); "
+                "DivePlan.p_h2o overrides"),
+        Tunable("P_H2O_BUHLMANN", _v("P_H2O_BUHLMANN"), "module", "setting",
+                (SCHEDULE,), "Buhlmann's own; what Subsurface uses"),
+        Tunable("P_H2O_SCHREINER", _v("P_H2O_SCHREINER"), "module", "setting",
+                (SCHEDULE,), "the default"),
 
         # --- gas physics
         Tunable("MOLAR_VOLUME", _v("MOLAR_VOLUME"), "module", "hardcoded",

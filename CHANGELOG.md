@@ -107,6 +107,21 @@ pre-1.0, so anything may still move.
 - [`DECISIONS.md`](DECISIONS.md) — the numbered decision log the code cites.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md), this changelog, and a `.pre-commit-config.yaml`.
 
+### Changed — model default
+
+- **`P_H2O` now defaults to Schreiner's 0.0567**, not Bühlmann's 0.0627
+  ([DECISIONS.md #20](DECISIONS.md)). MultiDeco, Shearwater and Baker's GFDECO
+  all use 0.0567; only Subsurface uses 0.0627. Reproducing a plan a diver is
+  actually holding no longer needs a flag nobody would think to pass. Lower
+  vapour pressure means more inspired inert gas, so this **lengthens**
+  schedules — it is the conservative direction. `buhlmann.P_H2O_BUHLMANN` and
+  `P_H2O_SCHREINER` name both values, and the Subsurface cross-check passes
+  0.0627 explicitly since its oracle hardcodes it.
+- **`--planner multideco|shearwater|gfdeco|subsurface|buhlmann`** selects a
+  named constant set (`buhlmann.PLANNER_PROFILES`) so a schedule can be planned
+  in another tool's convention deliberately, instead of by hunting individual
+  flags. Individual flags still override.
+
 ### Removed
 
 - `GasPlan.tank_liters`, which was declared and validated but never read —
