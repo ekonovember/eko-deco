@@ -45,7 +45,7 @@ jobs:
   # against them. They skip themselves when the compilers are missing, so this
   # job exists to make sure they are never *silently* skipped everywhere.
   crosschecks:
-    name: cross-checks vs Subsurface + Baker GFDECO
+    name: cross-checks vs Subsurface, Baker GFDECO + python oracles
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v5
@@ -54,8 +54,11 @@ jobs:
           python-version: "3.12"
       - name: Install the oracle toolchains
         run: sudo apt-get update && sudo apt-get install -y g++ gfortran
+      - name: Install the python oracles (test-only, GPL-3, never vendored)
+        run: python -m pip install decotengu decodaitengu
       - run: python -m unittest tests.test_subsurface_crosscheck -v
       - run: python -m unittest tests.test_baker_crosscheck -v
+      - run: python -m unittest tests.test_python_oracles -v
       - name: Fail if either oracle skipped instead of running
         run: |
           python - <<'PY'
@@ -63,14 +66,15 @@ jobs:
           from contextlib import redirect_stderr
           buf = io.StringIO()
           suite = unittest.defaultTestLoader.loadTestsFromNames([
-              "tests.test_subsurface_crosscheck", "tests.test_baker_crosscheck"])
+              "tests.test_subsurface_crosscheck", "tests.test_baker_crosscheck",
+              "tests.test_python_oracles"])
           with redirect_stderr(buf):
               result = unittest.TextTestRunner(stream=buf, verbosity=0).run(suite)
           if result.testsRun == 0 or result.skipped:
               raise SystemExit(
                   f"oracles did not run: {result.testsRun} tests, "
                   f"{len(result.skipped)} skipped\n{buf.getvalue()}")
-          print(f"{result.testsRun} cross-check tests ran against both oracles")
+          print(f"{result.testsRun} cross-check tests ran against all four oracles")
           PY
 
   lint:

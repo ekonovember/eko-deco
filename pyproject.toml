@@ -31,7 +31,11 @@ dynamic = ["version"]
 
 [project.optional-dependencies]
 gui = ["matplotlib>=3.5"]
-dev = ["ruff>=0.6", "mypy>=1.11"]
+# decotengu / decodaitengu are third-party decompression libraries used as
+# TEST ORACLES only (tests/python_oracles.py). Both are GPL-3: they are pip
+# dependencies of the test suite, never vendored, never imported by src/deco,
+# and never shipped in the wheel.
+dev = ["ruff>=0.6", "mypy>=1.11", "decotengu>=0.14", "decodaitengu>=1.2"]
 
 [project.scripts]
 deco = "deco.cli:main"

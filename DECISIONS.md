@@ -534,3 +534,43 @@ step, not a ceiling. A ceiling of exactly 6 m rounds to 9, not 6. It only bites
 when the ceiling lands precisely on a step, and Baker's choice is the
 conservative one: never hold *at* the ceiling, where supersaturation equals the
 GF-adjusted M-value with nothing in hand.
+
+## #22 — Four oracles, so "outlier" is a finding and not a guess
+
+The cross-checks now run against four independent implementations: Subsurface's
+C++ and Erik Baker's Fortran (vendored, compiled on demand) plus **decotengu**
+and **decodaitengu** (`pip`, test-only). `tests/python_oracles.py` adapts them;
+`tests/test_python_oracles.py` uses them.
+
+**Why more.** Two oracles can tell you that you disagree with something. They
+cannot tell you *who is wrong*. The MultiDeco comparison kept producing
+differences of a few millibar with no way to attribute them. With four, the
+question is answerable by majority, and the answers came immediately:
+
+* **Our ceiling is right.** decodaitengu agrees with us to **0.03 mbar** on a
+  nitrox profile across every gradient factor. The gap to MultiDeco at the
+  12 m stop of `examples/scenario_2` is **5.4 mbar** — 180× larger. That row is
+  MultiDeco's difference, not our arithmetic, and adjusting a coefficient to
+  chase it would have been wrong.
+* **Compartment 1 splits two–two.** We, Subsurface (`buehlmann_N2_t_halflife[]
+  = { 5.0, ... }`) and GFDECO (`Nitrogen_Half_Time(1)/5.0/`) use Bühlmann's
+  5.0 min "1b"; both Python libraries use the 4.0 min "1a", with the matching
+  1.51 min helium compartment. A consistent choice on each side, not an error,
+  and now pinned so a change on either side is visible.
+* **decodaitengu's helium is a different model.** Its `a` values track ours to
+  the fourth decimal for the fast compartments and then diverge progressively —
+  −0.011 at #10, −0.058 at #12, **−0.162 at #16**. Bühlmann's published helium
+  values plateau near 0.51–0.53 for the slow tissues; theirs keep falling.
+  Ours matches Subsurface's `buehlmann_He_a[]` and decotengu exactly. So it is
+  used here as a **nitrogen** oracle only; trimix goes to Subsurface and
+  GFDECO, which share our table.
+
+**Licensing.** Both are GPL-3 and both are **pip test dependencies, not
+vendored code** — nothing in `src/deco` imports them, nothing is copied out of
+them, and the wheel does not carry them. That is a cleaner boundary than the
+vendored oracles need, and it is why they are in the `[dev]` extra rather than
+in the tree.
+
+**Skipping.** They skip exactly like g++/gfortran do when absent, so the
+stdlib-only promise holds. CI installs them and the "did an oracle silently
+skip?" guard now covers all four.

@@ -107,6 +107,19 @@ pre-1.0, so anything may still move.
 - [`DECISIONS.md`](DECISIONS.md) — the numbered decision log the code cites.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md), this changelog, and a `.pre-commit-config.yaml`.
 
+### Added — two more cross-check oracles
+
+- **`decotengu` and `decodaitengu`** join Subsurface and Baker's GFDECO as
+  cross-check oracles ([DECISIONS.md #22](DECISIONS.md)) — pip test
+  dependencies in the `[dev]` extra, never vendored, never imported by
+  `src/deco`. Four independent implementations make "who is wrong" answerable,
+  and it paid immediately: our ceiling agrees with decodaitengu to **0.03 mbar**
+  where the MultiDeco gap is 5.4 — so that difference is MultiDeco's, not ours;
+  the 4.0 vs 5.0 min first compartment splits two-two (we side with Subsurface
+  and GFDECO); and **decodaitengu's slow-compartment helium `a` values diverge
+  progressively from Bühlmann's published table, reaching −0.162 at #16**, so
+  it is used as a nitrogen oracle only. All three findings are pinned.
+
 ### Changed — the planner's stop discretisation
 
 - **eko-deco now uses Erik Baker's own stop rule** ([DECISIONS.md
