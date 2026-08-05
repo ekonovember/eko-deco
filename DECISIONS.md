@@ -503,7 +503,34 @@ that decides whether the diver may surface. 18 m for 30 min on air has a 5 m
 GF-low ceiling and a 0 m GF-high one, and it is an NDL dive. Without that gate
 the rounding invents a stop on every no-deco profile.
 
-**Performance.** Whole-minute steps first, then the final minute walked at
-1 s — the same answer as stepping by seconds throughout, at a sixtieth of the
-tissue updates, which matters because a contingency matrix plans dozens of
-schedules.
+**In Baker's order, which is not the obvious one.** Reading `gfdeco.f`'s
+`DECOMPRESSION_STOP` directly: he pads the runtime onto the next grid point
+*first*, then adds whole increments while the ceiling still blocks the next
+stop —
+
+    Round_Up_Operation = ANINT(Run_Time/mst + 0.5) * mst
+    Segment_Time       = Round_Up_Operation - Run_Time      ! the pad
+    700 <apply>; IF ceiling > next stop THEN Segment_Time = mst; GOTO 700
+
+— so a stop is *pad + k × min_stop_time* and never a sub-minute remainder.
+That is where GFDECO's 0.4 / 0.7 / 2.7 minute segments come from. Holding to
+the true obligation and rounding afterwards gives the same answer everywhere
+except when the obligation lands exactly on the pad, where it charges a whole
+extra minute the diver does not owe — and with a fixed ascent time and a
+one-second search that boundary is reachable, not theoretical. Doing it Baker's
+way also removes the sub-minute search entirely: nothing is resolved finer than
+the grid.
+
+**`min_stop_time` is a setting.** Baker's `Minimum_Deco_Stop_Time` is a
+parameter, not a constant; his comment records that at 0.1 min with a 0.2 msw
+step "a near continuous decompression schedule can be computed". Ours is a
+`DivePlan` field wired through the config, CLI and GUI like every other input
+(#19). Measured on `examples/scenario_2`: TTS 26.33 min at 1.0, 25.83 at 0.5,
+25.33 at 0.1.
+
+**The first stop depth rounds Baker's way too.**
+`ANINT(ceiling/step + 0.5) * step` is `floor(x/s) + 1` — the *strictly* next
+step, not a ceiling. A ceiling of exactly 6 m rounds to 9, not 6. It only bites
+when the ceiling lands precisely on a step, and Baker's choice is the
+conservative one: never hold *at* the ceiling, where supersaturation equals the
+GF-adjusted M-value with nothing in hand.

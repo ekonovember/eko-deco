@@ -122,6 +122,16 @@ pre-1.0, so anything may still move.
   them. The cost is a documented, deliberate widening of the *schedule-level*
   Subsurface bands (its planner skips those stops); the shared physics there
   stays pinned to machine precision.
+- Reading `gfdeco.f` directly settled three further details. The pad is applied
+  **before** the whole-minute increments, not after the obligation is resolved —
+  the two differ when the obligation lands exactly on the pad, and Baker's order
+  removes the sub-minute search entirely. The first stop depth uses
+  `ANINT(ceiling/step + 0.5)`, the *strictly* next step, so a ceiling of exactly
+  6 m rounds to 9. And **`min_stop_time` is now a setting**
+  (`buhlmann.DivePlan.min_stop_time`, `--min-stop-time`, `min_stop_time` in the
+  config, a GUI box): Baker parameterises it, noting that a small value yields
+  "a near continuous decompression schedule" — measured on scenario 2, TTS goes
+  26.33 → 25.83 → 25.33 min at 1.0 / 0.5 / 0.1.
 
 ### Changed — model default
 

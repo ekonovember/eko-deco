@@ -49,7 +49,7 @@ DIVERGES_AT_OUR_DEFAULTS = DIVERGES_ALWAYS | {
 DIVERGES_AT_MULTIDECOS_ENVIRONMENT = DIVERGES_ALWAYS | {
     "N_COMP", "N2_A", "N2_B", "N2_HALFTIME", "HE_A", "HE_B", "HE_HALFTIME",
     "P_H2O", "P_H2O_BUHLMANN", "P_H2O_SCHREINER", "PLANNER_PROFILES",
-    "STOP_RESOLUTION", "DivePlan.p_h2o",
+    "DivePlan.p_h2o", "DivePlan.min_stop_time",
     "GF anchor", "DivePlan.last_stop_depth",
     "DivePlan.stop_interval",
     "DivePlan.ppo2_deco", "DivePlan.ppo2_switch_tol",

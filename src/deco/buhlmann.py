@@ -423,6 +423,12 @@ class DivePlan:
     gf_high: float = 0.80
     surface_p: float = P_ATM
     msw_per_bar: float = MSW_PER_BAR
+    # The grid a deco stop's RUNTIME is padded onto (min). Baker's
+    # `Minimum_Deco_Stop_Time`, a parameter in gfdeco.f rather than a constant
+    # — his comment notes that at 0.1 min with a 0.2 msw step "a near
+    # continuous decompression schedule can be computed". 1 min is the usual
+    # table-friendly value (DECISIONS.md #21).
+    min_stop_time: float = 1.0
     # Alveolar water-vapour pressure (bar). Bühlmann's 0.0627 by default;
     # Schreiner's 0.0567 is what Baker's GFDECO, MultiDeco and Shearwater use,
     # and it is a real input to the schedule, so it is a plan field rather than
@@ -455,7 +461,7 @@ class DivePlan:
         # to pressure with surface_p / msw_per_bar: zero or negative values
         # mean division-by-zero crashes or physically impossible schedules.
         for name in ("descent_rate", "ascent_rate", "stop_interval",
-                     "surface_p", "msw_per_bar", "p_h2o"):
+                     "surface_p", "msw_per_bar", "p_h2o", "min_stop_time"):
             v = getattr(self, name)
             if v <= 0:
                 raise ValueError(f"{name} must be > 0 (got {v:g})")
@@ -512,9 +518,20 @@ class DivePlan:
 
 
 def _round_up_to_stop(depth: float, interval: float) -> float:
+    """A ceiling depth rounded to the stop grid, Baker's way.
+
+    GFDECO does ``ANINT(ceiling/step + 0.5) * step``, which is the **strictly
+    next** step, not a ceiling: a ceiling of exactly 6 m rounds to 9, not 6.
+    The difference only shows when the ceiling lands exactly on a step, and
+    Baker's choice is the conservative one — never hold *at* the ceiling, where
+    supersaturation equals the GF-adjusted M-value with nothing in hand.
+
+    Zero or less is no stop at all, as in gfdeco.f's
+    ``IF (Deco_Ceiling_Depth .LE. 0.0) THEN Deco_Stop_Depth = 0.0``.
+    """
     if depth <= 0:
         return 0.0
-    return math.ceil(depth / interval - 1e-9) * interval
+    return (math.floor(depth / interval + 1e-9) + 1) * interval
 
 
 def _gas_switch_depths(plan: DivePlan, bottom_gas: Gas) -> list[float]:
@@ -711,49 +728,34 @@ def plan_multilevel(levels: Sequence[Level], bottom_gas: Gas,
         gas_here = plan.best_gas(current_depth, bottom_gas)
         p_here = depth_to_p_amb(current_depth, plan.surface_p, plan.msw_per_bar)
 
-        # Hold until the ceiling allows the next stop, then pad so the runtime
-        # lands on a whole minute. This is Erik Baker's rule, verified against
-        # his own Fortran (DECISIONS.md #21) — GFDECO holds 0.4, 0.7 and 2.7
-        # minutes at 9/6/3 m to land its RUN TIME on 43, 44, 47.
+        # gfdeco.f's DECOMPRESSION_STOP, in his order — which is not the same
+        # as holding to the obligation and rounding afterwards:
         #
-        # Two consequences, and both are why our schedules used to drift from
-        # every planner in this family. The obligation is resolved at second
-        # resolution rather than in whole-minute lumps, so a stop that truly
-        # needs 40 seconds is 40 seconds. And the padding means the diver
-        # stops at the rounded ceiling depth even where the obligation has
-        # already evaporated during the ascent — GFDECO's and MultiDeco's
-        # "pass-through" stops. We used to skip such a stop and pay for it
-        # shallower down.
-        # Coarse whole minutes first, then refine the last one at
-        # STOP_RESOLUTION: the same answer as stepping by seconds throughout,
-        # for a sixtieth of the tissue updates (a contingency matrix plans
-        # dozens of schedules).
+        #   Round_Up_Operation = ANINT(Run_Time/mst + 0.5) * mst
+        #   Segment_Time       = Round_Up_Operation - Run_Time    ! the pad
+        #   700 <apply Segment_Time>; IF ceiling > next stop THEN
+        #      Segment_Time = mst; GOTO 700                       ! +1 grid step
+        #
+        # So a stop is the pad onto the next runtime grid point plus whole
+        # increments of `min_stop_time` — never a sub-minute remainder, and
+        # never zero, because ANINT(x + 0.5) is the STRICTLY next point. That
+        # is where GFDECO's 0.4 / 0.7 / 2.7 minute segments come from.
+        #
+        # Rounding afterwards instead gets the same answer everywhere except
+        # when the obligation lands exactly on the pad, where it spends a whole
+        # extra minute the diver does not owe.
         stop_minutes = 0.0
-        coarse_n2, coarse_he = tissues.pN2, tissues.pHe
+        mst = plan.min_stop_time
+        if has_obligation:
+            run_arrival = sum(x.duration for x in segs)
+            pad = (math.floor(run_arrival / mst + 1e-9) + 1) * mst - run_arrival
+            update_tissues(tissues, gas_here, p_here, p_here, pad, plan.p_h2o)
+            stop_minutes = pad
         while ceiling(tissues, gf_at_next) > p_next + 1e-6:
-            coarse_n2, coarse_he = list(tissues.pN2), list(tissues.pHe)
-            update_tissues(tissues, gas_here, p_here, p_here, 1.0, plan.p_h2o)
-            stop_minutes += 1.0
+            update_tissues(tissues, gas_here, p_here, p_here, mst, plan.p_h2o)
+            stop_minutes += mst
             if stop_minutes > 24 * 60:
                 raise RuntimeError("Stop exceeded 24h; aborting (bad input?)")
-        if stop_minutes > 0:
-            # Roll back the last whole minute and walk it at fine resolution.
-            tissues.pN2, tissues.pHe = list(coarse_n2), list(coarse_he)
-            stop_minutes -= 1.0
-            while ceiling(tissues, gf_at_next) > p_next + 1e-6:
-                update_tissues(tissues, gas_here, p_here, p_here,
-                               STOP_RESOLUTION, plan.p_h2o)
-                stop_minutes += STOP_RESOLUTION
-        # Pad ONLY a stop the diver is actually held at. A depth passed on a
-        # dive that never incurred an obligation must not grow a stop out of
-        # the rounding — that would put stops on a no-deco dive.
-        if stop_minutes > 0 or has_obligation:
-            run_here = sum(x.duration for x in segs) + stop_minutes
-            pad = (-run_here) % 1.0
-            if pad > 1e-9:
-                update_tissues(tissues, gas_here, p_here, p_here, pad,
-                               plan.p_h2o)
-                stop_minutes += pad
         if stop_minutes > 0:
             segs.append(DiveSegment("stop", current_depth, current_depth,
                                     stop_minutes, gas_here, gf_used=gf_at_next))
@@ -1104,12 +1106,6 @@ def time_to_surface(segments: Iterable[DiveSegment]) -> float:
 
 # Cut-table grid pitch: 3 m matches the stop interval, 3 min keeps the
 # round-up penalty small — the diver rounds the gauge UP to the next cell.
-#: Resolution the stop obligation is resolved at (minutes). One second — the
-#: same resolution GFDECO and MultiDeco print their segment times in ("0:27"),
-#: and fine enough that the whole-minute runtime padding, not this, is what
-#: sets the schedule.
-STOP_RESOLUTION = 1.0 / 60.0
-
 CONTINGENCY_TIME_STEP = 3.0    # min per time step
 CONTINGENCY_DEPTH_STEP = 3.0   # m per depth step
 

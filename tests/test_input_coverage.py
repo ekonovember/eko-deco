@@ -48,7 +48,7 @@ PLAN_PROBE: dict[str, float] = {
     "last_stop_depth": 6.0, "gf_low": 0.22, "gf_high": 0.77,
     "surface_p": 0.93, "msw_per_bar": 10.25, "p_h2o": 0.0567,
     "ppo2_deco": 1.55, "ppo2_bottom": 1.35, "ppo2_min": 0.19,
-    "ppo2_switch_tol": 0.09,
+    "ppo2_switch_tol": 0.09, "min_stop_time": 0.5,
 }
 GAS_PROBE: dict[str, float] = {
     "sac": 17.5, "sac_deco": 13.5, "sac_multiplier": 1.75,
@@ -69,7 +69,7 @@ def _probe_config() -> dict:
         "last_stop_m": 6.0, "gf_low": 22, "gf_high": 77,
         "surface_p_bar": 0.93, "msw_per_bar": 10.25, "p_h2o_bar": 0.0567,
         "ppo2_deco": 1.55, "ppo2_bottom": 1.35, "ppo2_min": 0.19,
-        "ppo2_switch_tol": 0.09,
+        "ppo2_switch_tol": 0.09, "min_stop_time": 0.5,
         "sac_normal": 17.5, "sac_deco": 13.5, "sac_multiplier": 1.75,
         "problem_minutes": 2.5, "divers": 2,
     })
@@ -83,7 +83,7 @@ CLI_ARGV = [
     "--last-stop", "6", "--gf-low", "0.22", "--gf-high", "0.77",
     "--surface-p", "0.93", "--msw-per-bar", "10.25", "--p-h2o", "0.0567",
     "--ppo2-deco", "1.55", "--ppo2-bottom", "1.35", "--ppo2-min", "0.19",
-    "--ppo2-switch-tol", "0.09",
+    "--ppo2-switch-tol", "0.09", "--min-stop-time", "0.5",
     "--sac", "17.5", "--sac-deco", "13.5", "--sac-multiplier", "1.75",
     "--problem-time", "2.5", "--divers", "2",
 ]
@@ -240,6 +240,7 @@ class TestGuiBinds(unittest.TestCase):
         "ppo2_bottom": ("ppo2_bottom", "1.35"),
         "ppo2_min": ("ppo2_min", "0.19"),
         "ppo2_switch_tol": ("ppo2_switch_tol", "0.09"),
+        "min_stop_time": ("min_stop_time", "0.5"),
     }
     GAS_WIDGETS: ClassVar[dict[str, tuple[str, str]]] = {
         "sac": ("sac", "17.5"), "sac_deco": ("sac_deco", "13.5"),

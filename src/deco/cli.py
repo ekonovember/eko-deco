@@ -176,6 +176,7 @@ def _build_plan(args) -> b.DivePlan:
         ppo2_bottom=args.ppo2_bottom,
         ppo2_min=args.ppo2_min,
         ppo2_switch_tol=args.ppo2_switch_tol,
+        min_stop_time=args.min_stop_time,
         p_h2o=_p_h2o(args),
     )
 
@@ -232,6 +233,7 @@ def _config_from_args(args) -> dict:
         "ppo2_deco": args.ppo2_deco,
         "ppo2_min": args.ppo2_min,
         "ppo2_switch_tol": args.ppo2_switch_tol,
+        "min_stop_time": args.min_stop_time,
         "surface_p_bar": _surface_p(args),
         "msw_per_bar": _msw_per_bar(args),
         "p_h2o_bar": _p_h2o(args),
@@ -610,6 +612,11 @@ def main(argv: list[str] | None = None) -> int:
                         help="ppO2 ceiling for the bottom/travel gas on descent.")
     common.add_argument("--ppo2-min", type=_nonneg_float, default=0.18,
                         help="Hypoxia floor; a gas is unusable below this ppO2.")
+    common.add_argument("--min-stop-time", type=_positive_float, default=1.0,
+                        help="Grid a stop's runtime is padded onto (min) — "
+                             "Baker's Minimum_Deco_Stop_Time. 1 makes a "
+                             "table-friendly schedule; 0.1 a near-continuous "
+                             "one.")
     common.add_argument("--ppo2-switch-tol", type=_nonneg_float, default=0.05,
                         help="How far over --ppo2-deco a gas switch may be "
                              "rounded deeper to land on a stop depth (bar). "

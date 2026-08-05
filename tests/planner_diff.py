@@ -141,9 +141,6 @@ def registry() -> list[Tunable]:
                 (OXTOX,), "Repex / Hamilton"),
 
         # --- cut-table grid
-        Tunable("STOP_RESOLUTION", _v("STOP_RESOLUTION"), "module", "hardcoded",
-                (SCHEDULE,), "1 s — the resolution a stop obligation is "
-                "resolved at before the runtime is padded to a whole minute"),
         Tunable("CONTINGENCY_TIME_STEP", _v("CONTINGENCY_TIME_STEP"), "module",
                 "setting", (), "our cut table; not a shared quantity"),
         Tunable("CONTINGENCY_DEPTH_STEP", _v("CONTINGENCY_DEPTH_STEP"), "module",
@@ -191,6 +188,7 @@ _PLAN_PINS = {
     "surface_p": (PPO2, EAD, DENSITY, SCHEDULE, OXTOX, VOLUMES),
     "msw_per_bar": (PPO2, EAD, DENSITY, SCHEDULE, OXTOX, VOLUMES),
     "ppo2_deco": (SCHEDULE,), "ppo2_bottom": (), "ppo2_min": (),
+    "min_stop_time": (SCHEDULE,),
     "ppo2_switch_tol": (SCHEDULE,),
     "travel_gases": (STATED,), "deco_gases": (STATED,),
 }

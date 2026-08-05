@@ -712,6 +712,12 @@ class DecoApp:
         self.ppo2_switch_tol = self._add_spin(pp2, "", 0.0, 0.5, 0.01, 0.05,
                                               fmt="%.2f", unit="switch tol",
                                               unit_width=10)
+        grid = ttk.Frame(body)
+        grid.pack(fill=tk.X, pady=2)
+        self.min_stop_time = self._add_spin(grid, "Stop grid", 0.1, 10.0, 0.1,
+                                            1.0, fmt="%g", unit="min",
+                                            label_width=8, unit_width=6)
+        ttk.Label(grid, text="runtime rounds onto this").pack(side=tk.LEFT)
         model = ttk.Frame(body)
         model.pack(fill=tk.X, pady=2)
         self.p_h2o = self._add_spin(model, "P H₂O", 0.0001, 0.2, 0.001,
@@ -956,6 +962,7 @@ class DecoApp:
             ppo2_deco=self._num(self.ppo2_deco, 1.6, lo=0.1),
             ppo2_min=self._num(self.ppo2_min, 0.18, lo=0.0),
             ppo2_switch_tol=self._num(self.ppo2_switch_tol, 0.05, lo=0.0),
+            min_stop_time=self._num(self.min_stop_time, 1.0, lo=0.01),
             p_h2o=self._num(self.p_h2o, b.P_H2O, lo=0.0001),
             surface_p=self._num(self.surface_p, b.P_ATM, lo=0.1),
             msw_per_bar=self._num(self.msw_per_bar, b.MSW_PER_BAR, lo=1.0),
@@ -1528,6 +1535,7 @@ class DecoApp:
             self.ppo2_deco.set(f"{cfg.get('ppo2_deco', 1.6):.2f}")
             self.ppo2_min.set(f"{cfg.get('ppo2_min', 0.18):.2f}")
             self.ppo2_switch_tol.set(f"{cfg.get('ppo2_switch_tol', 0.05):.2f}")
+            self.min_stop_time.set(f"{cfg.get('min_stop_time', 1.0):g}")
             self.p_h2o.set(f"{cfg.get('p_h2o_bar', b.P_H2O):.4f}")
             self.sac.set(f"{cfg['sac_normal']:g}")
             self.sac_deco.set(f"{cfg.get('sac_deco') or 0:g}")
@@ -1591,6 +1599,7 @@ class DecoApp:
             "ppo2_deco": self._num(self.ppo2_deco, 1.6, lo=0.1),
             "ppo2_min": self._num(self.ppo2_min, 0.18, lo=0.0),
             "ppo2_switch_tol": self._num(self.ppo2_switch_tol, 0.05, lo=0.0),
+            "min_stop_time": self._num(self.min_stop_time, 1.0, lo=0.01),
             "p_h2o_bar": self._num(self.p_h2o, b.P_H2O, lo=0.0001),
             "sac_normal": self._num(self.sac, 20.0, lo=1.0),
             "sac_deco": (sd if (sd := self._num(self.sac_deco, 0.0, lo=0.0)) > 0

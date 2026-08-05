@@ -19,7 +19,7 @@ Schema::
       "sac_multiplier": 2.0, "problem_minutes": 1, "divers": 1,
       "ascent_rate": 10, "descent_rate": 18, "stop_interval": 3, "last_stop_m": 3,
       "ppo2_bottom": 1.4, "ppo2_deco": 1.6, "ppo2_min": 0.18,
-      "ppo2_switch_tol": 0.05,
+      "ppo2_switch_tol": 0.05, "min_stop_time": 1.0,
       "surface_p_bar": 1.01325, "msw_per_bar": 10.0, "p_h2o_bar": 0.0567,
       "contingency": {"time_before": 1, "time_after": 1,
                       "depth_before": 1, "depth_after": 1},
@@ -60,8 +60,10 @@ the schedule itself all follow. ``p_h2o_bar`` is the alveolar water-vapour
 pressure — 0.0567 (Schreiner), what MultiDeco, Shearwater and GFDECO use;
 Bühlmann's own 0.0627 is what Subsurface uses — and
 ``ppo2_switch_tol`` how far above ``ppo2_deco`` a gas switch may be rounded
-deeper to land on a stop depth — both are real algorithm inputs, so both are
-settable rather than baked in (DECISIONS #19).
+deeper to land on a stop depth. ``min_stop_time`` is the grid a stop's runtime
+is padded onto (Baker's ``Minimum_Deco_Stop_Time``; 1 min makes a table-friendly
+schedule, smaller values a near-continuous one). All are real algorithm inputs,
+so all are settable rather than baked in (DECISIONS #19).
 
 ``contingency`` sizes the backup cut-table matrix as step counts on the fixed
 3 min × 3 m grid: ``time_before``/``time_after`` bottom-time rows shorter/longer
@@ -131,6 +133,7 @@ def default_config() -> dict:
         "ppo2_deco": 1.6,
         "ppo2_min": 0.18,
         "ppo2_switch_tol": 0.05,
+        "min_stop_time": 1.0,
         "surface_p_bar": b.P_ATM,
         "msw_per_bar": b.MSW_PER_BAR,
         "p_h2o_bar": b.P_H2O,
@@ -320,6 +323,7 @@ def to_buhlmann(cfg: dict) -> tuple[b.Gas, b.DivePlan, b.GasPlan, list[tuple]]:
                       ppo2_deco=cfg.get("ppo2_deco", 1.6),
                       ppo2_min=cfg.get("ppo2_min", 0.18),
                       ppo2_switch_tol=cfg.get("ppo2_switch_tol", 0.05),
+                      min_stop_time=cfg.get("min_stop_time", 1.0),
                       surface_p=cfg.get("surface_p_bar", b.P_ATM),
                       msw_per_bar=cfg.get("msw_per_bar", b.MSW_PER_BAR),
                       p_h2o=cfg.get("p_h2o_bar", b.P_H2O),
