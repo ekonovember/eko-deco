@@ -49,7 +49,7 @@ DIVERGES_AT_OUR_DEFAULTS = DIVERGES_ALWAYS | {
 DIVERGES_AT_MULTIDECOS_ENVIRONMENT = DIVERGES_ALWAYS | {
     "N_COMP", "N2_A", "N2_B", "N2_HALFTIME", "HE_A", "HE_B", "HE_HALFTIME",
     "P_H2O", "P_H2O_BUHLMANN", "P_H2O_SCHREINER", "PLANNER_PROFILES",
-    "DivePlan.p_h2o",
+    "STOP_RESOLUTION", "DivePlan.p_h2o",
     "GF anchor", "DivePlan.last_stop_depth",
     "DivePlan.stop_interval",
     "DivePlan.ppo2_deco", "DivePlan.ppo2_switch_tol",
@@ -291,16 +291,25 @@ class TestScheduleErrorIsComparableAcrossDives(unittest.TestCase):
     length: scenario 2 decompresses for 26 minutes against scenario 1's 8, so
     "minutes out" penalises it for being longer."""
 
-    def test_relative_error_matches_across_two_very_different_dives(self):
-        rel = []
+    def test_relative_error_is_small_on_both_dives(self):
+        """Both dives agree with MultiDeco to under a tenth of their own deco,
+        which is the comparable statement across an 8-minute ascent and a
+        26-minute one.
+
+        They are no longer the *same* fraction. Under the old whole-minute
+        stop logic both came out at 5.6 %, which looked like a law and was a
+        coincidence; adopting Baker's padding (DECISIONS.md #21) took scenario
+        2 from +0.22 min to -0.01 min against MultiDeco and scenario 1 from
+        -0.78 to -1.01. Pinned per dive rather than as an equality, so a real
+        drift on either one is visible instead of being averaged away."""
+        rel = {}
         for scenario in (1, 2):
             ev = pd.multideco_evidence(scenario, surface_p=DEFAULT_ENV[0],
                                        msw_per_bar=DEFAULT_ENV[1])
-            rel.append(ev.schedule.tts_relative)
-        # ~6 % each, despite 3x the deco and a different gas and GF — a much
-        # stronger statement than "0.44 min and 1.44 min"
-        self.assertAlmostEqual(rel[0], rel[1], delta=0.01)
-        self.assertLess(max(rel), 0.10)
+            rel[scenario] = ev.schedule.tts_relative
+        self.assertAlmostEqual(rel[1], 0.083, delta=0.01)
+        self.assertAlmostEqual(rel[2], 0.064, delta=0.01)
+        self.assertLess(max(rel.values()), 0.10)
 
     def test_absolute_and_relative_must_both_pass(self):
         tight = pd.ScheduleDelta(0.0, 5.0, 10.0, 1.0, 9.0, 0.10)

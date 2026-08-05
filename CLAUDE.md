@@ -171,6 +171,14 @@ value for an exact round-trip; the GUI preserves fields it has no control for.
   wetnotes card. To loiter shallow before going deeper, add a level for the
   shallow depth. Travel between levels is bottom time, not TTS
   (`_bottom_phase_end`).
+- **Stops follow Baker's discretisation** (DECISIONS #21): hold at
+  `STOP_RESOLUTION` (1 s) until the ceiling permits the next stop, then pad so
+  the **runtime** is a whole minute — so the diver stops at the rounded GF-low
+  ceiling even when the ascent already cleared it (*pass-through* stops, gated
+  on the GF-high ceiling so an NDL dive gets none). This is what GFDECO and
+  MultiDeco do; TTS matches GFDECO to 0.00 min. Don't "simplify" it back to
+  whole-minute holds — that is what made our runtimes drift from every other
+  planner.
 - **The printed-schedule notation is `buhlmann.StopLeg`/`stop_legs`, and every
   renderer uses it** — the runtime card, the GUI stop table and the cut-table
   cell. `run` = the runtime you LEAVE that depth (truncated), `leg` = the

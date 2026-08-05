@@ -459,3 +459,51 @@ planner's display quirks (see #15 on MultiDeco showing fresh water it does not
 compute in). It closes the gap that is a number; the rest stays visible in
 `tests/planner_diff.py` so the remaining differences can be argued about with
 evidence rather than guessed at.
+
+## #21 — Baker's stop discretisation: hold to the second, pad the runtime
+
+At each stop the planner holds until the ceiling permits the next one —
+resolved at `STOP_RESOLUTION` (1 s), not in whole-minute lumps — and then pads
+so the **runtime lands on a whole minute**. A consequence of the padding is
+that the diver stops at the rounded GF-low ceiling even where the ascent has
+already cleared it: a *pass-through* stop.
+
+**Why.** This is what Erik Baker's own Fortran does, which settles it, because
+this repo's stated convention is his. GFDECO on `examples/scenario_1`'s profile
+prints segment times of **0.4, 0.7 and 2.7 minutes** at 9/6/3 m, landing its
+RUN TIME on exactly 43, 44, 47 — sub-minute holds, whole-minute runtimes, and a
+stop at 9 m. MultiDeco (Baker's code) does the same; its `0:27` first stops are
+that padding. eko-deco used to round each *hold* up to a whole minute and add
+the real ascent on top, so its runtimes drifted ~0.33 min per stop and it
+skipped any stop whose obligation had evaporated during the ascent.
+
+**Evidence.** Against GFDECO, TTS now matches **exactly (0.00 min) on all seven
+cross-check cases**; `TTS_TOL` went from 2.0 to 0.05 and `STOP_TOL` from 2.0 to
+1.0 — the residual being only that GFDECO prints its STOP TIME column rounded
+up while ours is the true fractional hold. Against the two real MultiDeco
+exports, exact stop runtimes went from 11/24 to **16/24** and total runtime
+error from 18 min to 9.
+
+The old `STOP_TOL = 2.0  # covers GFDECO's >=1 min pass-through stops` says the
+behaviour was known and absorbed by tolerance instead of implemented.
+
+**What it costs.** Divergence from **Subsurface**, whose planner trial-ascends
+past those stops and rounds holds up: our first stop is now up to two intervals
+deeper than its, and on the deepest trimix case our TTS is 4.7 min shorter.
+Those schedule-level bands were widened deliberately and are documented in the
+cross-check as a *sanity* check between two conventions — what stays pinned to
+machine precision there is the shared physics (tissues, M-values, the GF line,
+NDLs), which did not move. DECISIONS #3 and CLAUDE.md already state that
+following Baker over Subsurface is the intent; this makes it true of the
+scheduler and not just of the anchor.
+
+**A no-deco dive gets no stops.** The padding is gated on whether the dive
+requires decompression at all, tested with the **GF-high** ceiling — the one
+that decides whether the diver may surface. 18 m for 30 min on air has a 5 m
+GF-low ceiling and a 0 m GF-high one, and it is an NDL dive. Without that gate
+the rounding invents a stop on every no-deco profile.
+
+**Performance.** Whole-minute steps first, then the final minute walked at
+1 s — the same answer as stepping by seconds throughout, at a sixtieth of the
+tissue updates, which matters because a contingency matrix plans dozens of
+schedules.

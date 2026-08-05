@@ -184,10 +184,9 @@ class TestWetnotesRows(unittest.TestCase):
         self.assertEqual([r[:3] for r in rows], [
             ["32 m", "-", "40"],     # bottom, leaving at runtime 40
             ["21 m", "gas", "41"],   # EAN50 switch on the way up (annotation)
-            ["6 m", "3", "43"],      # 40 -> 43: the ascent from the bottom
-                                     # plus the 1 min hold. MultiDeco splits
-                                     # the same 3 min as 9 m (43) + 6 m 1:00.
-            ["3 m", "4", "47"],      # MultiDeco: 3 m 4:00 (48)
+            ["9 m", "3", "43"],      # MultiDeco: 9 m, leaves at (43)  — same
+            ["6 m", "1", "44"],      # MultiDeco: 6 m 1:00, leaves at (44) — same
+            ["3 m", "3", "47"],      # MultiDeco: 3 m 4:00, leaves at (48)
             ["surf", "-", "47"],
         ])
 

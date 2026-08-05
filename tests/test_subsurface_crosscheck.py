@@ -305,13 +305,31 @@ class TestSchedules(unittest.TestCase):
          [b.Gas(0.5), b.Gas(1.0)], Gas(180, 450), [Gas(500), Gas(1000)], (50, 80), 1013, SEA, 4.0),
         ("60m/20min 18/45+50+O2 30/80", 60, 20, b.Gas(0.18, 0.45),
          [b.Gas(0.5), b.Gas(1.0)], Gas(180, 450), [Gas(500), Gas(1000)], (30, 80), 1013, SEA, 4.0),
+        # 5.0: the deepest case, where Baker's pass-through stops and
+        # second-resolution holds diverge most from Subsurface's trial-ascent
+        # plus whole-minute holds (measured 4.7). Ours is the SHORTER of the
+        # two here, which is the direction to keep an eye on — but it is the
+        # one that reproduces GFDECO exactly (test_baker_crosscheck, TTS to
+        # 0.05 min), so the divergence is Subsurface's convention, not an
+        # error. See DECISIONS.md #21.
         ("60m/30min 15/55+50+O2 30/85", 60, 30, b.Gas(0.15, 0.55),
-         [b.Gas(0.5), b.Gas(1.0)], Gas(150, 550), [Gas(500), Gas(1000)], (30, 85), 1013, SEA, 4.0),
+         [b.Gas(0.5), b.Gas(1.0)], Gas(150, 550), [Gas(500), Gas(1000)], (30, 85), 1013, SEA, 5.0),
         ("altitude 900mbar 30m/30min air 30/80", 30, 30, EKO_AIR, [], SRF_AIR, [], (30, 80), 900, SEA, 4.0),
         ("fresh water 36m/30min EAN32 30/80", 36, 30, b.Gas(0.32), [], Gas(320), [], (30, 80), 1013, FRESH, 4.0),
     ]
 
-    STOP_TOL = 2.0  # minutes, per stop depth
+    # eko-deco follows Baker's stop discretisation (DECISIONS.md #21): it stops
+    # at the rounded GF-low ceiling — including pass-through stops the ascent
+    # has already cleared — holds to the second, and pads the runtime to a
+    # whole minute. Subsurface's planner does none of that: it trial-ascends
+    # and adds flat minutes, so it skips those stops entirely and rounds every
+    # hold up. This band is therefore a SANITY check between two deliberately
+    # different conventions, not a precision pin.
+    #
+    # What is still pinned to machine precision against this oracle is the part
+    # that is genuinely shared — tissue loading, M-values, the GF line and NDLs
+    # (TestTissues, TestCeilings, TestNDL). Those did not move.
+    STOP_TOL = 3.0  # minutes, per stop depth (worst measured 2.3)
 
     @staticmethod
     def schedules(case):
@@ -351,7 +369,15 @@ class TestSchedules(unittest.TestCase):
                 self.assertTrue(eko_stops and srf_stops,
                                 msg=f"one engine sees no deco: eko {eko_stops}, "
                                     f"subsurface {srf_stops}")
-                self.assertLessEqual(abs(eko_stops[0][0] - srf_stops[0][0]), 3.0)
+                # Two stop intervals: eko-deco stops at the rounded GF-low
+                # ceiling and Subsurface trial-ascends past it, so ours is at
+                # or deeper than theirs by up to two steps. The direction is
+                # the assertion that matters — ours must never be SHALLOWER.
+                first_eko, first_srf = eko_stops[0][0], srf_stops[0][0]
+                self.assertGreaterEqual(first_eko, first_srf - 1e-9,
+                                        "eko-deco's first stop must not be "
+                                        "shallower than Subsurface's")
+                self.assertLessEqual(first_eko - first_srf, 6.0)
 
 
 class TestMultilevel(unittest.TestCase):
@@ -399,7 +425,7 @@ class TestMultilevel(unittest.TestCase):
                 e, s = dict(eko_stops), dict(srf_stops)
                 for stop in sorted(set(e) | set(s), reverse=True):
                     self.assertLessEqual(
-                        abs(e.get(stop, 0.0) - s.get(stop, 0.0)), 2.0,
+                        abs(e.get(stop, 0.0) - s.get(stop, 0.0)), 3.5,
                         msg=f"stop {stop} m" + detail)
 
     def test_tissue_state_after_the_levels(self):
@@ -457,11 +483,12 @@ class TestRepetitiveDive(unittest.TestCase):
 
         self.assertTrue(eko_stops and srf_stops,
                         msg="expected deco on the repetitive dive")
-        self.assertLessEqual(abs(eko_tts - srf_tts), 2.0,
+        # Same convention gap as TestSchedules — a sanity band, not a pin.
+        self.assertLessEqual(abs(eko_tts - srf_tts), 3.0,
                              msg=f"eko {eko_stops}, subsurface {srf_stops}")
         e, s = dict(eko_stops), dict(srf_stops)
         for stop in sorted(set(e) | set(s), reverse=True):
-            self.assertLessEqual(abs(e.get(stop, 0.0) - s.get(stop, 0.0)), 2.0)
+            self.assertLessEqual(abs(e.get(stop, 0.0) - s.get(stop, 0.0)), 3.0)
         n2, he = o.tissues()
         for i in range(16):
             self.assertAlmostEqual(t2.pN2[i], n2[i], delta=2e-2)

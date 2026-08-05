@@ -232,32 +232,38 @@ class TestDefaultsReproduceTheExports(unittest.TestCase):
                 self.assertEqual(got, ours)
                 self.assertLessEqual(abs(got - multideco), 1)
 
-    def test_the_shallow_stops_match_minute_for_minute(self):
-        """Where it matters most — the long shallow holds are identical."""
+    def test_the_runtimes_match_stop_for_stop(self):
+        """The number a diver actually flies: five of scenario 2's six stop
+        runtimes are MultiDeco's exactly, and the sixth (12 m) is one minute
+        out and re-synced by the next stop.
+
+        Runtimes rather than stop lengths, deliberately. Adopting Baker's
+        padding (DECISIONS.md #21) shifted a minute between the 12 m and 9 m
+        legs while leaving every runtime from 9 m down on MultiDeco's — and it
+        is the runtime, not the leg, that the card prints and the diver reads.
+        """
         segs = _plan(2)
-        legs = {round(l.depth): l.leg for l in b.stop_legs(segs)}
-        for depth, minutes in ((9, 5), (6, 5), (3, 10)):
-            with self.subTest(depth=depth):
-                self.assertEqual(legs[depth], minutes)
+        runs = {round(l.depth): l.run for l in b.stop_legs(segs)}
+        want = {18: 42, 15: 44, 12: 46, 9: 51, 6: 56, 3: 66}
+        exact = [d for d in want if runs.get(d) == want[d]]
+        self.assertEqual(sorted(exact, reverse=True), [18, 15, 9, 6, 3])
+        self.assertEqual(runs[12], want[12] + 1)
 
     def test_what_the_fresh_water_environment_costs(self):
         """The trade the environment settings buy, quantified.
 
         Planning scenario 2 in the fresh water MultiDeco *prints* takes 2 min
         off the runtime — and with it the agreement with MultiDeco's own
-        schedule. Water is the dominant term; 150 m of altitude moves the
-        result by at most a minute and its sign is not the obvious one.
-
-        Altitude does two opposing things: the tissues start the dive *less*
-        loaded (saturation is `surface_p - p_h2o`), which shortens deco, while
-        the surfacing target is lower, which lengthens it. At 150 m the head
-        start wins or cancels; only at real altitude does the second dominate
-        (`test_buhlmann.TestEnvironment.test_altitude_lengthens_deco` pins that
-        at 1500 m). They are also not additive here, because a whole-minute
-        stop grid swallows sub-minute changes.
+        schedule. 150 m of altitude contributes nothing on its own: it does two
+        opposing things (the tissues start *less* loaded, which shortens deco,
+        while the surfacing target is lower, which lengthens it) and at that
+        height they cancel. Only at real altitude does the second dominate —
+        `test_buhlmann.TestEnvironment.test_altitude_lengthens_deco` pins that
+        at 1500 m. Nor are they additive: together they come to -1, not -2,
+        because a whole-minute runtime grid swallows the remainder.
         """
         alt150 = b.surface_p_at_altitude(150)
-        for p_h2o, alt_delta in ((b.P_H2O_BUHLMANN, 0.0), (MD_P_H2O, -1.0)):
+        for p_h2o in (b.P_H2O_BUHLMANN, MD_P_H2O):
             with self.subTest(p_h2o=p_h2o):
                 base = b.total_runtime(_plan(2, p_h2o=p_h2o))
                 fresh = b.total_runtime(
@@ -268,8 +274,8 @@ class TestDefaultsReproduceTheExports(unittest.TestCase):
                     _plan(2, surface_p=alt150, msw_per_bar=MD_MSW_PER_BAR,
                           p_h2o=p_h2o))
                 self.assertAlmostEqual(fresh - base, -2.0, places=6)
-                self.assertAlmostEqual(altitude - base, alt_delta, places=6)
-                self.assertAlmostEqual(both - base, -2.0, places=6)
+                self.assertAlmostEqual(altitude - base, 0.0, places=6)
+                self.assertAlmostEqual(both - base, -1.0, places=6)
 
 
 class TestPrintingConventions(unittest.TestCase):
@@ -280,30 +286,24 @@ class TestPrintingConventions(unittest.TestCase):
         self.assertEqual(rp.runtime_min(42.556), 42)
         self.assertEqual(rp.runtime_min(41.556), 41)
 
-    def test_stop_time_includes_the_ascent_to_the_stop(self):
-        """MultiDeco's segment time for a stop covers the ascent to it, which
-        is why its runtimes stay whole minutes: scenario 2 leaves 12 m at 46
-        and 9 m at 51, a 5 min printed leg made of a 0.33 min ascent and a
-        4.67 min hold. eko-deco holds whole minutes and ascends on top, so the
-        SAME schedule reads one ascent longer per stop — the wetnotes card
-        prints the leg (see DECISIONS.md #17) precisely so the two agree."""
+    def test_our_legs_are_whole_minutes_like_multidecos(self):
+        """Since adopting Baker's runtime padding (DECISIONS.md #21) every leg
+        — ascent to the stop plus the hold — is a whole number of minutes, and
+        every stop runtime is an integer, exactly as MultiDeco prints them.
+
+        Before, our holds were whole minutes with a fractional ascent on top,
+        so the runtime drifted 0.33 min per stop and the two schedules could
+        not be laid side by side. The holds are now the fractional part
+        (0.44, 1.67, 2.67 …) and the *legs* are whole.
+        """
         segs = _plan(2)
-        run = 40.0
-        legs = {}
-        pending = 0.0
-        for s in segs:
-            if s.kind in ("descent", "bottom"):
-                continue
-            run += s.duration
-            if s.kind == "stop":
-                legs[round(s.depth_start)] = (pending + s.duration, run)
-                pending = 0.0
-            else:
-                pending += s.duration
-        # MultiDeco: 9 m leg 5 min, leaving at runtime 51.
-        leg, leave = legs[9]
-        self.assertAlmostEqual(leg, 5.0 + 1 / 3, places=6)
-        self.assertEqual(rp.runtime_min(leave), 51)
+        legs = b.stop_legs(segs)
+        for leg in legs:
+            with self.subTest(depth=leg.depth):
+                self.assertEqual(leg.leg, round(leg.leg))
+                self.assertNotAlmostEqual(leg.hold, round(leg.hold), places=2)
+        run = 40.0 + sum(l.leg for l in legs)
+        self.assertEqual(legs[-1].run, run)
 
 
 if __name__ == "__main__":

@@ -122,8 +122,19 @@ CASES = [
      (0.30, 0.85)),
 ]
 
-STOP_TOL = 2.0  # min per stop (covers GFDECO's >=1 min pass-through stops)
-TTS_TOL = 2.0   # min (calibrated worst case: 1 min / 1.3 min)
+# eko-deco now implements Baker's own stop discretisation — hold to the second,
+# then pad the runtime to a whole minute, stopping at the rounded ceiling even
+# where the ascent has already cleared it (DECISIONS.md #21). The result is that
+# TTS matches GFDECO EXACTLY on every case below, so the tolerance that used to
+# absorb the difference is gone.
+#
+# The old comment here read "covers GFDECO's >= 1 min pass-through stops": the
+# behaviour was known and papered over with tolerance rather than implemented.
+STOP_TOL = 1.0  # min per stop — GFDECO prints its STOP TIME column rounded UP
+                # to whole minutes while ours is the true fractional hold, so a
+                # sub-minute difference per stop is expected and is all that
+                # remains (worst measured 0.90).
+TTS_TOL = 0.05  # min — measured 0.00 across all seven cases.
 
 
 class TestBakerSchedules(unittest.TestCase):

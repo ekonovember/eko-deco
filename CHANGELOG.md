@@ -107,6 +107,22 @@ pre-1.0, so anything may still move.
 - [`DECISIONS.md`](DECISIONS.md) — the numbered decision log the code cites.
 - [`CONTRIBUTING.md`](CONTRIBUTING.md), this changelog, and a `.pre-commit-config.yaml`.
 
+### Changed — the planner's stop discretisation
+
+- **eko-deco now uses Erik Baker's own stop rule** ([DECISIONS.md
+  #21](DECISIONS.md)): hold to the second rather than in whole-minute lumps,
+  then pad so the **runtime** lands on a whole minute — which means stopping at
+  the rounded GF-low ceiling even where the ascent has already cleared it (a
+  *pass-through* stop). Verified against his Fortran: GFDECO holds 0.4 / 0.7 /
+  2.7 min at 9/6/3 m to land its runtime on 43 / 44 / 47.
+  **TTS now matches GFDECO exactly (0.00 min) on all seven cross-check cases**
+  — `TTS_TOL` tightened from 2.0 to 0.05 — and against the two real MultiDeco
+  exports exact stop runtimes went from 11/24 to 16/24, total error 18 min to
+  9. Every printed leg is now a whole number of minutes, as MultiDeco prints
+  them. The cost is a documented, deliberate widening of the *schedule-level*
+  Subsurface bands (its planner skips those stops); the shared physics there
+  stays pinned to machine precision.
+
 ### Changed — model default
 
 - **`P_H2O` now defaults to Schreiner's 0.0567**, not Bühlmann's 0.0627

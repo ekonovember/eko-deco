@@ -611,10 +611,16 @@ class TestLastStopDepth(unittest.TestCase):
         self.assertGreaterEqual(tts6, tts3)
 
     def test_shallow_only_deco_collapses_to_single_6m_stop(self):
-        # 21 m / 50 min air needs only 6 m + 3 m stops; with last stop 6 m the
-        # whole obligation is served in one 6 m stop
+        # 21 m / 50 min air: the obligation is served almost entirely at 6 m,
+        # preceded by a sub-minute PASS-THROUGH stop at the rounded GF-low
+        # ceiling (9 m). Baker's GFDECO does the same — it stops at that depth
+        # and pads the runtime to a whole minute even where the ceiling has
+        # already cleared (DECISIONS.md #21).
         stops, _ = self.schedules(6.0, depth=21, time=50)
-        self.assertEqual([d for d, _t in stops], [6.0])
+        self.assertEqual([d for d, _t in stops], [9.0, 6.0])
+        by_depth = dict(stops)
+        self.assertLess(by_depth[9.0], 1.0, "9 m is a pass-through, not a hold")
+        self.assertGreater(by_depth[6.0], 20.0, "the real obligation is at 6 m")
 
     def test_default_is_unchanged(self):
         self.assertEqual(b.DivePlan().last_stop_depth, 3.0)

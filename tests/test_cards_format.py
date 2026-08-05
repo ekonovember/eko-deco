@@ -102,7 +102,9 @@ class TestCardMatchesThePlanner(unittest.TestCase):
     def test_gas_switches_are_flagged_on_the_row_they_apply_to(self):
         rows = mc.rows_from_scenarios([self.plan])
         flagged = {label: sw for label, _c, sw in rows if sw}
-        self.assertEqual(flagged, {"18": "EAN50", "6": "O2"})
+        # 21 m is a pass-through stop now (Baker's padding, DECISIONS #21),
+        # so EAN50 is first breathed on a stop row rather than mid-ascent.
+        self.assertEqual(flagged, {"21": "EAN50", "6": "O2"})
 
     def test_brackets_hug_their_digits(self):
         """`(42)`, never `( 42)` — alignment comes from where the two fields
