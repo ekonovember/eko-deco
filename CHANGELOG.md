@@ -185,6 +185,61 @@ pre-1.0, so anything may still move.
   can only change deliberately.
 
 
+### Fixed — the GUI was deriving numbers instead of rendering them
+
+- **The GUI ignored the deco SAC entirely.** `report.gas_report` was called
+  without the plan's deco stack, so `GasPlan.sac_deco` matched no cylinder: a
+  deco rate the user typed, saved and could see on screen changed no figure
+  anywhere. On 40 m/25 min air + EAN50 at SAC 20/12 the GUI showed EAN50
+  **714 L** where the CLI showed **428 L** from the same config
+  ([DECISIONS.md #24](DECISIONS.md)).
+- **The GUI's GAS and DIVE cards computed at sea-level salt** regardless of the
+  dive's water and altitude — density, CNS/OTU, END, ppO₂, MOD, the hypoxic
+  depth and the final ceiling. At 1500 m in fresh water the card printed
+  density **6.37 g/L**, above the 6.2 g/L ceiling, while the ⚠ density warning
+  (environment-aware, seeing the true 5.99) stayed silent.
+- `recompute` now builds **one `PlanResult`** — the same object `deco plan`
+  renders — and the readout and wetnotes card render its fields. The lost-gas
+  card's back-gas litres are billed through `GasPlan.sac_for` and the dive's
+  environment like every other litre, instead of by hand at the raw SAC.
+- **`gas_report` now takes the whole `DivePlan`** rather than optional
+  `surface_p` / `msw_per_bar` / `deco_gases` scalars: omitting the environment
+  is a `TypeError` instead of a wrong number. *(API change: pass the plan.)*
+- Gas switches on the wetnotes card and the profile chart are detected by
+  comparing frozen `Gas` values, not their rounded labels ([DECISIONS.md
+  #8](DECISIONS.md)) — two mixes that both print `Air` now get their switch
+  row. GUI stop tables key on the stop's own depth rather than `round(depth)`,
+  which would have merged 6.0 m and 6.5 m at a 0.5 m stop interval.
+
+
+### Fixed — a config with no gas is refused, not defaulted
+
+- **A config with no usable gas is refused instead of becoming a dive on Air.**
+  `{"gases": []}` used to fall back to the default stack — planning on Air with
+  an EAN50 deco stage that appeared in no file the user had seen — and
+  unticking every gas did the same. `dive_config.to_buhlmann` raises; the CLI
+  exits 2. An absent `gases` key still gets defaults.
+
+
+### Documented — the limits of the cross-checks
+
+- **[DECISIONS.md #23](DECISIONS.md) states what the four oracles establish and
+  what they do not.** They support "on this observable, eko-deco is not the
+  outlier"; they do not support "eko-deco is correct" — the GFDECO agreement is
+  measured with our N₂ `a` table patched to ZH-L16B and surface 1.000 bar, and
+  the decodaitengu ceiling with compartment 1 aligned to its 4.0 min variant, so
+  both need their qualifiers carried. There is no four-way match on everything:
+  compartment 1 splits two–two, decodaitengu's slow helium three–one, and
+  Subsurface's anchor and scheduler differ by design. The two open MultiDeco
+  rows are recorded as *unattributed* — the 12 m one is not a compartment, and
+  the compartment-3 hypothesis it retired is named so nobody re-opens it.
+- `tests/test_multideco_scenarios.TestExportedRuntimeDeltas` pins **all 36 stop
+  runtimes** of both exports across all four lost-gas columns: 25 identical, 11
+  recorded deltas. The golden fixture's 2 min per-stop tolerance lets a
+  one-minute drift pass silently; this asserts the delta itself, so agreement
+  can only change deliberately.
+
+
 ### Changed — the planner's stop discretisation
 
 - **eko-deco now uses Erik Baker's own stop rule** ([DECISIONS.md

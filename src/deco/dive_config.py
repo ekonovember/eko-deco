@@ -221,11 +221,13 @@ def _merged(cfg: dict) -> dict:
         base["sac_multiplier"] = round(float(cfg["sac_stress"]) / sac, 2)
     # Gases: drop legacy "Level"-role entries entirely (they existed only to be
     # force-breathed on a level; gas is automatic-by-role now).
-    gases = cfg.get("gases")
-    if gases:
-        merged = [_merge_gas(g) for g in gases if g.get("role") != "Level"]
-        if merged:
-            base["gases"] = merged
+    # An explicit "gases" key is taken as given, the empty list included. It
+    # used to fall back to the default stack whenever it merged to nothing,
+    # so a config saying {"gases": []} planned a dive on Air with an EAN50
+    # deco stage that appeared in no file the user had ever seen (#24).
+    if "gases" in cfg:
+        base["gases"] = [_merge_gas(g) for g in (cfg["gases"] or [])
+                         if g.get("role") != "Level"]
     # Legacy configs were square-profile only: one depth + one bottom time.
     # That is a single level, and bottom_time_min already meant "runtime at the
     # end of the bottom", so it carries over unchanged.
@@ -310,8 +312,19 @@ def to_buhlmann(cfg: dict) -> tuple[b.Gas, b.DivePlan, b.GasPlan, list[tuple]]:
     gases = [(g["role"], gas_of(g), float(g.get("tank_l", 0)),
               float(g.get("pressure_bar", 232)))
              for g in cfg["gases"] if g.get("enabled", True)]
+    if not gases:
+        # Refuse rather than plan on Air. A config with no gas — an empty list,
+        # or every entry unticked — described no dive; falling back silently
+        # produced a schedule on a mix the file never mentioned, which is the
+        # failure mode #9 exists to prevent (#24). The CLI turns this into
+        # exit 2; the GUI never reaches here (it builds its plan from the
+        # widgets and prints its own "no Bottom gas" notice).
+        listed = len(cfg["gases"])
+        raise ValueError(
+            f"the dive has no usable gas ({listed} listed, none enabled)"
+            if listed else "the dive has no gas — add one to 'gases'")
     bottom = next((gas for role, gas, _t, _p in gases if role == "Bottom"),
-                  gases[0][1] if gases else b.AIR)
+                  gases[0][1])
     travel = tuple(gas for role, gas, _t, _p in gases if role == "Travel")
     deco = tuple(gas for role, gas, _t, _p in gases if role == "Deco")
     plan = b.DivePlan(gf_low=cfg["gf_low"] / 100.0, gf_high=cfg["gf_high"] / 100.0,

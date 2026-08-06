@@ -4,6 +4,7 @@ from __future__ import annotations
 import os
 import tempfile
 import unittest
+from typing import ClassVar
 
 from deco import buhlmann as b
 from deco import dive_config as dc
@@ -353,3 +354,41 @@ class TestEnvironmentAndDecoSac(unittest.TestCase):
         self.assertEqual(plan.surface_p, b.P_ATM)
         self.assertEqual(plan.msw_per_bar, b.MSW_PER_BAR)
         self.assertIsNone(gp.sac_deco)
+
+
+class TestNoGasIsRefused(unittest.TestCase):
+    """A config with no usable gas must not quietly become a dive on Air.
+
+    `{"gases": []}` used to fall back to the default stack, so the planner
+    produced a schedule on Air with an EAN50 deco stage — neither of which
+    appeared anywhere in the file the user was holding. Unticking every gas did
+    the same. That is the failure mode DECISIONS.md #9 names ("silently
+    planning a *different* dive than the one asked for is the worst possible
+    failure mode"), arriving through a different door; #24 closes it.
+    """
+
+    BASE: ClassVar[dict] = {"levels": [{"depth_m": 40, "runtime_min": 25}]}
+
+    def test_an_explicit_empty_list_stays_empty(self):
+        cfg = dc.normalize({**self.BASE, "gases": []})
+        self.assertEqual(cfg["gases"], [])
+        with self.assertRaises(ValueError) as e:
+            dc.to_buhlmann(cfg)
+        self.assertIn("no gas", str(e.exception))
+
+    def test_every_gas_disabled_is_refused_by_name(self):
+        cfg = dc.normalize({**self.BASE, "gases": [
+            {"role": "Bottom", "o2": 21, "he": 35, "tank_l": 24,
+             "pressure_bar": 232, "enabled": False}]})
+        with self.assertRaises(ValueError) as e:
+            dc.to_buhlmann(cfg)
+        self.assertIn("none enabled", str(e.exception))
+
+    def test_an_absent_key_still_gets_the_defaults(self):
+        """Only an *explicit* empty list is taken as given — a config that
+        never mentions gases is a partial hand-edit, not a gasless dive."""
+        cfg = dc.normalize(dict(self.BASE))
+        self.assertTrue(cfg["gases"])
+        bottom, _plan, _gp, gases = dc.to_buhlmann(cfg)
+        self.assertTrue(gases)
+        self.assertIsInstance(bottom, b.Gas)
