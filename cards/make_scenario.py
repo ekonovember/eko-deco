@@ -1,18 +1,23 @@
-"""Build the two printed cards for the `examples/scenario_2` dive.
+"""Build the printed cards for the two `examples/scenario_*` dives.
 
-32 m / 40 min on EAN28, GF 5/50, EAN50 + O2 as deco gases — planned at
-eko-deco's own defaults (sea-level salt water), which is the pairing that lands
-on MultiDeco's runtime (`tests/test_multideco_scenarios.py`).
+Both are 32 m / 40 min with EAN50 + O2 as deco gases, differing in bottom mix
+and conservatism: scenario 1 is EAN36 at GF 40/85, scenario 2 EAN28 at GF 5/50.
+Planned at eko-deco's own defaults (sea-level salt water), which is the pairing
+that lands on MultiDeco's runtime (`tests/test_multideco_scenarios.py`).
 
 Every number comes from `deco.cli plan --json`, so a cell cannot drift from the
-schedule. `make_cards.py` is the layout engine; this file is the dive.
+schedule — the warnings included: scenario 1 breathes EAN36 at 32 m, which is
+ppO2 1.52 at these constants, and the card says so (DECISIONS.md #4).
+`make_cards.py` is the layout engine; this file is the dives.
 
-    python cards/make_scenario2.py
+    python cards/make_scenario.py        # both
+    python cards/make_scenario.py 1      # just scenario 1
 
-Writes, into `cards/` (all gitignored — cards are remade per dive):
+Writes, into `cards/` (all gitignored — cards are remade per dive), per
+scenario N:
 
-* `scenario2.pdf/.png` + `scenario2_a4.pdf` — lost-gas columns (OK/-50/-O2/BOTH)
-* `scenario2_multideco.pdf/.png` + `scenario2_multideco_a4.pdf` — MultiDeco's
+* `scenarioN.pdf/.png` + `scenarioN_a4.pdf` — lost-gas columns (OK/-50/-O2/BOTH)
+* `scenarioN_multideco.pdf/.png` + `scenarioN_multideco_a4.pdf` — MultiDeco's
   own layout: ON PLAN and LOST EAN50 side by side over bottom-time columns
 """
 from __future__ import annotations
@@ -48,9 +53,12 @@ REPO = OUT.parent
 ACCENT = "#1f3350"
 
 DEPTH, BOTTOM_TIME = 32, 40
-BOTTOM = "28@24@232"
 EAN50, O2 = "50@11@200", "100@11@200"
-GF = ("0.05", "0.50")
+#: The two exports, by the settings each one prints: bottom mix and GF.
+SCENARIOS = {
+    1: {"bottom": "36@24@232", "gf": ("0.40", "0.85"), "mix": "EAN36"},
+    2: {"bottom": "28@24@232", "gf": ("0.05", "0.50"), "mix": "EAN28"},
+}
 #: The export states both rates; SAC/multiplier/problem time are the planner's.
 RATES = ["--descent-rate", "8", "--ascent-rate", "9"]
 GAS_PLAN = ["--sac", "20", "--sac-multiplier", "1.5", "--problem-time", "2"]
@@ -58,11 +66,12 @@ GAS_PLAN = ["--sac", "20", "--sac-multiplier", "1.5", "--problem-time", "2"]
 BOTTOM_TIMES = (34, 37, 40, 43)
 
 
-def plan(time_min=BOTTOM_TIME, decos=(EAN50, O2), divers=1):
+def plan(scenario, time_min=BOTTOM_TIME, decos=(EAN50, O2), divers=1):
     """One `deco plan --json`, parsed."""
+    s = SCENARIOS[scenario]
     cmd = [sys.executable, "-m", "deco.cli", "plan",
-           "--depth", str(DEPTH), "--time", str(time_min), "--gas", BOTTOM,
-           "--gf-low", GF[0], "--gf-high", GF[1],
+           "--depth", str(DEPTH), "--time", str(time_min), "--gas", s["bottom"],
+           "--gf-low", s["gf"][0], "--gf-high", s["gf"][1],
            *RATES, *GAS_PLAN, "--divers", str(divers), "--json"]
     for g in decos:
         cmd += ["--deco-gas", g]
@@ -176,9 +185,9 @@ def summary_line(planned, team):
             f"CNS {round(planned['cns_pct'])}%")
 
 
-def bottom_time_table(decos):
+def bottom_time_table(scenario, decos):
     """`{depth: [leg/run per bottom time]}` plus the SUR and TTS rows."""
-    plans = [plan(time_min=t, decos=decos) for t in BOTTOM_TIMES]
+    plans = [plan(scenario, time_min=t, decos=decos) for t in BOTTOM_TIMES]
     per = [{s["depth_m"]: f"{s['leg_min']}/{s['run_min']}" for s in p["stops"]}
            for p in plans]
     depths = sorted({d for col in per for d in col}, reverse=True)
@@ -188,20 +197,22 @@ def bottom_time_table(decos):
     return rows, surface, tts, plans[0]
 
 
-def main():
-    planned = plan()
-    team = plan(divers=2)
-    gf_lo, gf_hi = (round(float(g) * 100) for g in GF)
+def build(scenario):
+    """Both cards for one scenario."""
+    mix, gf = SCENARIOS[scenario]["mix"], SCENARIOS[scenario]["gf"]
+    planned = plan(scenario)
+    team = plan(scenario, divers=2)
+    gf_lo, gf_hi = (round(float(g) * 100) for g in gf)
     subtitle = f"{DEPTH} m / {BOTTOM_TIME} min   GF {gf_lo}/{gf_hi}"
     summary = summary_line(planned, team)
 
     # ---- card A: the lost-gas columns MultiDeco's own scenario table uses ----
     columns = [("OK", (EAN50, O2)), ("-50", (O2,)), ("-O2", (EAN50,)), ("BOTH", ())]
-    plans = [plan(decos=d) for _label, d in columns]
+    plans = [plan(scenario, decos=d) for _label, d in columns]
     switches = " · ".join(f"{d:g}m {mix}" for d, mix in
                           sorted(_switch_rows(plans[0]).items(), reverse=True))
     spec_a = {
-        "tag": f"{DEPTH}m EAN28",
+        "tag": f"{DEPTH}m {mix}",
         "subtitle": subtitle,
         "columns": [label for label, _ in columns],
         "rows": rows_from_scenarios(plans),
@@ -211,16 +222,16 @@ def main():
         "extra": [],
         "summary": summary,
         "footer": (f"← switch: {switches}  |  cell = min (runtime you leave on)"
-                   "  |  EAN28 24L@232 · stages 11L@200"),
+                   f"  |  {mix} 24L@232 · stages 11L@200"),
         "accent": ACCENT,
     }
-    save_card(spec_a, OUT / "scenario2.pdf")
+    save_card(spec_a, OUT / f"scenario{scenario}.pdf")
 
     # ---- card B: ON PLAN / LOST EAN50 over bottom-time columns --------------
-    on_rows, on_sur, on_tts, on_lead = bottom_time_table((EAN50, O2))
-    lost_rows, lost_sur, lost_tts, lost_lead = bottom_time_table((O2,))
+    on_rows, on_sur, on_tts, on_lead = bottom_time_table(scenario, (EAN50, O2))
+    lost_rows, lost_sur, lost_tts, lost_lead = bottom_time_table(scenario, (O2,))
     spec_b = {
-        "tag": f"{DEPTH}m EAN28",
+        "tag": f"{DEPTH}m {mix}",
         "subtitle": subtitle,
         "columns": BOTTOM_TIMES,
         "mark": BOTTOM_TIME,
@@ -230,17 +241,19 @@ def main():
                   "rows": lost_rows, "surface": lost_sur, "tts": lost_tts},
         "warnings": planned["warnings"],
         "summary": summary,
-        "footer": ("depth m | cell = leg min / leave-at runtime | "
-                   "EAN28 24L@232 · EAN50 11L@200 · O2 11L@200"),
+        "footer": (f"depth m | cell = leg min / leave-at runtime | "
+                   f"{mix} 24L@232 · EAN50 11L@200 · O2 11L@200"),
         "accent": ACCENT,
     }
-    save_two_table(spec_b, OUT / "scenario2_multideco.pdf")
+    save_two_table(spec_b, OUT / f"scenario{scenario}_multideco.pdf")
 
     # ---- A4 imposition: 4x each card, exact size, crop marks ----------------
-    save_sheet([spec_a], OUT / "scenario2_a4.pdf")
-    _save_two_table_sheet(spec_b, OUT / "scenario2_multideco_a4.pdf")
-    print("wrote scenario2.pdf/.png, scenario2_a4.pdf, "
-          "scenario2_multideco.pdf/.png, scenario2_multideco_a4.pdf")
+    save_sheet([spec_a], OUT / f"scenario{scenario}_a4.pdf")
+    _save_two_table_sheet(spec_b, OUT / f"scenario{scenario}_multideco_a4.pdf")
+    warned = f"  ({len(planned['warnings'])} warning(s) on the card)" if \
+        planned["warnings"] else ""
+    print(f"scenario {scenario}: wrote scenario{scenario}[_multideco][_a4]"
+          f".pdf/.png{warned}")
 
 
 def _switch_rows(plan_json):
@@ -284,6 +297,12 @@ def _save_two_table_sheet(spec, path):
             ha="center", va="center")
     fig.savefig(path, format="pdf")
     plt.close(fig)
+
+
+def main():
+    which = [int(a) for a in sys.argv[1:]] or sorted(SCENARIOS)
+    for scenario in which:
+        build(scenario)
 
 
 if __name__ == "__main__":
