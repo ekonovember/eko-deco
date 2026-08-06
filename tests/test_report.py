@@ -273,3 +273,57 @@ class TestOneNotationEverywhere(unittest.TestCase):
         self.assertIn(f"{math.ceil(tts - 1e-9):g}′", cell)
         self.assertLess(rp.runtime_min(b.total_runtime(segs)),
                         b.total_runtime(segs))
+
+
+class TestGasReportTakesTheWholePlan(unittest.TestCase):
+    """`gas_report` bills at `plan.surface_p` / `plan.msw_per_bar` and treats
+    `plan.deco_gases` as the deco stack.
+
+    Those three used to be optional parameters defaulting to sea-level salt
+    water and an empty stack, and the GUI omitted all three (DECISIONS.md #24).
+    Passing the plan is now the only way to call it, so the same omission would
+    be a TypeError rather than a wrong number on a printed card.
+    """
+
+    EAN50 = b.Gas(0.50)
+
+    def _dive(self, **kw):
+        plan = b.DivePlan(deco_gases=(self.EAN50,), **kw)
+        segs, _ = b.plan_dive(40, 25, b.AIR, plan)
+        return segs, plan
+
+    def _liters(self, rep):
+        return {c.gas: c.liters for c in rep.cylinders}
+
+    def test_deco_sac_bills_the_deco_cylinder(self):
+        segs, plan = self._dive()
+        gases = [("Bottom", b.AIR, 24.0, 232.0), ("Deco", self.EAN50, 11.0, 200.0)]
+        one = rp.gas_report(segs, b.AIR, b.GasPlan(sac=20.0), gases, plan)
+        two = rp.gas_report(segs, b.AIR,
+                            b.GasPlan(sac=20.0, sac_deco=12.0), gases, plan)
+        # The bottom gas is billed the same either way; only the deco mix moves,
+        # and it moves by exactly the ratio of the two rates.
+        self.assertAlmostEqual(self._liters(one)[b.AIR],
+                               self._liters(two)[b.AIR], places=6)
+        self.assertAlmostEqual(self._liters(two)[self.EAN50],
+                               self._liters(one)[self.EAN50] * 12.0 / 20.0,
+                               places=6)
+
+    def test_the_environment_reaches_every_litre(self):
+        """Fresh water at altitude is thinner gas per metre: the same schedule
+        must not be billed at sea-level salt."""
+        gases = [("Bottom", b.AIR, 24.0, 232.0), ("Deco", self.EAN50, 11.0, 200.0)]
+        sea_segs, sea_plan = self._dive()
+        alt_segs, alt_plan = self._dive(
+            surface_p=b.surface_p_at_altitude(1500),
+            msw_per_bar=b.MSW_PER_BAR_FRESH)
+        gp = b.GasPlan(sac=20.0)
+        sea = rp.gas_report(sea_segs, b.AIR, gp, gases, sea_plan)
+        alt = rp.gas_report(alt_segs, b.AIR, gp, gases, alt_plan)
+        self.assertLess(self._liters(alt)[b.AIR], self._liters(sea)[b.AIR])
+        self.assertLess(alt.rock_bottom_l, sea.rock_bottom_l)
+
+    def test_the_plan_is_required(self):
+        segs, _plan = self._dive()
+        with self.assertRaises(TypeError):
+            rp.gas_report(segs, b.AIR, b.GasPlan(sac=20.0), [])  # type: ignore[call-arg]

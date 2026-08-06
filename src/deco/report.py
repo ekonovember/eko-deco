@@ -98,7 +98,11 @@ def wetnotes_rows(segments: Sequence[b.DiveSegment]) -> list[list[str]]:
         # whose first stop is shallower) must still get a row — this card is
         # what the diver takes underwater. A switch *at* a stop already shows
         # on the stop row's gas column.
-        if prev is not None and repr(s.gas) != repr(prev) and s.kind != "stop":
+        # Compared as frozen `Gas` values, never as the rounded label they
+        # print under: EAN21.4 and EAN20.6 both render "Air", and a switch
+        # between two such mixes must still put a row on the card the diver
+        # carries. Same rule as the gas accounting keys by (DECISIONS.md #8).
+        if prev is not None and s.gas != prev and s.kind != "stop":
             emit(f"{s.depth_start:.0f} m", "gas", runtime_min(run), repr(s.gas))
         run += s.duration
         if s.kind == "bottom" and s.duration > 0:
@@ -248,38 +252,40 @@ class GasReport:
 def gas_report(segments: Sequence[b.DiveSegment],
                bottom_gas: b.Gas, gas_plan: b.GasPlan,
                gases: Sequence[tuple[str, b.Gas, float, float]],
-               surface_p: float = ...,
-               msw_per_bar: float = ...,
-               deco_gases: Sequence[b.Gas] = ...) -> GasReport: ...
+               plan: b.DivePlan) -> GasReport: ...
 
 
 @overload
 def gas_report(segments: Sequence[b.DiveSegment],
                bottom_gas: b.Gas, gas_plan: None,
                gases: Sequence[tuple[str, b.Gas, float, float]],
-               surface_p: float = ...,
-               msw_per_bar: float = ...,
-               deco_gases: Sequence[b.Gas] = ...) -> None: ...
+               plan: b.DivePlan) -> None: ...
 
 
 def gas_report(segments: Sequence[b.DiveSegment],
                bottom_gas: b.Gas, gas_plan: b.GasPlan | None,
                gases: Sequence[tuple[str, b.Gas, float, float]],
-               surface_p: float = b.P_ATM,
-               msw_per_bar: float = b.MSW_PER_BAR,
-               deco_gases: Sequence[b.Gas] = ()) -> GasReport | None:
+               plan: b.DivePlan) -> GasReport | None:
     """Per-mix need/have accounting for a planned dive, or None without a
     ``GasPlan``. Mixes appear in the order they are first breathed; same-mix
     cylinders act as one bank (`aggregate_banks`).
 
-    ``deco_gases`` is the plan's designated deco stack: gas breathed off one of
-    those mixes is billed at ``GasPlan.sac_deco`` when the dive sets one.
+    The **whole ``DivePlan``** is required, not the three values this needs off
+    it: gas breathed off ``plan.deco_gases`` is billed at ``GasPlan.sac_deco``,
+    and every litre is measured at ``plan.surface_p`` / ``plan.msw_per_bar``.
+    They used to be optional parameters defaulting to sea-level salt water and
+    an empty deco stack, and the GUI omitted all three — so a deco SAC the user
+    had typed, saved and could see on screen changed no number anywhere, and an
+    altitude dive was billed at sea level. Omitting a plan is now a TypeError
+    rather than a wrong figure (DECISIONS.md #24).
 
     Overloaded so a caller that *has* a ``GasPlan`` (the GUI always does) gets
     a plain ``GasReport`` back and does not have to re-prove non-None at every
     field access."""
     if gas_plan is None:
         return None
+    surface_p, msw_per_bar = plan.surface_p, plan.msw_per_bar
+    deco_gases = plan.deco_gases
     banks = {bk.gas: bk for bk in aggregate_banks(gases)}
     cylinders: list[CylinderNeed] = []
     seen: list[b.Gas] = []
@@ -369,9 +375,7 @@ def compute_plan_result(levels: Sequence[b.Level], bottom_gas: b.Gas,
     result.cns_pct, result.otu = b.cns_otu(segments, plan.surface_p,
                                            plan.msw_per_bar)
     result.warnings = warning_lines(segments, plan, bottom_gas, depth)
-    result.gas = gas_report(segments, bottom_gas, gas_plan, gases,
-                            plan.surface_p, plan.msw_per_bar,
-                            plan.deco_gases)
+    result.gas = gas_report(segments, bottom_gas, gas_plan, gases, plan)
     if contingency is not None:
         tb, ta, db, da = contingency
         result.contingency = b.contingency_schedules(

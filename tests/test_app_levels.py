@@ -207,3 +207,66 @@ class TestGeometryClamp(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(_HAVE_GUI, "Tk/matplotlib GUI not available")
+class TestReadoutAgreesWithTheReportLayer(unittest.TestCase):
+    """What the GUI *renders* must be what `report.compute_plan_result`
+    computed — the same object the CLI renders (DECISIONS.md #8, #24).
+
+    The rest of this module tests the input side: that a widget reaches the
+    `DivePlan` / `GasPlan`. That is not enough, and the gap was not theoretical
+    — `sac_deco` reached the `GasPlan` correctly while the readout re-derived
+    every litre without it, so the deco-rate spinbox changed no number on
+    screen, and the GAS card computed density, CNS/OTU, ppO2 and MOD at
+    sea-level salt on a dive planned for altitude. These pin the output side.
+    """
+
+    def setUp(self):
+        self.root = tk.Tk()
+        self.root.withdraw()
+        self.app = app.DecoApp(self.root)
+
+    def tearDown(self):
+        self.root.destroy()
+
+    def _readout(self) -> str:
+        return self.app.readout.get("1.0", tk.END)
+
+    def _result(self):
+        from deco import report as rp
+
+        return rp.compute_plan_result(
+            self.app._levels(), self.app._bottom_gas(), self.app._make_plan(),
+            self.app._gas_plan(), self.app._gas_rows_raw())
+
+    def test_a_second_deco_rate_changes_the_numbers_on_screen(self):
+        self.app.sac.set("20")
+        self.app.sac_deco.set("0")          # one rate for everything
+        self.app.recompute()
+        one_rate = self._readout()
+        self.app.sac_deco.set("12")         # deco cylinders billed slower
+        self.app.recompute()
+        self.assertNotEqual(one_rate, self._readout())
+
+    def test_the_cards_print_the_dives_own_environment(self):
+        self.app.water.set("fresh")
+        self.app.altitude.set("1500")
+        self.app.recompute()
+        res, text = self._result(), self._readout()
+        self.assertIn(f"{res.density_g_l:.1f} g/L", text)
+        self.assertIn(f"{res.cns_pct:.0f}% / {res.otu:.0f}", text)
+        self.assertIn(f"{res.end_m:.0f} m (O₂ narcotic)", text)
+        self.assertIn(f"{res.surface_ceiling_m:.2f} m", text)
+
+    def test_the_gas_card_prints_the_report_layers_litres(self):
+        self.app.water.set("fresh")
+        self.app.altitude.set("1500")
+        self.app.sac_deco.set("12")
+        self.app.recompute()
+        res, text = self._result(), self._readout()
+        self.assertIsNotNone(res.gas)
+        assert res.gas is not None
+        for c in res.gas.cylinders:
+            if c.tank_l > 0 and c.pressure_bar > 0:
+                self.assertIn(f"{c.bar_used:.0f} bar", text)

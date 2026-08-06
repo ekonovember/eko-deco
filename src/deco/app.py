@@ -971,33 +971,33 @@ class DecoApp:
         )
 
     def recompute(self) -> None:
-        try:
-            levels = self._levels()
-        except ValueError as e:             # e.g. a level start past its runtime
-            self._error(f"Plan error: {e}")
-            return
+        levels = self._levels()
         if not levels:                      # every row mid-edit / emptied
             self._error("⚠ profile incomplete — add a level with a depth and "
                         "runtime")
             return
         gas = self._bottom_gas()
-        depth = b.max_depth(levels)
-        bottom_time = levels[-1].runtime    # runtime at the end of the bottom
 
         try:
             plan = self._make_plan()        # validates the gradient factors
-            segs, tissues = b.plan_multilevel(levels, gas, plan)
+            # ONE PlanResult, exactly as cmd_plan builds one: every figure the
+            # readout prints is read off it rather than re-derived here. The
+            # GUI used to call plan_multilevel itself and then recompute
+            # density, CNS/OTU, END, the final ceiling and the whole gas
+            # accounting inline — at sea-level salt and with no deco stack, so
+            # an altitude or deco-SAC dive showed different numbers from the
+            # CLI on the same config (DECISIONS.md #24).
+            res = rp.compute_plan_result(levels, gas, plan, self._gas_plan(),
+                                         self._gas_rows_raw())
         except (ValueError, RuntimeError) as e:
             self._error(f"Plan error: {e}")
             return
 
-        scenarios = self._lost_gas_scenarios(levels, gas, plan, segs)
-        self._draw(segs, depth, bottom_time, b.ceiling_profile(segs, plan),
-                   levels)
-        self._write_readout(depth, gas, plan, bottom_time, segs, tissues,
-                            scenarios, levels)
-        self._write_runtime(depth, gas, plan, bottom_time, segs, scenarios,
-                            levels)
+        scenarios = self._lost_gas_scenarios(levels, gas, plan, res.segments)
+        self._draw(res.segments, res.max_depth_m, levels[-1].runtime,
+                   b.ceiling_profile(res.segments, plan), levels)
+        self._write_readout(res, scenarios)
+        self._write_runtime(res, scenarios)
         self._plan_ok = True                # a valid plan is now on every surface
 
     def _lost_gas_scenarios(self, levels, gas, plan,
@@ -1028,7 +1028,12 @@ class DecoApp:
 
     @staticmethod
     def _stops_by_depth(segs) -> tuple[dict, float]:
-        """{stop depth (m, int): (leg minutes, runtime leaving)} + total RT.
+        """{stop depth (m): (leg minutes, runtime leaving)} + total RT.
+
+        Keyed on the stop's own depth, not on `round(depth)`: with a 0.5 m
+        stop interval — which the settings panel allows — 6.0 m and 6.5 m
+        would round to the same key and one of the two stops would vanish
+        from the table without a trace.
 
         Both numbers are `buhlmann.StopLeg`'s, the same notation the runtime
         card and the cut table print: the runtime is when you **leave** that
@@ -1037,7 +1042,7 @@ class DecoApp:
         (from leaving the bottom for the first) — so the column adds up to the
         runtimes beside it."""
         legs = b.stop_legs(segs)
-        at = {round(leg.depth): (leg.leg, leg.run) for leg in legs}
+        at = {leg.depth: (leg.leg, leg.run) for leg in legs}
         return at, b.total_runtime(segs)
 
     # -------------------------------------------------------------- draw ----
@@ -1078,7 +1083,8 @@ class DecoApp:
                     xy=(run_t + s.duration / 2, s.depth_start),
                     xytext=(0, -14), textcoords="offset points",
                     ha="center", fontsize=8, color="#d62728")
-            if prev is not None and repr(s.gas) != repr(prev):
+            # By value, not by printed label — two mixes can share one (#8).
+            if prev is not None and s.gas != prev:
                 self.ax.plot([run_t], [s.depth_start], marker="o",
                              color="#2ca02c", markersize=5, zorder=5)
                 self.ax.annotate(repr(s.gas), xy=(run_t, s.depth_start),
@@ -1113,11 +1119,16 @@ class DecoApp:
 
     # ----------------------------------------------------------- readout ----
 
-    def _write_readout(self, depth, gas, plan, bottom_time,
-                       segs, tissues, scenarios=None, levels=None) -> None:
-        ceil_now = b.ceiling_depth(tissues, plan.gf_high)
-        total = b.total_runtime(segs)
-        tts = b.time_to_surface(segs)
+    def _write_readout(self, res: rp.PlanResult, scenarios=None) -> None:
+        """Render one `PlanResult`. Every *computed* figure printed here is a
+        field of `res` or comes from the report layer — this method formats, it
+        does not derive (DECISIONS.md #8, #24)."""
+        depth, gas, plan = res.max_depth_m, res.bottom_gas, res.plan
+        segs, levels = res.segments, res.levels
+        bottom_time = levels[-1].runtime    # runtime at the end of the bottom
+        env = (plan.surface_p, plan.msw_per_bar)
+        ceil_now = res.surface_ceiling_m
+        total, tts = res.total_runtime_min, res.tts_min
         stops = [s for s in segs if s.kind == "stop" and s.duration > 0]
         deco_total = sum(s.duration for s in stops)
         ndl_min = b.ndl(depth, gas, plan)
@@ -1140,7 +1151,7 @@ class DecoApp:
         # --- model warnings (ceiling breach, ppO₂ window, gas density): the
         # SAME wording as the CLI, from the shared report layer, one ⚠ card
         # each — so the two front ends can never word a warning differently. ---
-        for w in rp.warning_lines(segs, plan, gas, depth):
+        for w in res.warnings:
             cards.append([f"⚠  {w}"])
 
         # --- silent-fallback notices: things the planner papered over ---
@@ -1159,26 +1170,30 @@ class DecoApp:
                 cards.append([f"⚠  gas row {i} ({fo2:g}/{fhe:g}) is not a "
                               "valid mix — left out of the plan"])
 
-        density = gas.density(depth)
-        cns, otu = b.cns_otu(segs)
+        density = res.density_g_l
+        cns, otu = res.cns_pct, res.otu
+        # Every ppO₂-derived depth on this card is measured in the dive's own
+        # environment: at 1500 m in fresh water the card used to print a
+        # sea-level density ABOVE the 6.2 g/L ceiling while the ⚠ density
+        # warning — which was environment-aware — stayed silent.
+        hypoxic_below = gas.min_depth(plan.ppo2_min, *env)
 
         # --- GAS ---
         gas_rows = [
             ["fractions", f"O₂ {gas.fO2*100:.0f}% · He {gas.fHe*100:.0f}%"
                           f" · N₂ {gas.fN2*100:.0f}%"],
-            [f"ppO₂ @ {depth:.0f} m", f"{gas.ppo2(depth):.2f} bar"],
+            [f"ppO₂ @ {depth:.0f} m", f"{gas.ppo2(depth, *env):.2f} bar"],
             # A MOD is a limit, so it is truncated, never rounded: EAN30 at
             # ppO2 1.4 is 36.5 m, and printing "37 m" invents half a metre of
             # margin that does not exist.
             [f"MOD @ {plan.ppo2_bottom:g}",
-             f"{math.floor(gas.mod(plan.ppo2_bottom)):.0f} m"],
-            [f"END @ {depth:.0f} m", f"{gas.end(depth):.0f} m (O₂ narcotic)"],
+             f"{math.floor(gas.mod(plan.ppo2_bottom, *env)):.0f} m"],
+            [f"END @ {depth:.0f} m", f"{res.end_m:.0f} m (O₂ narcotic)"],
             [f"density @ {depth:.0f} m", f"{density:.1f} g/L"],
         ]
-        if gas.min_depth(plan.ppo2_min) > 0:
+        if hypoxic_below > 0:
             note = "" if plan.travel_gases else " (need travel gas!)"
-            gas_rows.append(["hypoxic below",
-                             f"{gas.min_depth(plan.ppo2_min):.0f} m{note}"])
+            gas_rows.append(["hypoxic below", f"{hypoxic_below:.0f} m{note}"])
         if plan.travel_gases:
             gas_rows.append(["travel gas",
                              ", ".join(repr(g) for g in plan.travel_gases)])
@@ -1227,7 +1242,8 @@ class DecoApp:
         sac, sac_mult = gp.sac, gp.sac_multiplier
         cylinders = self._banks_by_gas()
         gas_rows_raw = self._gas_rows_raw()
-        rep = rp.gas_report(segs, gas, gp, gas_rows_raw)
+        rep = res.gas
+        assert rep is not None       # recompute always passes a GasPlan
         plan_rows: list[list[str]] = []
         for c in rep.cylinders:
             if c.tank_l <= 0:
@@ -1290,9 +1306,9 @@ class DecoApp:
             depths_u = sorted({d for _l, at, _t in per for d in at}, reverse=True)
             labels = ["All" if l == "all" else l for l, _at, _t in per]
             body = [[f"{depth:.0f} m"] + [f"({run_bottom:d})"] * len(per)]
-            body += [[f"{dm} m"] + ["" if dm not in at
-                                    else f"{at[dm][0]:d} ({at[dm][1]:d})"
-                                    for _l, at, _t in per]
+            body += [[f"{dm:g} m"] + ["" if dm not in at
+                                      else f"{at[dm][0]:d} ({at[dm][1]:d})"
+                                      for _l, at, _t in per]
                      for dm in depths_u]
             # One column per scenario: OK = the normal dive, then each lost
             # deco mix (keep the title short — format_card widens the last
@@ -1312,7 +1328,7 @@ class DecoApp:
                     usage_rows.append([""] * 6)   # blank row between scenarios
                 scen = ("OK" if label == "OK"
                         else "All" if label == "all" else label)
-                srep = rp.gas_report(ss, gas, gp, gas_rows_raw)
+                srep = rp.gas_report(ss, gas, gp, gas_rows_raw, plan)
                 tot_need = tot_emrg = tot_have = 0.0
                 for i, c in enumerate(srep.cylinders):
                     have_l = c.tank_l * c.pressure_bar
@@ -1385,19 +1401,23 @@ class DecoApp:
 
     # ----------------------------------------------------------- runtime ----
 
-    def _write_runtime(self, depth, gas, plan, bottom_time, segs,
-                       scenarios=None, levels=None) -> None:
+    def _write_runtime(self, res: rp.PlanResult, scenarios=None) -> None:
         """Wetnotes runtime as one *standalone* framed card per scenario — the
         main dive, then one per missing-gas contingency — each a full
         depth/stop/run/gas table with its own TTS / RT and the minimum-gas line.
-        Underwater you just switch to the card for the gas you actually have."""
+        Underwater you just switch to the card for the gas you actually have.
+
+        Like `_write_readout`, this renders `res` — it derives nothing."""
+        depth, gas, plan = res.max_depth_m, res.bottom_gas, res.plan
+        segs, levels = res.segments, res.levels
+        bottom_time = levels[-1].runtime
         scen = list(scenarios) if scenarios else [("OK", segs)]
 
         # Minimum ("rock bottom") gas / turn pressure — the same reserve on every
         # card, driven by the back gas cylinder.
-        sac = self._num(self.sac, 20.0, lo=1.0)
         gp = self._gas_plan()
-        rep = rp.gas_report(segs, gas, gp, self._gas_rows_raw())
+        rep = res.gas
+        assert rep is not None       # recompute always passes a GasPlan
         back = self._banks_by_gas().get(gas)
         is_bottom = back is not None and back.role == "Bottom"
         rock_bar = rep.rock_bottom_bar if is_bottom else None
@@ -1433,7 +1453,15 @@ class DecoApp:
             ]
             footers = [min_gas]
             if label != "OK":
-                back_l = b.segment_gas_liters([x for x in ss if x.gas == gas], sac)
+                # The same accounting as every other litre on screen: the
+                # bottom gas's own SAC (a deco cylinder is billed at sac_deco)
+                # and the dive's environment. Computed by hand here once, it
+                # disagreed with the GAS USAGE card above it on any dive that
+                # was not sea-level salt.
+                back_l = b.segment_gas_liters(
+                    [x for x in ss if x.gas == gas],
+                    gp.sac_for(gas, plan.deco_gases),
+                    plan.surface_p, plan.msw_per_bar)
                 footers.append(f"back gas {back_l:.0f} L on {gas!r}")
             card = format_card(title, rows_for(ss),
                                headers=["depth", "stop", "run", "gas"],

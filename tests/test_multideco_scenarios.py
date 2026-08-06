@@ -88,14 +88,20 @@ LOST = {"OK": (EAN50, O2), "50": (O2,), "100": (EAN50,), "both": ()}
 MD_BOTTOM_RMV = 19.25
 
 
-def _plan(scenario: int, decos=(EAN50, O2), **kw) -> list[b.DiveSegment]:
-    """The scenario's 32 m / 40 min square dive. Defaults to eko-deco's own
-    environment; pass surface_p / msw_per_bar for MultiDeco's display one."""
-    _label, gas, gf, *_ = SCENARIOS[scenario]
+def _dive_plan(scenario: int, decos=(EAN50, O2), **kw) -> b.DivePlan:
+    """The scenario's settings as a `DivePlan` — the export states the GF and
+    both rates. Defaults to eko-deco's own environment; pass surface_p /
+    msw_per_bar for MultiDeco's display one."""
+    _label, _gas, gf, *_ = SCENARIOS[scenario]
     kw.setdefault("p_h2o", MD_P_H2O)
-    plan = b.DivePlan(gf_low=gf[0], gf_high=gf[1], descent_rate=8.0,
+    return b.DivePlan(gf_low=gf[0], gf_high=gf[1], descent_rate=8.0,
                       ascent_rate=9.0, deco_gases=tuple(decos), **kw)
-    return b.plan_dive(32, 40, gas, plan)[0]
+
+
+def _plan(scenario: int, decos=(EAN50, O2), **kw) -> list[b.DiveSegment]:
+    """The scenario's 32 m / 40 min square dive."""
+    return b.plan_dive(32, 40, SCENARIOS[scenario][1],
+                       _dive_plan(scenario, decos, **kw))[0]
 
 
 class TestPrintedEnvironment(unittest.TestCase):
@@ -199,7 +205,7 @@ class TestGasVolumes(unittest.TestCase):
         self.assertEqual(gp.sac_for(EAN50, (EAN50, O2)), 16.0)
         self.assertEqual(gp.sac_for(SCENARIOS[2][1], (EAN50, O2)),
                          MD_BOTTOM_RMV)
-        rep = rp.gas_report(segs, SCENARIOS[2][1], gp, [], deco_gases=(EAN50, O2))
+        rep = rp.gas_report(segs, SCENARIOS[2][1], gp, [], _dive_plan(2))
         by_gas = {c.gas: c for c in rep.cylinders}
         self.assertLess(
             abs(by_gas[EAN50].liters - MD_LITERS[2]["OK"][EAN50])
@@ -386,6 +392,4 @@ class TestExportedRuntimeDeltas(unittest.TestCase):
 
 
 if __name__ == "__main__":
-    unittest.main()
-
     unittest.main()

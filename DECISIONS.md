@@ -640,3 +640,49 @@ anyone what the cross-checks show, the honest sentence is:
 > across the two MultiDeco exports remain unexplained — one where our ceiling
 > is demonstrably not the outlier, one where nobody's is established — and
 > MultiDeco cannot be inspected to close either.
+
+---
+
+## #24 — A front end renders a `PlanResult`; it does not derive one
+
+`report.compute_plan_result` is the only place a user-facing figure is
+computed, and both front ends read its fields. `deco.cli` already worked this
+way (#8); `deco.app` did not, and this entry records making it so and the two
+classes of bug that were waiting in the gap.
+
+**What was wrong.** `_write_readout` called `b.plan_multilevel` itself and then
+re-derived density, CNS/OTU, END, the final ceiling, ppO₂, MOD, the hypoxic
+depth and the whole gas accounting inline — all of it at **sea-level salt**,
+because the environment arguments were optional and it passed none:
+
+* a dive planned at 1500 m in fresh water printed **density 6.37 g/L** on the
+  GAS card — above the 6.2 g/L ceiling — while the ⚠ density warning, which
+  *was* environment-aware and saw the true 5.99, stayed silent. Two
+  contradictory statements about the same gas on the same screen, one of them
+  on the safety surface #4 and #5 designate as the only caveat the user gets.
+* `gas_report` was called without `deco_gases`, so `GasPlan.sac_deco` never
+  matched a cylinder: a deco SAC the user had typed, saved and could see in its
+  spinbox changed **no number anywhere**. On 40 m/25 min air + EAN50 at SAC
+  20/12 the GUI showed EAN50 714 L where the CLI showed 428 L, from one config.
+
+**The fix, in the order that matters.** First the API: `gas_report` takes the
+whole `DivePlan` instead of three optional scalars, so omitting the environment
+is a `TypeError` rather than a plausible wrong number. Then the caller:
+`recompute` builds one `PlanResult` and `_write_readout` / `_write_runtime`
+render it. A front end may format — pick a width, truncate a runtime, choose a
+label — but the moment it computes, the two front ends can disagree, and they
+did.
+
+**Rendering is not enough to test.** `tests/test_input_coverage.py` passed on
+`sac_deco` throughout: the value *did* reach the `GasPlan`. #19's "binding, not
+merely present" has to extend to the rendered output, so
+`tests/test_app_levels.TestReadoutAgreesWithTheReportLayer` asserts the
+readout's own strings against a freshly computed `PlanResult` — the numbers on
+screen, not the objects behind them.
+
+**Related, same principle.** A config with no usable gas — `{"gases": []}`, or
+every entry unticked — used to fall back to the default stack and then to
+`AIR`, planning a dive on mixes the file never mentioned. `dive_config`
+now keeps an explicit empty list empty and `to_buhlmann` raises; the CLI turns
+that into exit 2. An absent `gases` key still gets defaults: that is a partial
+hand-edit, not a gasless dive.
