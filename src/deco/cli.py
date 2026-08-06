@@ -623,8 +623,9 @@ def main(argv: list[str] | None = None) -> int:
                              "0.05 is what puts O2 on the 6 m stop.")
     common.add_argument("--p-h2o", type=_positive_float, default=None,
                         help=f"Alveolar water-vapour pressure (bar). Default "
-                             f"{b.P_H2O:g} (Buhlmann); MultiDeco, Shearwater "
-                             "and Baker's GFDECO use 0.0567 (Schreiner).")
+                             f"{b.P_H2O:g} (Schreiner) — what MultiDeco, "
+                             "Shearwater and Baker's GFDECO use; Buhlmann's "
+                             f"own is {b.P_H2O_BUHLMANN:g} (Subsurface's).")
     common.add_argument("--planner", choices=sorted(b.PLANNER_PROFILES),
                         help="Plan in another planner's constants, so the "
                              "schedule can sit beside one of theirs: sets "

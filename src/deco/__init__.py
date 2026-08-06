@@ -22,7 +22,7 @@ Typical use::
 
     from deco import buhlmann as b
 
-    segments, tissues = b.plan_dive(45, 25, b.Gas.trimix(21, 35), b.DivePlan())
+    segments, tissues = b.plan_dive(45, 25, b.Gas(0.21, 0.35), b.DivePlan())
 
 Schedules are computed, not certified: see the ppO₂, ceiling and gas-density
 warnings in :mod:`deco.buhlmann` — the planner plans what it is given and

@@ -100,10 +100,10 @@ import json, subprocess, make_cards as mc
 def plan(**kw):                      # one deco plan --json per column
     ...
 cols = [plan(time=t) for t in (20, 25, 30, 35)]
-left = mc.table_from_plans(f"ON PLAN  {mc.gas_line(cols[1])}", cols, mark=1)
+rows = mc.rows_from_scenarios(cols)   # one column per plan, left to right
 ```
 
-`table_from_plans` reads the `stops` key, which already carries the printed
+`rows_from_scenarios` reads the `stops` key, which already carries the printed
 notation resolved — the **leg** and the **leave-at runtime** — so a cell cannot
 end up holding a raw hold copied out of the CLI's segment table. `gas_line`
 derives the switch depths from the same plan. `tests/test_cards_format.py`

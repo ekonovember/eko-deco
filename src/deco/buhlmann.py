@@ -429,10 +429,13 @@ class DivePlan:
     # continuous decompression schedule can be computed". 1 min is the usual
     # table-friendly value (DECISIONS.md #21).
     min_stop_time: float = 1.0
-    # Alveolar water-vapour pressure (bar). Bühlmann's 0.0627 by default;
-    # Schreiner's 0.0567 is what Baker's GFDECO, MultiDeco and Shearwater use,
-    # and it is a real input to the schedule, so it is a plan field rather than
-    # a module constant nobody can reach (DECISIONS.md #19).
+    # Alveolar water-vapour pressure (bar). Schreiner's 0.0567 by default —
+    # what Baker's GFDECO, MultiDeco and Shearwater use (DECISIONS.md #20);
+    # Bühlmann's own 0.0627 is `P_H2O_BUHLMANN`. It is a real input to the
+    # schedule, so it is a plan field rather than a module constant nobody can
+    # reach (DECISIONS.md #19). The default is bound at import time, so
+    # assigning to the module global afterwards does not reach a DivePlan —
+    # pass `p_h2o=` instead.
     p_h2o: float = P_H2O
     # Travel (descent) gases: breathed while the bottom gas is too hypoxic to use
     # near the surface (e.g. a hypoxic trimix such as 10/70).
@@ -1127,7 +1130,9 @@ class ContingencyCell:
         'min' is the `StopLeg` leg — ascent to the stop plus the hold — the
         same notation as the runtime card and the GUI's stop table, so a cut
         table and a plan for the same profile never print different numbers.
-        The first stop shows its bare hold: nothing precedes it in a cell.
+        That holds for the FIRST stop too: its 'min' is the leg from leaving
+        the bottom, ascent included, not the hold — the same number the card
+        prints, which is the point of sharing the notation (DECISIONS.md #17).
         TTS is rounded UP, unlike a runtime: it is a budget, not a clock."""
         if self.segments is None:
             return "n/a"
