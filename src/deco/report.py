@@ -182,7 +182,7 @@ class CylinderNeed:
     """Need vs have for one breathed mix. ``liters`` is the planned dive at
     the normal SAC; ``liters_emergency`` is the emergency TOTAL — that normal
     need PLUS the rock-bottom reserve held on top for a worst-moment issue
-    (`buhlmann.emergency_gas_liters`, an approximation — see its docstring)."""
+    (`buhlmann.emergency_gas_liters`: the worst level's reserve, not the last level's)."""
     gas: b.Gas
     role: str
     liters: float
@@ -299,8 +299,7 @@ def gas_report(segments: Sequence[b.DiveSegment],
         # Emergency TOTAL for this gas = the normal need plus the rock-bottom
         # reserve held on top for the worst-moment issue (the diver carries
         # both — the reserve is not dipped into on a normal dive).
-        reserve = b.emergency_gas_liters(segments, s.gas, gas_plan,
-                                         surface_p, msw_per_bar, deco_gases)
+        reserve = b.emergency_gas_liters(segments, s.gas, gas_plan, plan)
         liters_e = liters + reserve
         bank = banks.get(s.gas)
         role = (bank.role if bank
@@ -310,8 +309,7 @@ def gas_report(segments: Sequence[b.DiveSegment],
             tank_l=bank.tank_l if bank else 0.0,
             pressure_bar=bank.pressure_bar if bank else 0.0))
     back = banks.get(bottom_gas)
-    rock = b.rock_bottom_liters(segments, bottom_gas, gas_plan,
-                                surface_p, msw_per_bar, deco_gases)
+    rock = b.rock_bottom_liters(segments, bottom_gas, gas_plan, plan)
     return GasReport(plan=gas_plan, cylinders=cylinders, rock_bottom_l=rock,
                      back_tank_l=back.tank_l if back else 0.0,
                      back_pressure_bar=back.pressure_bar if back else 0.0)

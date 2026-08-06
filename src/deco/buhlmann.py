@@ -1251,13 +1251,38 @@ def segment_gas_liters(segments: Iterable[DiveSegment], sac: float,
     return total
 
 
-def emergency_gas_liters(segments: Iterable[DiveSegment], gas: Gas,
-                         gas_plan: GasPlan, surface_p: float = P_ATM,
-                         msw_per_bar: float = MSW_PER_BAR,
-                         deco_gases: Sequence[Gas] = ()) -> float:
+def levels_of(segments: Sequence[DiveSegment]) -> list[Level]:
+    """The bottom phase back as `Level`s — depth + cumulative end runtime.
+
+    A planned dive carries its own profile: every ``bottom`` segment is one
+    level, and the runtime at its end is the elapsed time up to and including
+    it. Used to re-plan the dive as if it had ended at an earlier level
+    (`emergency_gas_liters`)."""
+    levels: list[Level] = []
+    run = 0.0
+    for s in segments[:_bottom_phase_end(segments)]:
+        run += s.duration
+        if s.kind == "bottom":
+            levels.append(Level(s.depth_end, run))
+    return levels
+
+
+def emergency_gas_liters(segments: Sequence[DiveSegment], gas: Gas,
+                         gas_plan: GasPlan, plan: DivePlan) -> float:
     """Litres of `gas` that must be held in reserve ("rock bottom" logic) for a
-    problem striking at the worst moment of the dive — the end of the bottom
-    phase, where tissue loading and therefore the deco obligation are greatest.
+    problem striking at **the worst moment of the dive** — evaluated at the end
+    of every level, not only the last one, and the largest reserve returned.
+
+    On a square dive there is one candidate and this is the end of the bottom.
+    On a deep-first multi-level profile the worst moment is the end of the deep
+    level: tissue loading and the deco obligation are greatest there, and the
+    ascent is longest. Each candidate is costed by re-planning the dive as if
+    it had ended at that level (`levels_of` + `plan_multilevel`), which gives
+    the true tissue state at that moment rather than an estimate of it.
+
+    The environment and the deco stack come from `plan`, like
+    `report.gas_report` — a reserve billed at the wrong water or without the
+    deco stack is a wrong safety number, not a rounding difference.
 
     Only the emergency reserve is counted, not the gas already breathed on the
     way down (that is the normal-SAC `need`, reported separately). From the
@@ -1274,14 +1299,35 @@ def emergency_gas_liters(segments: Iterable[DiveSegment], gas: Gas,
     cylinder, so the rest of the deco is billed once. No switch = shared all
     the way to the surface.
 
-    Known limitation (see DECISIONS.md #7): the emergency ascent
-    is taken from the *last* level, so on a deep-first multilevel profile
-    (a deep level followed by shallower ones) this mixes two moments and can
-    UNDERSTATE the true worst case at the deep level. It is a single-square /
-    shallowest-last approximation, not a guaranteed absolute worst case."""
+    Until 2026-08 this was taken from the *last* level only and documented as
+    an approximation that "can understate the true worst case". It understated
+    it by 48 % on a 45 m → 18 m profile — 14 bar of minimum gas where the deep
+    level needs 27 — which is not a rounding difference on the one number whose
+    whole job is to be the pessimistic one (DECISIONS.md #7)."""
     segs = list(segments)
+    levels = levels_of(segs)
+    if len(levels) > 1:
+        # Each level end is a moment the problem could strike. Re-planning the
+        # truncated dive is exact: levels are contiguous, so cutting the profile
+        # short cannot change the tissue history before the cut.
+        bottom_gas = max(segs[:_bottom_phase_end(segs)],
+                         key=lambda s: max(s.depth_start, s.depth_end)).gas
+        worst = 0.0
+        for k in range(1, len(levels) + 1):
+            cut = (segs if k == len(levels)
+                   else plan_multilevel(levels[:k], bottom_gas, plan)[0])
+            worst = max(worst, _reserve_at(cut, gas, gas_plan, plan))
+        return worst
+    return _reserve_at(segs, gas, gas_plan, plan)
+
+
+def _reserve_at(segs: Sequence[DiveSegment], gas: Gas, gas_plan: GasPlan,
+                plan: DivePlan) -> float:
+    """The reserve for a problem at the end of THIS dive's bottom phase — one
+    candidate moment. `emergency_gas_liters` picks the worst of them."""
     be = _bottom_phase_end(segs)
-    sac_e = gas_plan.sac_for(gas, deco_gases) * gas_plan.sac_multiplier
+    surface_p, msw_per_bar = plan.surface_p, plan.msw_per_bar
+    sac_e = gas_plan.sac_for(gas, plan.deco_gases) * gas_plan.sac_multiplier
     asc = segs[be:]
     total = 0.0
     if asc:
@@ -1306,12 +1352,11 @@ def emergency_gas_liters(segments: Iterable[DiveSegment], gas: Gas,
     return total
 
 
-def rock_bottom_liters(segments: Iterable[DiveSegment], bottom_gas: Gas,
-                       gas_plan: GasPlan, surface_p: float = P_ATM,
-                       msw_per_bar: float = MSW_PER_BAR,
-                       deco_gases: Sequence[Gas] = ()) -> float:
+def rock_bottom_liters(segments: Sequence[DiveSegment], bottom_gas: Gas,
+                       gas_plan: GasPlan, plan: DivePlan) -> float:
     """Minimum gas ("rock bottom") in litres of the back/bottom gas: the reserve
-    needed to survive a problem at the worst moment (end of the bottom phase)
+    needed to survive a problem at the worst moment (the end of the worst level,
+    see `emergency_gas_liters`)
     and follow the **real ascent + deco** on the bottom gas — up to the next gas
     switch if there is one, otherwise all the way to the surface through every
     deco stop — at the emergency SAC (`sac * sac_multiplier`), the shared
@@ -1323,5 +1368,4 @@ def rock_bottom_liters(segments: Iterable[DiveSegment], bottom_gas: Gas,
     practice — the diver is on the deco gas after that), so the figure stays a
     realistic back-gas reserve rather than the whole schedule billed to back
     gas."""
-    return emergency_gas_liters(segments, bottom_gas, gas_plan,
-                                surface_p, msw_per_bar, deco_gases)
+    return emergency_gas_liters(segments, bottom_gas, gas_plan, plan)

@@ -83,6 +83,14 @@ CNS/OTU and END are **load-bearing**. Every front end and every output path
 must surface them. A new renderer that drops the warnings is a safety
 regression, not a cosmetic one. See also #5.
 
+**Including the printed card**, which for a long time was the one output that
+did not. The GUI's runtime card and `cards/make_cards.py` rendered a schedule
+with no warnings on it — on the single artifact that leaves the screen and goes
+in the water, and the one with no disclaimer (#5). Both carry them now, and the
+card spec's `warnings` key is **required**: `draw_card` raises `KeyError`
+rather than silently printing a schedule with no caveat, so the next renderer
+cannot repeat it by omission. Pass `[]` when the plan really is clean.
+
 ---
 
 ## #5 — No printed disclaimer
@@ -133,12 +141,19 @@ that switch each diver is back on their own cylinder.
 at the worst moment of the dive. Billing the entire decompression to back gas
 would produce reserves of hundreds of bar and be useless.
 
-**Known limitation.** The emergency ascent is taken from the **last** level. On
-a deep-first multi-level profile (a deep level followed by shallower ones) that
-mixes two moments and can **understate** the true worst case at the deep level.
-It is a single-square / shallowest-last approximation, not a guaranteed
-absolute worst case, and it is documented as such in
-`emergency_gas_liters`' docstring.
+**The worst moment is found, not assumed.** Every level end is a candidate:
+the dive is re-planned as if it had ended at each level (`levels_of` +
+`plan_multilevel`, exact because levels are contiguous, so cutting the profile
+short cannot change the tissue history before the cut) and the largest reserve
+wins. A square dive has one candidate and its figure is unchanged.
+
+*This used to take the ascent from the **last** level, with a "Known
+limitation" paragraph here saying it "can understate the true worst case". It
+understated it by 48 % on 45 m for 25 min followed by 18 m to 45 — 14 bar of
+minimum gas where the deep level needs 27. An approximation whose error
+direction is optimistic does not belong in the one number whose entire job is
+to be pessimistic, and writing the caveat down is not the same as being right.
+Fixed 2026-08-06; `tests/test_buhlmann.TestReserveWorstMoment` pins it.*
 
 **Consequence.** The front-end emergency column is `need + emergency_gas_liters`
 — the reserve held *on top of* the normal need — while `rock_bottom_liters` is
@@ -173,6 +188,18 @@ is semantically corrupt cannot slip through as a silent default.
 
 **Why.** Silently planning a *different dive* than the one asked for is the
 worst possible failure mode for this tool.
+
+**What "semantically invalid" covers**, after an audit found the boundary was
+only as strict as the shapes it happened to inspect. A mistyped key used to be
+an *absent* key, and an absent key got a default: `{"depth": 40}` normalized to
+the default **30 m**. An unrecognised gas role was coerced to `Deco` — so a
+mistyped `Bottom` left the dive with no bottom gas and `to_buhlmann` took the
+first mix in the list instead, changing both the bottom gas and the deco stack
+from one letter. And `o2: 0.32`, a fraction typed where percent belongs, became
+a 0.32 % hypoxic mix the planner would schedule. Unknown keys, unknown roles,
+missing level fields and out-of-range mixes are all refused now (#24). The
+coercion had a test asserting it was intended; that test is now the regression
+test for refusing.
 
 ---
 
@@ -323,13 +350,19 @@ cell (`ContingencyCell.text`).
 * **TTS rounds UP** while runtimes truncate. Deliberately opposite directions:
   a runtime is a clock reading, a TTS is a budget you must not underestimate.
 
-**Why the leg and not the hold.** The planner produces whole-minute holds with
-fractional ascents on top, so the runtime advances further than the hold does —
-a 3-minute hold at 3 m moves the clock by 3 ⅓. Printing the hold beside the
-runtime reads as a contradiction underwater ("3 minutes" against a clock that
-advanced 4), and a diver adding the column up surfaces one ascent early on
-every stop. MultiDeco prints the leg for the same reason, verified against both
-exports in `examples/`.
+**Why the leg and not the hold.** Because the leg is the only quantity that
+reconciles with the runtime beside it. Whatever the planner's discretisation,
+`leg` sums to `run` down the column and `hold` does not, so a diver adding the
+STOP column up with holds surfaces one ascent early per stop. MultiDeco prints
+the leg for the same reason, verified against both exports in `examples/`.
+
+*This paragraph used to argue it from "the planner produces whole-minute holds
+with fractional ascents on top". That stopped being true at #21, which inverted
+it — the legs are whole minutes now and the holds are the fractional part
+(0.44, 1.67, 2.67 …). The conclusion was right for a reason that had expired
+underneath it, which is the failure mode this log is supposed to prevent, so:
+when an entry changes the mechanics another entry reasons about, go and fix the
+other entry.*
 
 **Why measured from the previous stop, not from the previous printed row.**
 The first version measured each leg against whatever row the renderer happened
@@ -672,6 +705,16 @@ is a `TypeError` rather than a plausible wrong number. Then the caller:
 render it. A front end may format — pick a width, truncate a runtime, choose a
 label — but the moment it computes, the two front ends can disagree, and they
 did.
+
+**And the God function is gone.** `_write_readout` was 252 lines with nine
+parameters, and routing a `PlanResult` into the top of it would have left the
+next person the same invitation to derive one more number inline. It is now a
+list of card builders (`_card_header`, `_cards_warnings`, `_cards_stops`,
+`_card_gas`, `_card_dive`, `_card_environment`, `_card_gas_plan`), each taking
+`res` and returning lines, with the method itself deciding only the ORDER. It
+holds no arithmetic, which is what makes #8 true by construction instead of by
+everyone remembering. (The warning cards moved above the stops table while
+doing it: on the tab whose job is the safety surface, they go first.)
 
 **Rendering is not enough to test.** `tests/test_input_coverage.py` passed on
 `sac_deco` throughout: the value *did* reach the `GasPlan`. #19's "binding, not

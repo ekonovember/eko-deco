@@ -1,6 +1,7 @@
 """Sanity checks for dive_config (the shared JSON config)."""
 from __future__ import annotations
 
+import json
 import os
 import tempfile
 import unittest
@@ -229,14 +230,43 @@ class TestDiveConfig(unittest.TestCase):
                          {"time_before": 0, "time_after": 0,
                           "depth_before": 0, "depth_after": 2})
 
-    def test_invalid_role_coerced_to_deco(self):
-        cfg = dc.default_config()
-        cfg["gases"] = [{"role": "Nonsense", "o2": 32, "he": 0, "tank_l": 11}]
+    def test_invalid_role_is_refused_not_coerced(self):
+        """This used to coerce an unrecognised role to "Deco" — and was tested
+        for it. A mistyped "Bottom" therefore left the dive with no bottom gas
+        at all, which `to_buhlmann` then papered over by taking the first mix in
+        the list, so a one-letter typo silently changed both the bottom gas and
+        the deco stack. Refusing is what DECISIONS.md #9 asks for; #24 records
+        the change."""
+        with self.assertRaises(ValueError) as e:
+            dc.normalize({"gases": [{"role": "Bottum", "o2": 32, "he": 0}]})
+        self.assertIn("Bottum", str(e.exception))
+        # and a hand-edited file carrying it fails the strict load the CLI uses
         with tempfile.TemporaryDirectory() as d:
             path = os.path.join(d, "c.json")
-            dc.save(cfg, path)
-            back = dc.load(path)
-        self.assertEqual(back["gases"][0]["role"], "Deco")
+            with open(path, "w") as f:
+                json.dump({"levels": [{"depth_m": 40, "runtime_min": 25}],
+                           "gases": [{"role": "Bottum", "o2": 32}]}, f)
+            with self.assertRaises(ValueError):
+                dc.load(path, strict=True)
+
+    def test_a_mistyped_level_key_is_refused(self):
+        """`{"depth": 40}` used to normalize to the DEFAULT 30 m — the typo'd
+        key was simply absent, so the default filled in and the dive planned
+        10 m shallower than the file said (#24)."""
+        with self.assertRaises(ValueError) as e:
+            dc.normalize({"levels": [{"depth": 40, "runtime_min": 25}]})
+        self.assertIn("depth", str(e.exception))
+        with self.assertRaises(ValueError):
+            dc.normalize({"levels": [{"depth_m": 40}]})       # missing runtime
+
+    def test_a_fraction_where_a_percentage_belongs_is_refused(self):
+        """o2 0.32 is EAN32 typed as a fraction; taken literally it is a
+        0.32 % hypoxic mix, and the planner would happily schedule it."""
+        with self.assertRaises(ValueError) as e:
+            dc.normalize({"gases": [{"role": "Bottom", "o2": 0.32}]})
+        self.assertIn("percentage", str(e.exception))
+        with self.assertRaises(ValueError):
+            dc.normalize({"gases": [{"role": "Bottom", "o2": 21, "he": 90}]})
 
     def test_legacy_level_role_gas_is_dropped_on_migration(self):
         # The old "Level" role (a mix breathed only on a level that named it)

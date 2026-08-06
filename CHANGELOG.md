@@ -120,6 +120,34 @@ pre-1.0, so anything may still move.
   progressively from Bühlmann's published table, reaching −0.162 at #16**, so
   it is used as a nitrogen oracle only. All three findings are pinned.
 
+### Fixed — an audit of the decision log, where it documented instead of fixing
+
+- **Minimum gas was up to 48 % low on a deep-first multi-level dive.** The
+  emergency reserve was taken from the *last* level, with a "Known limitation"
+  paragraph in [DECISIONS.md #7](DECISIONS.md) saying it "can understate the
+  true worst case". On 45 m/25 min → 18 m/45 min it reported **14 bar** where
+  the deep level needs **27**. `emergency_gas_liters` now evaluates every level
+  end — re-planning the dive as if it had ended there — and returns the worst.
+  Square dives are unchanged. It takes the `DivePlan` now, like `gas_report`.
+- **The printed runtime card carried no warnings.** The GUI's wetnotes card and
+  `cards/make_cards.py` rendered a schedule with nothing on it, on the one
+  artifact that goes in the water and the one with no disclaimer
+  ([#4, #5](DECISIONS.md)). Both print them now, per lost-gas scenario, and the
+  card spec's `warnings` key is **required** — `draw_card` raises rather than
+  print a caveat-free schedule.
+- **Config typos silently changed the dive.** `{"depth": 40}` became the
+  default 30 m; an unrecognised gas role was coerced to `Deco`, so a mistyped
+  `Bottom` changed both the bottom gas and the deco stack; `o2: 0.32` became a
+  0.32 % hypoxic mix. Unknown keys, unknown roles, missing level fields and
+  out-of-range mixes are refused ([#9](DECISIONS.md)). *The coercion had a test
+  asserting it was intended — that test now asserts the refusal.*
+- `deco.app._write_readout` (252 lines, 9 parameters) is a list of small card
+  builders that each take a `PlanResult` and return lines; the method decides
+  card order and holds no arithmetic. Warning cards moved above the stops table.
+- [DECISIONS.md #17](DECISIONS.md)'s rationale had been false since #21 — it
+  argued from "whole-minute holds with fractional ascents on top", which #21
+  inverted. The conclusion was right for an expired reason.
+
 ### Fixed — the GUI was deriving numbers instead of rendering them
 
 - **The GUI ignored the deco SAC entirely.** `report.gas_report` was called

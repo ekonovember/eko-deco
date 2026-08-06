@@ -189,6 +189,14 @@ def draw_card(pen, spec):
     y = runtime_table(pen, 2.4, H - 10.6, spec["columns"], spec["rows"],
                       width=W - 4.8)
     y -= 0.6
+    # `warnings` is REQUIRED, not `spec.get(...)`: this card carries no printed
+    # disclaimer, so the model's warnings are the only caveat on it, and a
+    # renderer that forgets them is a safety regression rather than a cosmetic
+    # one (DECISIONS.md #4, #5). A KeyError here is the point — pass [] when
+    # the plan really is clean.
+    for w in spec["warnings"]:
+        pen.txt(2.8, y, f"! {w}", size=3.6, weight="bold", color=RED)
+        y -= 2.9
     for s_, size, weight, color in spec.get("extra", []):
         pen.txt(2.8, y, s_, size=size, weight=weight, color=color)
         y -= size * 0.64 + 0.6
@@ -324,6 +332,8 @@ def gas_line(plan):
 # real `deco.cli` output (via rows_from_scenarios) before printing anything you
 # dive.
 #
+# "warnings" is required (see draw_card): the model's ppO2 / ceiling / density
+# warnings for THIS plan, as plain strings; [] when the plan is clean.
 # "columns" are the scenario headings; "rows" are (depth label, cells, switch)
 # from rows_from_scenarios - a cell is (leg_minutes, runtime), (None, runtime)
 # for the bottom row, or None where that column never reaches the depth.
@@ -337,6 +347,7 @@ EXAMPLE = {
         ("6",  [(0, 0), (0, 0), (0, 0), (0, 0)], "<deco gas>"),
         ("3",  [(0, 0), (0, 0), (0, 0), (0, 0)], None),
     ],
+    "warnings": ["<the plan's warnings go here - [] only when there are none>"],
     "extra": [],
     "summary": "MIN GAS -- b (2 div --)   TURN -- b (2 div --)   CNS --%",
     "footer": "depth m | cell = min (runtime you leave on) | placeholder - not a plan",

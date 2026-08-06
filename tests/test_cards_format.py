@@ -133,16 +133,43 @@ class TestCardMatchesThePlanner(unittest.TestCase):
         self.assertLessEqual(used, mc.TABLE_H + 1e-9)
         self.assertGreater(size, 3.6, "type would be too small to read wet")
 
+    def _spec(self, **kw):
+        spec = {"tag": "T", "subtitle": "s", "columns": ["OK"],
+                "rows": mc.rows_from_scenarios([self.plan]),
+                "warnings": self.plan["warnings"],
+                "extra": [], "summary": "x", "footer": "y", "accent": "#222"}
+        spec.update(kw)
+        return spec
+
     def test_it_renders(self):
         import tempfile
         from pathlib import Path
-        spec = {"tag": "T", "subtitle": "s", "columns": ["OK"],
-                "rows": mc.rows_from_scenarios([self.plan]),
-                "extra": [], "summary": "x", "footer": "y", "accent": "#222"}
         with tempfile.TemporaryDirectory() as d:
             out = Path(d) / "c.pdf"
-            mc.save_card(spec, out)
+            mc.save_card(self._spec(), out)
             self.assertTrue(out.exists() and out.stat().st_size > 0)
+
+    def test_a_card_cannot_be_rendered_without_its_warnings(self):
+        """The printed card carries no disclaimer, so the model's warnings are
+        the only caveat on it (DECISIONS.md #4, #5). `warnings` is therefore a
+        required spec key, not an optional one: a renderer that forgets it
+        fails loudly instead of printing a schedule with nothing on it. Pass []
+        when the plan really is clean.
+        """
+        import tempfile
+        from pathlib import Path
+        spec = self._spec()
+        del spec["warnings"]
+        with tempfile.TemporaryDirectory() as d, self.assertRaises(KeyError):
+            mc.save_card(spec, Path(d) / "c.pdf")
+
+    def test_the_planners_warnings_reach_the_card(self):
+        """A dive the model complains about must print the complaint. 45 m on
+        air is over the gas-density ceiling; the card says so, in the planner's
+        own wording."""
+        deep = _plan_json("--depth", "45", "--time", "25", "--gas", "air")
+        self.assertTrue(deep["warnings"], "expected a density warning")
+        self.assertTrue(any("density" in w for w in deep["warnings"]))
 
 
 if __name__ == "__main__":

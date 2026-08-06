@@ -65,7 +65,7 @@ class TestGasReport(unittest.TestCase):
         for c in res.gas.cylinders:
             need = b.segment_gas_liters(
                 [s for s in segs if s.gas == c.gas], gp.sac)
-            reserve = b.emergency_gas_liters(segs, c.gas, gp)
+            reserve = b.emergency_gas_liters(segs, c.gas, gp, res.plan)
             self.assertAlmostEqual(c.liters_emergency, need + reserve, places=6)
 
     def test_short_flag_on_undersized_tank(self):

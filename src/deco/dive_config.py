@@ -248,20 +248,61 @@ def _merged(cfg: dict) -> dict:
     return base
 
 
+#: What a level and a gas may contain. Anything else is a typo, and a typo in a
+#: dive plan is a different dive (#9, #24): `{"depth": 40}` used to normalize to
+#: the default 30 m because `depth_m` was "missing", and a role of "Bottum"
+#: became a Deco gas — both silently, both exit 0.
+LEVEL_KEYS = ("depth_m", "runtime_min")
+LEVEL_LEGACY = ("gas", "gas_id", "start_min")
+GAS_KEYS = ("role", "o2", "he", "tank_l", "pressure_bar", "enabled")
+GAS_LEGACY = ("id",)
+
+
+def _reject_unknown(d: dict, known: tuple[str, ...], legacy: tuple[str, ...],
+                    what: str) -> None:
+    unknown = sorted(set(d) - set(known) - set(legacy))
+    if unknown:
+        raise ValueError(
+            f"{what} has unknown key(s) {', '.join(unknown)} — expected "
+            f"{', '.join(known)}. A mistyped key would otherwise be filled in "
+            f"with a default and plan a different dive")
+
+
 def _merge_level(l: dict) -> dict:
     """One level: depth + cumulative end-runtime, nothing else. Legacy keys are
     dropped — a per-level gas reference (``gas_id`` or an inline ``{"o2", "he"}``
     mix), because gas is chosen automatically by role now, and ``start_min``,
     because levels are contiguous and the transit is part of the runtime (no
-    planner has an arrival time; see the module docstring)."""
-    return {"depth_m": float(l.get("depth_m", 30.0)),
-            "runtime_min": float(l.get("runtime_min", 20.0))}
+    planner has an arrival time; see the module docstring).
+
+    Both fields are required: a level is two numbers, and defaulting either of
+    them turns a typo into a dive nobody described (#24)."""
+    _reject_unknown(l, LEVEL_KEYS, LEVEL_LEGACY, "level")
+    missing = [k for k in LEVEL_KEYS if k not in l]
+    if missing:
+        raise ValueError(f"level is missing {', '.join(missing)}")
+    return {"depth_m": float(l["depth_m"]),
+            "runtime_min": float(l["runtime_min"])}
 
 
 def _merge_gas(g: dict) -> dict:
+    """One cylinder. The role must be a real one and the mix must be in
+    **percent**: a role that is not recognised used to become "Deco", so a
+    mistyped `Bottom` quietly left the dive with no bottom gas, and an `o2` of
+    0.32 (a fraction typed where a percentage belongs) became a 0.32 % hypoxic
+    mix (#24)."""
+    _reject_unknown(g, GAS_KEYS, GAS_LEGACY, "gas")
     role = g.get("role", "Deco")
-    if role not in ROLES:
-        role = "Deco"
+    if role not in (*ROLES, "Level"):       # "Level" is legacy, dropped by _merged
+        raise ValueError(f"gas has unknown role {role!r} — expected one of "
+                         f"{', '.join(ROLES)}")
+    o2, he = float(g.get("o2", 21)), float(g.get("he", 0))
+    if not 1.0 <= o2 <= 100.0:
+        raise ValueError(f"gas o2 is {o2:g} — expected a percentage, 1..100 "
+                         f"(0.32 means 0.32 % oxygen, not EAN32)")
+    if not 0.0 <= he <= 100.0 or o2 + he > 100.0:
+        raise ValueError(f"gas {o2:g}/{he:g} is not a mix — O2 + He must be "
+                         f"0..100 %")
     return {"role": role, "o2": g.get("o2", 21), "he": g.get("he", 0),
             "tank_l": g.get("tank_l", 0), "pressure_bar": g.get("pressure_bar", 232),
             "enabled": bool(g.get("enabled", True))}
