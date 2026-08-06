@@ -306,5 +306,86 @@ class TestPrintingConventions(unittest.TestCase):
         self.assertEqual(legs[-1].run, run)
 
 
+#: Every stop runtime both exports print, from their own "utrata gazu" (lost
+#: gas) tables: {scenario: {column: {depth_m: printed runtime}}}. Columns are
+#: MultiDeco's own — OK / lost EAN50 / lost O2 / both lost.
+MD_RUNTIMES = {
+    1: {"OK":   {9: 43, 6: 44, 3: 48},
+        "-50":  {9: 43, 6: 44, 3: 48},
+        "-O2":  {9: 43, 6: 44, 3: 50},
+        "BOTH": {9: 43, 6: 45, 3: 52}},
+    2: {"OK":   {18: 42, 15: 44, 12: 46, 9: 51, 6: 56, 3: 66},
+        "-50":  {18: 43, 15: 45, 12: 49, 9: 57, 6: 63, 3: 74},
+        "-O2":  {18: 42, 15: 44, 12: 46, 9: 51, 6: 59, 3: 79},
+        "BOTH": {18: 43, 15: 45, 12: 49, 9: 57, 6: 72, 3: 108}},
+}
+#: Which deco gases each column still has.
+MD_COLUMNS = {"OK": (EAN50, O2), "-50": (O2,), "-O2": (EAN50,), "BOTH": ()}
+#: The cells where we do NOT print MultiDeco's runtime, and by how much.
+#: 11 of 36; every other cell must agree exactly. See DECISIONS.md #23 — these
+#: are recorded, not tolerated: closing one is a finding, opening a new one is
+#: a regression, and neither may happen silently.
+KNOWN_DELTAS = {
+    # scenario 1: the last stop only. MultiDeco holds 3:40, we hold 3:00.
+    (1, "OK", 3): -1, (1, "-O2", 3): -1, (1, "BOTH", 3): -1,
+    # scenario 2: the 12 m row in every column — our ceiling is 5.4 mbar from
+    # the 9 m step there, and decodaitengu puts our arithmetic within
+    # 0.03 mbar, so the difference is MultiDeco's (unattributed: not a
+    # compartment, see DECISIONS.md #23).
+    (2, "OK", 12): +1, (2, "-50", 12): +1, (2, "-O2", 12): +1,
+    (2, "BOTH", 12): +1,
+    # scenario 2's two long lost-gas columns, where that row's minute is then
+    # traded back over 20-45 min of extra deco on the last two stops.
+    (2, "-O2", 6): +1, (2, "-O2", 3): -1,
+    (2, "BOTH", 6): +1, (2, "BOTH", 3): -2,
+}
+
+
+class TestExportedRuntimeDeltas(unittest.TestCase):
+    """Every stop runtime of both exports, all four lost-gas columns, against
+    ours — 36 cells, of which **25 are identical** and 11 are the recorded
+    deltas above.
+
+    The golden fixture compares the same dives with a 2 min per-stop tolerance,
+    which is the right shape for "did the schedule change materially" and the
+    wrong one for this question: a one-minute drift, in either direction,
+    passes it silently. Here the delta itself is the assertion, so agreement
+    can only improve or regress *on purpose* (DECISIONS.md #18, #23).
+    """
+
+    def test_every_stop_runtime(self):
+        for scenario, columns in MD_RUNTIMES.items():
+            for column, printed in columns.items():
+                segs = _plan(scenario, decos=MD_COLUMNS[column])
+                runs = {round(l.depth): l.run for l in b.stop_legs(segs)}
+                with self.subTest(scenario=scenario, column=column):
+                    # no stop of ours that MultiDeco does not also print, and
+                    # none of theirs missing: the delta map assumes one grid.
+                    self.assertEqual(sorted(runs), sorted(printed))
+                for depth, md in printed.items():
+                    want = md + KNOWN_DELTAS.get((scenario, column, depth), 0)
+                    with self.subTest(scenario=scenario, column=column,
+                                      depth=depth):
+                        self.assertEqual(runs[depth], want)
+
+    def test_the_agreement_is_25_of_36(self):
+        """The headline number, so it cannot quietly become 24."""
+        cells = sum(len(c) for s in MD_RUNTIMES.values() for c in s.values())
+        self.assertEqual(cells, 36)
+        self.assertEqual(cells - len(KNOWN_DELTAS), 25)
+
+    def test_the_two_dives_disagree_in_opposite_directions(self):
+        """Why no bias is corrected: scenario 1 surfaces a minute early,
+        scenario 2 a minute late at 12 m and level by 9 m. A single-signed
+        error would be a constant to find; these are two mechanisms."""
+        signs = {scenario: {d for (s, _c, _d), d in KNOWN_DELTAS.items()
+                            if s == scenario}
+                 for scenario in MD_RUNTIMES}
+        self.assertEqual(signs[1], {-1})
+        self.assertEqual(signs[2], {+1, -1, -2})
+
+
 if __name__ == "__main__":
+    unittest.main()
+
     unittest.main()

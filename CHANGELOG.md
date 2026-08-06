@@ -120,6 +120,25 @@ pre-1.0, so anything may still move.
   progressively from Bühlmann's published table, reaching −0.162 at #16**, so
   it is used as a nitrogen oracle only. All three findings are pinned.
 
+### Documented — the limits of the cross-checks
+
+- **[DECISIONS.md #23](DECISIONS.md) states what the four oracles establish and
+  what they do not.** They support "on this observable, eko-deco is not the
+  outlier"; they do not support "eko-deco is correct" — the GFDECO agreement is
+  measured with our N₂ `a` table patched to ZH-L16B and surface 1.000 bar, and
+  the decodaitengu ceiling with compartment 1 aligned to its 4.0 min variant, so
+  both need their qualifiers carried. There is no four-way match on everything:
+  compartment 1 splits two–two, decodaitengu's slow helium three–one, and
+  Subsurface's anchor and scheduler differ by design. The two open MultiDeco
+  rows are recorded as *unattributed* — the 12 m one is not a compartment, and
+  the compartment-3 hypothesis it retired is named so nobody re-opens it.
+- `tests/test_multideco_scenarios.TestExportedRuntimeDeltas` pins **all 36 stop
+  runtimes** of both exports across all four lost-gas columns: 25 identical, 11
+  recorded deltas. The golden fixture's 2 min per-stop tolerance lets a
+  one-minute drift pass silently; this asserts the delta itself, so agreement
+  can only change deliberately.
+
+
 ### Changed — the planner's stop discretisation
 
 - **eko-deco now uses Erik Baker's own stop rule** ([DECISIONS.md

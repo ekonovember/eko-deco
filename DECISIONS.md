@@ -574,3 +574,69 @@ in the tree.
 **Skipping.** They skip exactly like g++/gfortran do when absent, so the
 stdlib-only promise holds. CI installs them and the "did an oracle silently
 skip?" guard now covers all four.
+
+---
+
+## #23 — What the cross-checks establish, and what they do not
+
+Four oracles (#22) support one kind of claim and not another:
+
+> **They support:** "on this observable, eko-deco is not the outlier."
+> **They do not support:** "eko-deco is correct."
+
+Every agreement below is measured on a *named observable*, several of them with
+constants deliberately aligned first. State results that way, and resist
+compressing them into "the libraries agree with us except MultiDeco" — that
+sentence is wrong in three separate places, and it was written once already.
+
+**What each check actually covers, and what it patches to get there.**
+
+| Oracle | Pins | Aligned first |
+|---|---|---|
+| Subsurface (C++) | tissue loading, M-values, the GF line, NDLs — to machine precision | nothing; the schedule-level bands are wide *by design* (#3, #21) |
+| Baker GFDECO (Fortran) | the **scheduler**: TTS 0.00 min on all seven cases | our N₂ `a` table → ZH-L16**B**, `surface_p` → 1.000 bar |
+| decotengu | the coefficient tables; schedules only loosely (stop depths a superset, totals within 6 min) | its engine binary-searches the exact hold — a different discretisation |
+| decodaitengu | the **ceiling**, to 0.03 mbar, **nitrogen only** | our compartment 1 → its 4.0 min "1a" variant |
+
+So the GFDECO number validates the *planner*, not the tables, and the
+decodaitengu number is a nitrogen ceiling with compartment 1 held equal. Quote
+them with those qualifiers attached or they overstate.
+
+**Nobody is a four-way match.** Three splits exist among the oracles
+themselves, none of which involves MultiDeco:
+
+* **compartment 1** — 5.0 min "1b" for us, Subsurface and GFDECO; 4.0 min "1a"
+  for both Python libraries. Two–two.
+* **slow-compartment helium `a`** — decodaitengu drifts to −0.162 at #16 while
+  the other three share Bühlmann's table. Three–one.
+* **anchor and scheduler** — Subsurface re-anchors the GF line dynamically and
+  trial-ascends past stops, so our first stop runs up to two intervals deeper
+  and our TTS 4.7 min shorter on the deepest trimix case. Deliberate (#2, #3).
+
+**The two MultiDeco rows are open, and one of them is not attributed at all.**
+Against the two real exports, 25 of 36 stop runtimes are identical
+(`tests/test_multideco_scenarios.TestExportedRuntimeDeltas` pins every cell).
+The residual is two distinct things:
+
+* **scenario 2, the 12 m row (+1 min, all four columns).** After the 1:40 hold
+  our GF ceiling is 5.4 mbar from the 9 m step, where decodaitengu is 0.03 mbar
+  from ours — 180× closer. That establishes *our ceiling arithmetic is not what
+  is off there*. It does **not** identify a compartment: the compartment-3
+  `a`-value was the standing hypothesis and this evidence is what retired it.
+  MultiDeco's internals are unpublished, so the cause stays unattributed.
+* **scenario 1, the 3 m row (−1 min).** MultiDeco holds 3:40 where we hold
+  3:00 — stop discretisation, a different mechanism, in the opposite direction,
+  and with nobody established as right. The opposite signs (−0.77 min on one
+  dive, +0.23 on the other) are also the evidence that there is no bias to
+  correct.
+
+**Consequence.** Do not fit a coefficient to close either row — that is exactly
+the move #22 was added to prevent. If a future comparison closes one, the delta
+map in the test changes and the reason belongs here. And when reporting to
+anyone what the cross-checks show, the honest sentence is:
+
+> On the observables we can compare, eko-deco agrees with three independent
+> implementations within a set of differences enumerated by name. Two rows
+> across the two MultiDeco exports remain unexplained — one where our ceiling
+> is demonstrably not the outlier, one where nobody's is established — and
+> MultiDeco cannot be inspected to close either.
