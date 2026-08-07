@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import math
 import unittest
+from typing import ClassVar
 
 from deco import buhlmann as b
 from deco import report as rp
@@ -327,3 +328,173 @@ class TestGasReportTakesTheWholePlan(unittest.TestCase):
         segs, _plan = self._dive()
         with self.assertRaises(TypeError):
             rp.gas_report(segs, b.AIR, b.GasPlan(sac=20.0), [])  # type: ignore[call-arg]
+
+
+class TestBackupLine(unittest.TestCase):
+    """The one-line schedule is built from `stop_legs`, so it must agree with
+    the card that comes off the same source."""
+
+    @staticmethod
+    def _dive():
+        plan = b.DivePlan(gf_low=0.30, gf_high=0.70,
+                          deco_gases=(b.EAN50, b.O2))
+        segs, _ = b.plan_dive(45.0, 25.0, b.Gas(0.21, 0.35), plan)
+        return segs
+
+    def test_every_leg_matches_the_card(self):
+        segs = self._dive()
+        line = rp.backup_line(segs)
+        for leg in b.stop_legs(segs):
+            self.assertIn(f"{leg.depth:.0f}m/{leg.leg:d}'", line)
+
+    def test_it_ends_at_the_truncated_total_runtime(self):
+        segs = self._dive()
+        run = rp.runtime_min(b.total_runtime(segs))
+        self.assertTrue(rp.backup_line(segs).endswith(f"surf {run:d}"))
+
+    def test_a_mix_is_named_only_where_it_changes(self):
+        """A slate line repeating the mix on every row is unreadable; the
+        switch is the thing worth writing down."""
+        line = rp.backup_line(self._dive())
+        self.assertEqual(line.count("EAN50"), 1)
+        self.assertEqual(line.count("O2"), 1)
+
+    def test_no_deco_dive_is_bottom_then_surface(self):
+        segs, _ = b.plan_dive(18.0, 20.0, b.AIR, b.DivePlan())
+        self.assertEqual(rp.backup_line(segs).count("->"), 1)
+
+
+class TestGasStackTable(unittest.TestCase):
+    def test_each_mix_is_quoted_at_its_own_mod(self):
+        """Quoting the stack at the bottom depth would report a deco mix at a
+        depth it is never switched to — the whole point of the table."""
+        plan = b.DivePlan(deco_gases=(b.EAN50, b.O2))
+        rows = rp.gas_stack_table(plan, b.AIR)
+        by_gas = {r.gas: r for r in rows}
+        self.assertAlmostEqual(
+            by_gas[b.EAN50].mod_m,
+            b.EAN50.mod(plan.ppo2_deco, plan.surface_p, plan.msw_per_bar))
+        # the bottom gas is judged against the working ceiling, not the deco one
+        self.assertAlmostEqual(
+            by_gas[b.AIR].mod_m,
+            b.AIR.mod(plan.ppo2_bottom, plan.surface_p, plan.msw_per_bar))
+
+    def test_ead_is_the_n2_only_convention(self):
+        plan = b.DivePlan(deco_gases=(b.EAN50,))
+        row = next(r for r in rp.gas_stack_table(plan, b.AIR) if r.gas == b.EAN50)
+        self.assertAlmostEqual(row.ead_m, b.EAN50.end(
+            row.mod_m, plan.surface_p, plan.msw_per_bar, o2_narcotic=False))
+        self.assertLess(row.ead_m, row.end_m)   # O2 narcotic is the deeper one
+
+    def test_a_mix_listed_twice_appears_once(self):
+        plan = b.DivePlan(travel_gases=(b.EAN50,), deco_gases=(b.EAN50, b.O2))
+        rows = rp.gas_stack_table(plan, b.AIR)
+        self.assertEqual(len(rows), 3)
+        self.assertEqual([r.role for r in rows], ["Bottom", "Travel", "Deco"])
+
+    def test_the_environment_reaches_the_table(self):
+        """Altitude moves MOD and density; a stack table that ignored it would
+        contradict the density warning beside it (DECISIONS #24)."""
+        sea = rp.gas_stack_table(b.DivePlan(), b.AIR)[0]
+        alt = rp.gas_stack_table(
+            b.DivePlan(surface_p=b.surface_p_at_altitude(2000)), b.AIR)[0]
+        self.assertGreater(alt.mod_m, sea.mod_m)
+
+
+class TestPlanResultCarriesTheNewFigures(unittest.TestCase):
+    def test_surf_gf_matches_the_model(self):
+        plan = b.DivePlan(deco_gases=(b.EAN50,))
+        res = rp.compute_plan_result([b.Level(40.0, 25.0)], b.AIR, plan)
+        self.assertAlmostEqual(res.surf_gf,
+                               b.surface_gf(res.tissues, plan.surface_p))
+
+    def test_surface_ceiling_and_surf_gf_are_different_questions(self):
+        """One is a depth left over, the other the budget spent. A dive that
+        surfaces clean still spends most of its GF-High."""
+        plan = b.DivePlan(gf_low=0.30, gf_high=0.70, deco_gases=(b.EAN50,))
+        res = rp.compute_plan_result([b.Level(40.0, 25.0)], b.AIR, plan)
+        self.assertAlmostEqual(res.surface_ceiling_m, 0.0, places=6)
+        self.assertGreater(res.surf_gf, 0.3)
+
+
+class TestLegPressures(unittest.TestCase):
+    """The bar column an SPG gets checked against."""
+
+    GASES: ClassVar[list] = [
+        ("Bottom", b.AIR, 24.0, 232.0),
+        ("Deco", b.EAN50, 11.0, 200.0),
+    ]
+
+    @staticmethod
+    def _dive():
+        plan = b.DivePlan(gf_low=0.30, gf_high=0.70, deco_gases=(b.EAN50,))
+        segs, _ = b.plan_dive(40.0, 25.0, b.AIR, plan)
+        return segs, plan
+
+    def test_one_entry_per_stop_leg(self):
+        """Index alignment with `stop_legs` is the whole contract — every
+        renderer zips the two together."""
+        segs, plan = self._dive()
+        bars = rp.leg_pressures(segs, b.GasPlan(sac=20.0), self.GASES, plan)
+        self.assertEqual(len(bars), len(b.stop_legs(segs)))
+
+    def test_pressure_falls_monotonically_within_one_cylinder(self):
+        segs, plan = self._dive()
+        bars = rp.leg_pressures(segs, b.GasPlan(sac=20.0), self.GASES, plan)
+        per_gas: dict = {}
+        for leg, bar in zip(b.stop_legs(segs), bars, strict=True):
+            if bar is None:
+                continue
+            if leg.gas in per_gas:
+                self.assertLess(bar, per_gas[leg.gas])
+            per_gas[leg.gas] = bar
+
+    def test_the_last_stop_agrees_with_the_gas_report(self):
+        """Same litres, same SAC, same environment — the card's final pressure
+        and the GAS card's `bar_left` are one number seen twice."""
+        segs, plan = self._dive()
+        gp = b.GasPlan(sac=20.0, sac_deco=15.0)
+        bars = rp.leg_pressures(segs, gp, self.GASES, plan)
+        rep = rp.gas_report(segs, b.AIR, gp, self.GASES, plan)
+        deco = next(c for c in rep.cylinders if c.gas == b.EAN50)
+        last = [bar for leg, bar in zip(b.stop_legs(segs), bars, strict=True)
+                if leg.gas == b.EAN50][-1]
+        # The card stops at the last stop; the report bills the final ascent
+        # too, so the report must be the lower of the two.
+        assert deco.bar_left is not None
+        self.assertLess(deco.bar_left, last)
+        self.assertAlmostEqual(deco.bar_left, last, delta=5.0)
+
+    def test_a_deco_cylinder_is_billed_at_the_deco_sac(self):
+        segs, plan = self._dive()
+        one = rp.leg_pressures(segs, b.GasPlan(sac=20.0), self.GASES, plan)
+        two = rp.leg_pressures(segs, b.GasPlan(sac=20.0, sac_deco=10.0),
+                               self.GASES, plan)
+        legs = b.stop_legs(segs)
+        deco = [i for i, leg in enumerate(legs) if leg.gas == b.EAN50]
+        self.assertTrue(deco)
+        for i in deco:
+            self.assertGreater(two[i], one[i])   # slower breathing, more left
+
+    def test_a_mix_with_no_cylinder_reads_none(self):
+        segs, plan = self._dive()
+        bars = rp.leg_pressures(segs, b.GasPlan(sac=20.0),
+                                [("Bottom", b.AIR, 24.0, 232.0)], plan)
+        legs = b.stop_legs(segs)
+        for leg, bar in zip(legs, bars, strict=True):
+            if leg.gas == b.EAN50:
+                self.assertIsNone(bar)
+
+    def test_no_gas_plan_means_no_pressures(self):
+        segs, plan = self._dive()
+        bars = rp.leg_pressures(segs, None, self.GASES, plan)
+        self.assertEqual(bars, [None] * len(b.stop_legs(segs)))
+
+    def test_wetnotes_rows_gain_the_column_only_when_asked(self):
+        segs, plan = self._dive()
+        bars = rp.leg_pressures(segs, b.GasPlan(sac=20.0), self.GASES, plan)
+        self.assertTrue(all(len(r) == 4 for r in rp.wetnotes_rows(segs)))
+        with_bar = rp.wetnotes_rows(segs, bars)
+        self.assertTrue(all(len(r) == 5 for r in with_bar))
+        # the surface row has no hold, so no gauge reading
+        self.assertEqual(with_bar[-1][4], "")

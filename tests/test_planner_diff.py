@@ -53,6 +53,12 @@ DIVERGES_AT_MULTIDECOS_ENVIRONMENT = DIVERGES_ALWAYS | {
     "GF anchor", "DivePlan.last_stop_depth",
     "DivePlan.stop_interval",
     "DivePlan.ppo2_deco", "DivePlan.ppo2_switch_tol",
+    # WHERE a deco gas is taken moves the schedule, so the schedule evidence
+    # constrains it jointly with everything else here — it cannot be told apart
+    # from the rest of the group by a printed plan alone. MultiDeco switches at
+    # MOD, as we do by default, so this is a joint flag and not a real
+    # disagreement about the policy (DECISIONS.md #25).
+    "DivePlan.gas_switch_policy",
     "runtime rounding", "stop-time printing", "first-stop padding",
 }
 

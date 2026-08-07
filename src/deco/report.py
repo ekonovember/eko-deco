@@ -68,9 +68,16 @@ def environment_note(plan: b.DivePlan) -> str | None:
             f"from a planner set to sea-level salt water")
 
 
-def wetnotes_rows(segments: Sequence[b.DiveSegment]) -> list[list[str]]:
+def wetnotes_rows(segments: Sequence[b.DiveSegment],
+                  pressures: Sequence[float | None] | None = None
+                  ) -> list[list[str]]:
     """The printed schedule as ``[depth, stop, run, gas]`` string rows — the
     wetnotes/runtime-card format (see ``cards/README.md``).
+
+    With `pressures` (from `leg_pressures`, one entry per stop) each row gains a
+    fifth ``bar`` column: the cylinder pressure on leaving that depth. Non-stop
+    rows — gas-switch annotations and the surface row — carry ``""`` there,
+    because there is no hold at which to read a gauge.
 
     The notation is `buhlmann.StopLeg`'s: ``run`` is the runtime you **leave**
     that depth (truncated), ``stop`` is the **leg** — the time from leaving the
@@ -87,11 +94,16 @@ def wetnotes_rows(segments: Sequence[b.DiveSegment]) -> list[list[str]]:
     """
     rows: list[list[str]] = []
     legs = iter(b.stop_legs(segments))
+    bars = iter(pressures) if pressures is not None else None
     run = 0.0
     prev: b.Gas | None = None
 
-    def emit(depth: str, stop: str, run_min: int, gas: str) -> None:
-        rows.append([depth, stop, f"{run_min:d}", gas])
+    def emit(depth: str, stop: str, run_min: int, gas: str,
+             bar: float | None = None) -> None:
+        row = [depth, stop, f"{run_min:d}", gas]
+        if bars is not None:
+            row.append("" if bar is None else f"{bar:.0f}")
+        rows.append(row)
 
     for s in segments:
         # A gas switch with no stop at that depth (EAN50 at 21 m on a 40 m dive
@@ -109,9 +121,91 @@ def wetnotes_rows(segments: Sequence[b.DiveSegment]) -> list[list[str]]:
             emit(f"{s.depth_end:.0f} m", "-", runtime_min(run), repr(s.gas))
         elif s.kind == "stop" and s.duration > 0:
             leg = next(legs)
-            emit(f"{leg.depth:.0f} m", f"{leg.leg:d}", leg.run, repr(leg.gas))
+            emit(f"{leg.depth:.0f} m", f"{leg.leg:d}", leg.run, repr(leg.gas),
+                 next(bars) if bars is not None else None)
         prev = s.gas
     emit("surf", "-", runtime_min(run), "")
+    return rows
+
+
+def backup_line(segments: Sequence[b.DiveSegment]) -> str:
+    """The whole schedule on one line, for a slate, a log or a chat message.
+
+    Same notation as the card and every other view (`buhlmann.StopLeg`): the
+    bottom carries the runtime it is LEFT at, each stop carries its **leg**, and
+    a mix is named only where it changes. Built from `b.stop_legs`, so a line
+    pasted into a message cannot disagree with the card in a pocket.
+
+        45m/25 -> 24m/3' -> 21m/1' EAN50 -> ... -> 3m/11' -> surf 53
+    """
+    parts: list[str] = []
+    run = 0.0
+    prev: b.Gas | None = None
+    for s in segments:
+        run += s.duration
+        if s.kind == "bottom" and s.duration > 0:
+            parts.append(f"{s.depth_end:.0f}m/{runtime_min(run)}")
+            prev = s.gas          # switches are named from the last bottom mix
+    for leg in b.stop_legs(segments):
+        token = f"{leg.depth:.0f}m/{leg.leg:d}'"
+        if leg.gas != prev:
+            token += f" {leg.gas!r}"
+            prev = leg.gas
+        parts.append(token)
+    parts.append(f"surf {runtime_min(b.total_runtime(segments))}")
+    return " -> ".join(parts)
+
+
+# -----------------------------------------------------------------------------
+# The gas stack: is each mix safe where it would actually be breathed?
+# -----------------------------------------------------------------------------
+
+@dataclass(frozen=True)
+class GasStackRow:
+    """One mix of the stack, quoted **at its own MOD** — the deepest point it
+    would ever be breathed, and so the only depth at which "is this mix safe"
+    has a worst-case answer. Quoting the whole stack at the bottom depth instead
+    would report a deco mix at a depth it is never switched to."""
+    gas: b.Gas
+    role: str
+    mod_m: float
+    end_m: float
+    ead_m: float
+    density_g_l: float
+
+    @property
+    def dense(self) -> bool:
+        """Over the Anthony & Mitchell working ceiling at its own MOD."""
+        return self.density_g_l > b.DENSITY_MAX_G_L
+
+
+def gas_stack_table(plan: b.DivePlan, bottom_gas: b.Gas) -> list[GasStackRow]:
+    """Every mix the plan may breathe, with MOD / END / EAD / density.
+
+    The bottom gas is quoted at its working-ppO2 MOD (`plan.ppo2_bottom`) and
+    travel/deco mixes at the deco ceiling (`plan.ppo2_deco`) — the limit each is
+    actually planned against, the same split `_gas_switch_depths` uses.
+
+    END counts oxygen as narcotic and EAD does not: they are the two published
+    conventions and a diver reading a mix wants both, which is why `Gas.end`
+    already takes the flag rather than this module computing narcosis twice.
+    """
+    rows: list[GasStackRow] = []
+    seen: list[b.Gas] = []
+    stack = ((bottom_gas, "Bottom", plan.ppo2_bottom),
+             *((g, "Travel", plan.ppo2_deco) for g in plan.travel_gases),
+             *((g, "Deco", plan.ppo2_deco) for g in plan.deco_gases))
+    for gas, role, ppo2 in stack:
+        if gas in seen:
+            continue
+        seen.append(gas)
+        mod = gas.mod(ppo2, plan.surface_p, plan.msw_per_bar)
+        rows.append(GasStackRow(
+            gas=gas, role=role, mod_m=mod,
+            end_m=gas.end(mod, plan.surface_p, plan.msw_per_bar),
+            ead_m=gas.end(mod, plan.surface_p, plan.msw_per_bar,
+                          o2_narcotic=False),
+            density_g_l=gas.density(mod, plan.surface_p, plan.msw_per_bar)))
     return rows
 
 
@@ -315,6 +409,44 @@ def gas_report(segments: Sequence[b.DiveSegment],
                      back_pressure_bar=back.pressure_bar if back else 0.0)
 
 
+def leg_pressures(segments: Sequence[b.DiveSegment], gas_plan: b.GasPlan | None,
+                  gases: Sequence[tuple[str, b.Gas, float, float]],
+                  plan: b.DivePlan) -> list[float | None]:
+    """Cylinder pressure (bar) as the diver **leaves** each stop — one entry per
+    `buhlmann.stop_legs` row, aligned with it position for position.
+
+    This is the column an SPG can be checked against at every stop, which is the
+    only gas figure a diver can verify underwater: the plan says 158 bar leaving
+    21 m, and the needle either agrees or the dive has changed.
+
+    ``None`` where the answer would be a guess rather than a number — no
+    ``GasPlan``, or a mix with no cylinder on the stack (its size and fill are
+    what turn litres into bar). Consumption is billed exactly as `gas_report`
+    bills it: each mix at `GasPlan.sac_for`, so a deco cylinder is charged at the
+    deco SAC, and every litre measured in the dive's own environment.
+
+    Same-mix cylinders are one bank (`aggregate_banks`), so twin 12s read as a
+    24 L supply — the diver has one manifolded pressure to look at, not two.
+    """
+    legs = b.stop_legs(segments)
+    if gas_plan is None:
+        return [None] * len(legs)
+    banks = {bk.gas: bk for bk in aggregate_banks(gases)}
+    used: dict[b.Gas, float] = {}
+    out: list[float | None] = []
+    for s in segments:
+        used[s.gas] = used.get(s.gas, 0.0) + b.segment_gas_liters(
+            [s], gas_plan.sac_for(s.gas, plan.deco_gases),
+            plan.surface_p, plan.msw_per_bar)
+        # Mirrors `stop_legs`' own filter, so the two lists stay index-aligned.
+        if s.kind != "stop" or s.duration <= 0:
+            continue
+        bank = banks.get(s.gas)
+        out.append(None if bank is None or bank.tank_l <= 0
+                   else bank.pressure_bar - used[s.gas] / bank.tank_l)
+    return out
+
+
 # -----------------------------------------------------------------------------
 # The assembled plan result
 # -----------------------------------------------------------------------------
@@ -338,23 +470,70 @@ class PlanResult:
     otu: float
     end_m: float
     density_g_l: float
+    #: The GF actually surfaced at (fraction). `surface_ceiling_m` is a depth —
+    #: how much ceiling is left; this is how much of the GF-High budget was
+    #: spent. Over 1.0 means the schedule surfaces past its own M-value line.
+    surf_gf: float = 0.0
+    gas_stack: list[GasStackRow] = field(default_factory=list)
+    backup: str = ""
+    #: Cylinder pressure leaving each stop, aligned to `buhlmann.stop_legs`.
+    #: All-None without a GasPlan — the litres are known, the bar are not.
+    leg_bars: list[float | None] = field(default_factory=list)
+    #: The ascent re-flown with the BOTTOM gas gone, or None when that cannot be
+    #: survived on the remaining stack (the usual answer on a deep dive). None
+    #: is a finding, not a missing feature — see `buhlmann.bailout_schedule`.
+    bailout: list[b.DiveSegment] | None = None
     warnings: list[str] = field(default_factory=list)
     gas: GasReport | None = None
     contingency: list[list[b.ContingencyCell]] | None = None
+
+
+def compute_series_result(
+        series: Sequence[tuple[float, Sequence[b.Level]]],
+        bottom_gas: b.Gas, plan: b.DivePlan,
+        gas_plan: b.GasPlan | None = None,
+        gases: Sequence[tuple[str, b.Gas, float, float]] = (),
+        contingency: tuple[int, int, int, int] | None = None
+        ) -> list[PlanResult]:
+    """One `PlanResult` per dive in a day, tissues carried through.
+
+    `series` is ``(surface_interval_min, levels)`` per dive — what
+    `dive_config.series_of` returns. Each dive starts from the previous dive's
+    final loading after `buhlmann.surface_interval`, so dive 2 is planned on the
+    nitrogen dive 1 actually left behind rather than on a table's pressure group.
+
+    Every dive keeps its own full `PlanResult`, which is what lets both front
+    ends render a repetitive dive with the code they already had: a series is a
+    list of ordinary results, not a new kind of thing.
+    """
+    results: list[PlanResult] = []
+    tissues: b.Tissues | None = None
+    for interval, levels in series:
+        if tissues is not None:
+            tissues = b.surface_interval(tissues, interval, plan)
+        results.append(compute_plan_result(
+            levels, bottom_gas, plan, gas_plan, gases, contingency,
+            start_tissues=tissues))
+        tissues = results[-1].tissues
+    return results
 
 
 def compute_plan_result(levels: Sequence[b.Level], bottom_gas: b.Gas,
                         plan: b.DivePlan,
                         gas_plan: b.GasPlan | None = None,
                         gases: Sequence[tuple[str, b.Gas, float, float]] = (),
-                        contingency: tuple[int, int, int, int] | None = None
-                        ) -> PlanResult:
+                        contingency: tuple[int, int, int, int] | None = None,
+                        start_tissues: b.Tissues | None = None) -> PlanResult:
     """Plan the dive and derive every shared figure: schedule, warnings,
     CNS/OTU, END/density, gas accounting, and (optionally) the contingency
     cut-table grid as ``(time_before, time_after, depth_before, depth_after)``
     step counts. Raises ValueError on invalid input, exactly as the planner
-    does."""
-    segments, tissues = b.plan_multilevel(list(levels), bottom_gas, plan)
+    does.
+
+    `start_tissues` is the loading the dive begins with — residual nitrogen from
+    an earlier dive (`compute_series_result`). None means clean tissues."""
+    segments, tissues = b.plan_multilevel(list(levels), bottom_gas, plan,
+                                          start_tissues)
     depth = b.max_depth(levels)
     result = PlanResult(
         levels=list(levels), bottom_gas=bottom_gas, plan=plan,
@@ -372,6 +551,15 @@ def compute_plan_result(levels: Sequence[b.Level], bottom_gas: b.Gas,
     )
     result.cns_pct, result.otu = b.cns_otu(segments, plan.surface_p,
                                            plan.msw_per_bar)
+    result.surf_gf = b.surface_gf(tissues, plan.surface_p)
+    result.gas_stack = gas_stack_table(plan, bottom_gas)
+    result.backup = backup_line(segments)
+    result.leg_bars = leg_pressures(segments, gas_plan, gases, plan)
+    try:
+        result.bailout = b.bailout_schedule(segments, plan, bottom_gas,
+                                            (bottom_gas,))
+    except (ValueError, RuntimeError):
+        result.bailout = None    # unplannable is a result, not a crash
     result.warnings = warning_lines(segments, plan, bottom_gas, depth)
     result.gas = gas_report(segments, bottom_gas, gas_plan, gases, plan)
     if contingency is not None:

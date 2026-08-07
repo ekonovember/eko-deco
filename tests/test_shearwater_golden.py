@@ -36,8 +36,9 @@ def _gas(d: dict) -> b.Gas:
 
 def _schedule(dive: dict):
     # The source planner's water-vapour constant is a plan input, not a global
-    # to patch: MultiDeco/Baker use Schreiner 0.0567, eko-deco defaults to
-    # Buhlmann's 0.0627 (DECISIONS.md #19).
+    # to patch: eko-deco defaults to Schreiner 0.0567, the value MultiDeco,
+    # Shearwater and Baker's GFDECO use; Buhlmann's own 0.0627 is what
+    # Subsurface passes explicitly (DECISIONS.md #20).
     plan = b.DivePlan(
         gf_low=dive["gf"][0] / 100.0, gf_high=dive["gf"][1] / 100.0,
         descent_rate=dive.get("descent_rate", 18.0),

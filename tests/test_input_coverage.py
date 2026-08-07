@@ -54,6 +54,10 @@ GAS_PROBE: dict[str, float] = {
     "sac": 17.5, "sac_deco": 13.5, "sac_multiplier": 1.75,
     "problem_minutes": 2.5, "divers": 2,
 }
+#: Plan fields that are not numbers. Probed by equality rather than a
+#: tolerance, but held to exactly the same standard: set it through each front
+#: end, check it arrives in the DivePlan.
+PLAN_PROBE_STR: dict[str, str] = {"gas_switch_policy": "at-first-stop"}
 #: Fields carried as gas-stack roles rather than scalars, checked separately.
 GAS_STACK_FIELDS = {"travel_gases", "deco_gases"}
 #: Nothing here at present. A field listed here would be one the planner
@@ -72,6 +76,7 @@ def _probe_config() -> dict:
         "ppo2_switch_tol": 0.09, "min_stop_time": 0.5,
         "sac_normal": 17.5, "sac_deco": 13.5, "sac_multiplier": 1.75,
         "problem_minutes": 2.5, "divers": 2,
+        "gas_switch_policy": "at-first-stop",
     })
     return cfg
 
@@ -86,6 +91,7 @@ CLI_ARGV = [
     "--ppo2-switch-tol", "0.09", "--min-stop-time", "0.5",
     "--sac", "17.5", "--sac-deco", "13.5", "--sac-multiplier", "1.75",
     "--problem-time", "2.5", "--divers", "2",
+    "--gas-switch", "at-first-stop",
 ]
 
 
@@ -114,7 +120,7 @@ class TestEveryFieldIsProbed(unittest.TestCase):
     coverage tests below would silently stop covering the whole surface."""
 
     def test_no_plan_field_is_unaccounted_for(self):
-        known = set(PLAN_PROBE) | GAS_STACK_FIELDS
+        known = set(PLAN_PROBE) | set(PLAN_PROBE_STR) | GAS_STACK_FIELDS
         fields = {f.name for f in dataclasses.fields(b.DivePlan)}
         self.assertEqual(fields - known, set(),
                          "new DivePlan field(s): add a value to PLAN_PROBE and "
@@ -138,6 +144,9 @@ class TestConfigBinds(unittest.TestCase):
         for name, want in PLAN_PROBE.items():
             with self.subTest(name):
                 self.assertAlmostEqual(getattr(self.plan, name), want, places=9)
+        for name, text in PLAN_PROBE_STR.items():
+            with self.subTest(name):
+                self.assertEqual(getattr(self.plan, name), text)
 
     def test_gas_plan_fields(self):
         for name, want in GAS_PROBE.items():
@@ -173,10 +182,14 @@ class TestConfigBinds(unittest.TestCase):
         for name, want in GAS_PROBE.items():
             with self.subTest(f"GasPlan.{name}"):
                 self.assertAlmostEqual(getattr(gp, name), want, places=9)
+        for name, text in PLAN_PROBE_STR.items():
+            with self.subTest(name):
+                self.assertEqual(getattr(plan, name), text)
         # and the file is human/agent-editable: no field hidden behind a
         # derived key the schema does not document
         self.assertIn("p_h2o_bar", raw)
         self.assertIn("ppo2_switch_tol", raw)
+        self.assertIn("gas_switch_policy", raw)
 
 
 class TestCliBinds(unittest.TestCase):
@@ -187,6 +200,9 @@ class TestCliBinds(unittest.TestCase):
         for name, want in PLAN_PROBE.items():
             with self.subTest(name):
                 self.assertAlmostEqual(getattr(self.plan, name), want, places=9)
+        for name, text in PLAN_PROBE_STR.items():
+            with self.subTest(name):
+                self.assertEqual(getattr(self.plan, name), text)
 
     def test_gas_plan_fields(self):
         for name, want in GAS_PROBE.items():
@@ -242,6 +258,10 @@ class TestGuiBinds(unittest.TestCase):
         "ppo2_switch_tol": ("ppo2_switch_tol", "0.09"),
         "min_stop_time": ("min_stop_time", "0.5"),
     }
+    #: Non-numeric plan fields and the widget variable behind each.
+    STR_WIDGETS: ClassVar[dict[str, tuple[str, str]]] = {
+        "gas_switch_policy": ("gas_switch_policy", "at-first-stop"),
+    }
     GAS_WIDGETS: ClassVar[dict[str, tuple[str, str]]] = {
         "sac": ("sac", "17.5"), "sac_deco": ("sac_deco", "13.5"),
         "sac_multiplier": ("sac_mult", "1.75"),
@@ -259,6 +279,8 @@ class TestGuiBinds(unittest.TestCase):
     def _set_everything(self):
         for _field, (var, value) in self.WIDGETS.items():
             getattr(self.app, var).set(value)
+        for _field, (var, value) in self.STR_WIDGETS.items():
+            getattr(self.app, var).set(value)
         for _field, (var, value) in self.GAS_WIDGETS.items():
             getattr(self.app, var).set(value)
         self.app.two_divers.set(True)
@@ -269,6 +291,9 @@ class TestGuiBinds(unittest.TestCase):
         for name, want in PLAN_PROBE.items():
             with self.subTest(name):
                 self.assertAlmostEqual(getattr(plan, name), want, places=9)
+        for name, text in PLAN_PROBE_STR.items():
+            with self.subTest(name):
+                self.assertEqual(getattr(plan, name), text)
 
     def test_every_gas_plan_field_has_a_widget_that_binds(self):
         self._set_everything()

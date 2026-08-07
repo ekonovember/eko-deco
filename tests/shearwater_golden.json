@@ -11,7 +11,8 @@
     "reported as skipped tests until filled in.",
     "Optional per-dive fields: stop_tol_min (default 2), tts_tol_min (3),",
     "p_h2o (bar) to match the source planner's water-vapour constant",
-    "(MultiDeco uses Schreiner 0.0567; eko-deco's default is Buhlmann 0.0627)."
+    "(eko-deco defaults to Schreiner 0.0567, as MultiDeco/Shearwater/GFDECO",
+    "do; Buhlmann's own 0.0627 is what Subsurface passes)."
   ],
   "_multideco_provenance": [
     "The four 45m dives below are transcribed from MultiDeco screenshots taken",

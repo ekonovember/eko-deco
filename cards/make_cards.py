@@ -80,6 +80,7 @@ class Pen:
 
 LABEL_W = 7.0              # depth-label column, mm
 MARK_W = 6.0               # gas-switch marker gutter on the right, mm
+BAR_W = 10.0               # optional end-of-stop pressure column, mm
 BAND = "#eeeeee"           # zebra fill, so a row stays trackable across columns
 CHAR_W = 0.2124            # DejaVu Sans Mono advance, mm per point of type size
 
@@ -119,29 +120,42 @@ def fit_size(n_rows, height=TABLE_H, size_max=SIZE_MAX):
     return max(3.6, min(size_max, (pitch - 0.55) / 0.62))
 
 
-def runtime_table(pen, x, y, columns, rows, width, size=None):
+def runtime_table(pen, x, y, columns, rows, width, size=None, bars=None):
     """MultiDeco's compressed runtime table.
 
     `columns` are the scenario headings (`OK`, `-50`, …); `rows` are
     `(depth_label, cells, switch)` where `switch` is a gas name to flag on that
     row, or None. A switch is drawn as a filled black triangle in the gutter on
     the right, at the row where that mix starts being breathed.
+
+    `bars` optionally adds ONE narrow right-hand column — the cylinder pressure
+    on leaving each stop, for the **planned** column only. Deliberately not one
+    per scenario: the columns here are contingencies, and four sets of pressures
+    would cost the runtimes the width that makes them readable. The planned
+    pressure is the one an SPG gets checked against anyway; on a lost-gas card
+    the numbers below the switch no longer apply, which is why it is drawn in
+    grey and headed `bar`.
     """
     if size is None:
         size = fit_size(len(rows) + 1)
     pitch = size * 0.62 + 0.55
-    col_w = (width - LABEL_W - MARK_W) / len(columns)
+    bar_w = BAR_W if bars else 0.0
+    col_w = (width - LABEL_W - MARK_W - bar_w) / len(columns)
 
     pen.txt(x + LABEL_W + col_w * 0.5, y, columns[0], size=size * 0.82,
             weight="bold", color=GREY, ha="center")
     for i, head in enumerate(columns[1:], start=1):
         pen.txt(x + LABEL_W + (i + 0.5) * col_w, y, head, size=size * 0.82,
                 weight="bold", color=GREY, ha="center")
+    if bars:
+        pen.txt(x + LABEL_W + len(columns) * col_w + bar_w - 0.4, y, "bar",
+                size=size * 0.82, weight="bold", color=GREY, ha="right")
     y_head = y - 1.9
     pen.rule(y_head, x0=x - 0.6, x1=x + width + 0.6, lw=0.5, color=INK)
     y -= pitch
 
     band = False
+    bar_iter = iter(bars) if bars else None
     for label, cells, switch in rows:
         if band:
             pen.rect(x - 0.6, y - 1.4, width + 1.2, pitch, facecolor=BAND,
@@ -160,6 +174,11 @@ def runtime_table(pen, x, y, columns, rows, width, size=None):
                         weight="bold", ha="right")
             pen.txt(x_col + col_w * 0.97, y, run, size=size, weight="bold",
                     ha="right")
+        if bar_iter is not None:
+            bar = next(bar_iter, None)
+            if bar:
+                pen.txt(x + LABEL_W + len(columns) * col_w + bar_w - 0.4, y,
+                        str(bar), size=size * 0.86, color=GREY, ha="right")
         if switch:
             # Arrow in the right gutter, pointing back at the row: this is
             # where you change gas. Marker only - a mix name here either
@@ -187,7 +206,7 @@ def draw_card(pen, spec):
             color="#ffffff", ha="right")
 
     y = runtime_table(pen, 2.4, H - 10.6, spec["columns"], spec["rows"],
-                      width=W - 4.8)
+                      width=W - 4.8, bars=spec.get("bars"))
     y -= 0.6
     # `warnings` is REQUIRED, not `spec.get(...)`: this card carries no printed
     # disclaimer, so the model's warnings are the only caveat on it, and a
@@ -293,6 +312,23 @@ def rows_from_scenarios(plans):
     for d in depths:
         rows.append((f"{d:g}", [col.get(d) for col in per], switch_at.get(d)))
     return rows
+
+
+def bars_from_plan(plan, rows):
+    """The `bars` list for `runtime_table`, aligned to `rows_from_scenarios`.
+
+    Takes the planned column's `end_bar` per stop from `deco plan --json`, so
+    the pressure on the card is the planner's own number and cannot drift from
+    the gas report beside it. The bottom row is blank — you leave the bottom,
+    you do not hold on it — and so is any depth the plan carries no cylinder
+    for (`end_bar: null`, e.g. a mix planned without a tank size).
+    """
+    by_depth = {s["depth_m"]: s.get("end_bar") for s in plan["stops"]}
+    out = [""]                                   # the bottom row
+    for label, _cells, _switch in rows[1:]:
+        bar = by_depth.get(float(label))
+        out.append("" if bar is None else f"{bar:.0f}")
+    return out
 
 
 def _bottom_run(plan):

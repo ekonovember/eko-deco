@@ -1087,5 +1087,203 @@ class TestDecoSac(unittest.TestCase):
             places=9)
 
 
+class TestSurfaceGf(unittest.TestCase):
+    """`surface_gf` inverts `ceiling` — so the two must agree by construction."""
+
+    def test_it_is_the_gf_whose_ceiling_is_the_surface(self):
+        """The defining property, checked against the forward function: at the
+        returned GF the ceiling sits exactly at the surface pressure."""
+        plan = b.DivePlan(deco_gases=(b.EAN50,))
+        _segs, tissues = b.plan_dive(40.0, 30.0, b.AIR, plan)
+        gf = b.surface_gf(tissues, plan.surface_p)
+        self.assertAlmostEqual(b.ceiling(tissues, gf), plan.surface_p, places=9)
+
+    def test_a_flown_schedule_surfaces_at_or_under_gf_high(self):
+        """Baker's whole-minute padding means the diver reaches the surface with
+        GF-High budget in hand, never past it."""
+        for depth, time in ((45.0, 25.0), (30.0, 40.0), (21.0, 60.0)):
+            plan = b.DivePlan(gf_low=0.30, gf_high=0.70,
+                              deco_gases=(b.EAN50, b.O2))
+            _segs, tissues = b.plan_dive(depth, time, b.AIR, plan)
+            with self.subTest(depth=depth):
+                self.assertLessEqual(b.surface_gf(tissues, plan.surface_p),
+                                     plan.gf_high + 1e-9)
+
+    def test_unloaded_tissues_are_not_supersaturated(self):
+        plan = b.DivePlan()
+        fresh = b.Tissues.at_surface(plan.surface_p, b.AIR, plan.p_h2o)
+        self.assertEqual(b.surface_gf(fresh, plan.surface_p), 0.0)
+
+    def test_it_is_returned_raw_above_one(self):
+        """A violated ascent surfaces past its own M-value line. That is a
+        warning, so it must not be clamped into looking legal."""
+        plan = b.DivePlan()
+        tissues = b.Tissues.at_surface(plan.surface_p, b.AIR, plan.p_h2o)
+        p = b.depth_to_p_amb(50.0, plan.surface_p, plan.msw_per_bar)
+        b.update_tissues(tissues, b.AIR, p, p, 60.0, plan.p_h2o)
+        self.assertGreater(b.surface_gf(tissues, plan.surface_p), 1.0)
+
+
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestGasSwitchPolicy(unittest.TestCase):
+    """WHERE a deco gas is taken. The schedule must never get *shorter* for
+    holding the switch back — that would mean the policy buys time, and it does
+    not: it spends it (DECISIONS.md #25)."""
+
+    @staticmethod
+    def _plan(policy, **kw):
+        return b.DivePlan(gf_low=0.30, gf_high=0.70,
+                          deco_gases=(b.EAN50, b.O2),
+                          gas_switch_policy=policy, **kw)
+
+    def test_an_unknown_policy_is_refused(self):
+        with self.assertRaises(ValueError):
+            b.DivePlan(gas_switch_policy="whenever")
+
+    def test_at_first_stop_moves_the_switch_up_to_the_first_stop(self):
+        segs, _ = b.plan_dive(40.0, 20.0, b.AIR, self._plan("at-mod"))
+        mod_switch = next(s.depth_start for s in segs if s.gas == b.EAN50)
+        segs, _ = b.plan_dive(40.0, 20.0, b.AIR, self._plan("at-first-stop"))
+        held = next(s.depth_start for s in segs if s.gas == b.EAN50)
+        first_stop = max(s.depth_start for s in segs if s.kind == "stop")
+        self.assertGreater(mod_switch, held)
+        self.assertAlmostEqual(held, first_stop)
+
+    def test_it_never_shortens_the_deco(self):
+        """Swept, because the whole-minute stop grid hides the difference on
+        most dives — a fine grid is what makes the effect visible at all."""
+        for depth in range(21, 61, 3):
+            for time in (15, 25, 35):
+                fast = b.time_to_surface(b.plan_dive(
+                    depth, time, b.AIR,
+                    self._plan("at-mod", min_stop_time=0.1))[0])
+                held = b.time_to_surface(b.plan_dive(
+                    depth, time, b.AIR,
+                    self._plan("at-first-stop", min_stop_time=0.1))[0])
+                with self.subTest(depth=depth, time=time):
+                    self.assertGreaterEqual(held, fast - 1e-9)
+
+    def test_travel_and_bottom_gases_are_not_held_back(self):
+        """The policy is about switches made on the way UP. A hypoxic diver
+        still breathes the travel mix on the way down."""
+        plan = b.DivePlan(gf_low=0.30, gf_high=0.70,
+                          travel_gases=(b.Gas(0.35, 0.25),),
+                          deco_gases=(b.EAN50,),
+                          gas_switch_policy="at-first-stop")
+        segs, _ = b.plan_dive(60.0, 20.0, b.Gas(0.10, 0.70), plan)
+        descent = [s for s in segs if s.kind == "descent"]
+        self.assertIn(b.Gas(0.35, 0.25), {s.gas for s in descent})
+
+    def test_an_ndl_dive_has_no_first_stop_to_hold_to(self):
+        """`first_stop=None` must fall back to at-MOD rather than suppress
+        every switch all the way to the surface."""
+        plan = self._plan("at-first-stop")
+        segs, _ = b.plan_dive(18.0, 20.0, b.AIR, plan)
+        self.assertEqual([s for s in segs if s.kind == "stop"], [])
+        self.assertIn(b.O2, {s.gas for s in segs})
+
+
+class TestBailoutSchedule(unittest.TestCase):
+    """Losing the BOTTOM gas — the case the deco-gas scenarios cannot express."""
+
+    def test_it_keeps_the_bottom_phase_and_reflies_only_the_ascent(self):
+        plan = b.DivePlan(gf_low=0.30, gf_high=0.70, deco_gases=(b.EAN50,))
+        segs, _ = b.plan_dive(21.0, 60.0, b.AIR, plan)
+        out = b.bailout_schedule(segs, plan, b.AIR, (b.AIR,))
+        assert out is not None
+        bottom = [s for s in segs if s.kind in ("descent", "bottom")]
+        self.assertEqual([(s.kind, s.duration) for s in out[:len(bottom)]],
+                         [(s.kind, s.duration) for s in bottom])
+
+    def test_the_ascent_no_longer_breathes_the_lost_gas(self):
+        plan = b.DivePlan(gf_low=0.30, gf_high=0.70, deco_gases=(b.EAN50,))
+        segs, _ = b.plan_dive(21.0, 60.0, b.AIR, plan)
+        out = b.bailout_schedule(segs, plan, b.AIR, (b.AIR,))
+        assert out is not None
+        self.assertNotIn(b.AIR, {s.gas for s in out if s.kind == "stop"})
+
+    def test_unsurvivable_returns_none_rather_than_a_schedule(self):
+        """At 45 m with EAN50 (MOD 22 m) and O2 (MOD 6 m) there is nothing to
+        breathe. A printed schedule here would be the most dangerous output the
+        program could produce."""
+        plan = b.DivePlan(gf_low=0.30, gf_high=0.70,
+                          deco_gases=(b.EAN50, b.O2))
+        gas = b.Gas(0.21, 0.35)
+        segs, _ = b.plan_dive(45.0, 25.0, gas, plan)
+        self.assertIsNone(b.bailout_schedule(segs, plan, gas, (gas,)))
+
+    def test_losing_everything_is_none(self):
+        plan = b.DivePlan(deco_gases=(b.EAN50,))
+        segs, _ = b.plan_dive(21.0, 60.0, b.AIR, plan)
+        self.assertIsNone(
+            b.bailout_schedule(segs, plan, b.AIR, (b.AIR, b.EAN50)))
+
+
+class TestTissuesAfter(unittest.TestCase):
+    def test_replaying_a_plan_reproduces_the_planners_own_tissues(self):
+        """The replay must be the same Schreiner step on the same profile, not
+        a second model that merely agrees roughly."""
+        plan = b.DivePlan(gf_low=0.30, gf_high=0.70, deco_gases=(b.EAN50, b.O2))
+        segs, final = b.plan_dive(45.0, 25.0, b.Gas(0.21, 0.35), plan)
+        replayed = b.tissues_after(segs, plan)
+        for i in range(b.N_COMP):
+            self.assertAlmostEqual(replayed.pN2[i], final.pN2[i], places=12)
+            self.assertAlmostEqual(replayed.pHe[i], final.pHe[i], places=12)
+
+    def test_it_starts_from_the_tissues_it_is_given(self):
+        plan = b.DivePlan()
+        loaded = b.Tissues.at_surface(plan.surface_p, b.AIR, plan.p_h2o)
+        p = b.depth_to_p_amb(30.0, plan.surface_p, plan.msw_per_bar)
+        b.update_tissues(loaded, b.AIR, p, p, 20.0, plan.p_h2o)
+        segs, _ = b.plan_dive(20.0, 10.0, b.AIR, plan)
+        self.assertGreater(b.tissues_after(segs, plan, loaded).pN2[5],
+                           b.tissues_after(segs, plan).pN2[5])
+
+
+class TestSurfaceInterval(unittest.TestCase):
+    """Repetitive diving, with no tables and no pressure groups: the
+    compartments carry the residual themselves."""
+
+    @staticmethod
+    def _repeat_tts(interval: float) -> float:
+        plan = b.DivePlan(gf_low=0.30, gf_high=0.70, deco_gases=(b.EAN50,))
+        _s1, t1 = b.plan_dive(30.0, 25.0, b.AIR, plan)
+        segs, _ = b.plan_dive(30.0, 25.0, b.AIR, plan,
+                              start_tissues=b.surface_interval(t1, interval,
+                                                               plan))
+        return b.time_to_surface(segs)
+
+    def test_a_longer_interval_always_owes_less(self):
+        tts = [self._repeat_tts(si) for si in (0, 15, 30, 60, 120, 240)]
+        self.assertEqual(tts, sorted(tts, reverse=True))
+
+    def test_a_long_enough_interval_converges_on_a_clean_dive(self):
+        plan = b.DivePlan(gf_low=0.30, gf_high=0.70, deco_gases=(b.EAN50,))
+        fresh = b.time_to_surface(b.plan_dive(30.0, 25.0, b.AIR, plan)[0])
+        self.assertAlmostEqual(self._repeat_tts(24 * 60), fresh, places=6)
+
+    def test_it_does_not_mutate_the_tissues_it_is_given(self):
+        plan = b.DivePlan()
+        _segs, t = b.plan_dive(30.0, 25.0, b.AIR, plan)
+        before = list(t.pN2)
+        b.surface_interval(t, 60.0, plan)
+        self.assertEqual(t.pN2, before)
+
+    def test_zero_minutes_changes_nothing(self):
+        plan = b.DivePlan()
+        _segs, t = b.plan_dive(30.0, 25.0, b.AIR, plan)
+        self.assertEqual(b.surface_interval(t, 0.0, plan).pN2, t.pN2)
+
+    def test_a_negative_interval_is_refused(self):
+        with self.assertRaises(ValueError):
+            b.surface_interval(b.Tissues.at_surface(), -1.0, b.DivePlan())
+
+    def test_surface_oxygen_clears_nitrogen_faster_than_air(self):
+        plan = b.DivePlan()
+        _segs, t = b.plan_dive(30.0, 25.0, b.AIR, plan)
+        on_air = b.surface_interval(t, 30.0, plan, b.AIR)
+        on_o2 = b.surface_interval(t, 30.0, plan, b.O2)
+        self.assertLess(sum(on_o2.pN2), sum(on_air.pN2))

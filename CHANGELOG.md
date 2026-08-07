@@ -6,6 +6,46 @@ pre-1.0, so anything may still move.
 
 ## [Unreleased]
 
+### Added — repetitive dives
+
+- **A dive series.** `config["repeats"]` holds the dives after the first, each
+  with the surface interval before it; `buhlmann.surface_interval` off-gasses at
+  the surface and the next dive is planned from that loading. CLI:
+  `--dive DEPTH:RUNTIME[:SI]` (repeatable) and `--dive-index N`; `--json` returns
+  a `dives` array for a series and the unchanged flat shape for a single dive.
+  GUI: a dive picker above the Levels list with `+ dive` / `- dive` and a
+  surface-interval field, plus a DIVE SERIES summary card. Settings are shared
+  across the day; only the profile repeats
+  ([DECISIONS.md #26](DECISIONS.md)).
+
+### Added — readouts
+
+- **SurfGF**, the gradient factor actually surfaced at (`buhlmann.surface_gf`),
+  beside the existing final-ceiling depth in both front ends and as `surf_gf` in
+  `--json`. Baker's whole-minute padding usually surfaces the diver under their
+  own GF-High, and that headroom is what a changed plan gets judged against.
+- **Per-stop cylinder pressure** — the bar remaining as you leave each stop
+  (`report.leg_pressures`), on the CLI stop line, the GUI runtime card and the
+  printed wetnotes card, and as `stops[].end_bar` in `--json`. The one gas
+  figure an SPG can be checked against underwater.
+- **A gas-stack table**: MOD / END / EAD / density for every mix, each quoted at
+  its own MOD rather than at the bottom depth. EAD is new to the output
+  throughout (it was always computable, never printed).
+- **A one-line backup schedule** (`report.backup_line`), for a slate, a log or a
+  message; on every wetnotes card, so the existing Copy button carries it.
+- **Losing the bottom gas** (`buhlmann.bailout_schedule`): the ascent re-flown on
+  the remaining stack from the end of the bottom phase, as a scenario column in
+  the GUI and a line on the CLI. It reports **not survivable** rather than
+  inventing a schedule when nothing else is breathable at depth — which on most
+  deep dives is the honest answer.
+
+### Added — planning
+
+- `--gas-switch at-mod|at-first-stop` (config `gas_switch_policy`, and a GUI
+  control): hold every deco switch until the first stop, the team convention of
+  arriving before switching. Default is unchanged at-MOD
+  ([DECISIONS.md #25](DECISIONS.md)).
+
 ### Changed — packaging and layout (breaking)
 
 - The library moved to a **src layout**: `src/deco/`, installable as

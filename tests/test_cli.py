@@ -238,3 +238,127 @@ class TestEnvironmentFlags(unittest.TestCase):
         self.assertAlmostEqual(back["input"]["surface_p_bar"],
                                b.surface_p_at_altitude(1500))
         self.assertEqual(back["gas"]["sac_deco_l_min"], 16.0)
+
+
+class TestPlanReadouts(unittest.TestCase):
+    """SurfGF, the gas stack, EAD and the backup line reach the CLI's two
+    projections. They are computed once in `report`, so this checks the wiring,
+    not the arithmetic."""
+
+    ARGV: ClassVar[list[str]] = [
+        "plan", "--depth", "45", "--time", "25", "--gas", "21/35",
+        "--deco-gas", "50", "--deco-gas", "100",
+    ]
+
+    def _json(self):
+        code, out, _ = run_cli([*self.ARGV, "--json"])
+        self.assertEqual(code, 0)
+        return json.loads(out)
+
+    def test_json_carries_the_new_keys(self):
+        data = self._json()
+        self.assertIn("surf_gf", data)
+        self.assertIn("backup_line", data)
+        self.assertEqual([r["gas"] for r in data["gas_stack"]],
+                         ["Trimix 21/35", "EAN50", "O2"])
+        self.assertTrue(all("ead_m" in s for s in data["stops"]))
+
+    def test_surf_gf_is_a_fraction_within_gf_high(self):
+        data = self._json()
+        self.assertLessEqual(data["surf_gf"], 0.70 + 1e-9)
+        self.assertGreater(data["surf_gf"], 0.0)
+
+    def test_backup_line_agrees_with_the_stops(self):
+        data = self._json()
+        for stop in data["stops"]:
+            self.assertIn(f"{stop['depth_m']:.0f}m/{stop['leg_min']:d}'",
+                          data["backup_line"])
+
+    def test_text_output_shows_them_too(self):
+        code, out, _ = run_cli(self.ARGV)
+        self.assertEqual(code, 0)
+        self.assertIn("SurfGF", out)
+        self.assertIn("Backup line:", out)
+        self.assertIn("gas stack", out)
+
+
+class TestDiveSeries(unittest.TestCase):
+    """Repetitive dives from the CLI."""
+
+    def test_a_series_plans_every_dive(self):
+        code, out, _ = run_cli(["plan", "--dive", "30:25", "--dive", "30:25:60",
+                                "--gas", "air", "--deco-gas", "50", "--json"])
+        self.assertEqual(code, 0)
+        data = json.loads(out)
+        self.assertEqual(len(data["dives"]), 2)
+        self.assertIsNone(data["dives"][0]["surface_interval_min"])
+        self.assertEqual(data["dives"][1]["surface_interval_min"], 60.0)
+
+    def test_the_repeat_owes_more_deco_than_the_first_dive(self):
+        code, out, _ = run_cli(["plan", "--dive", "30:25", "--dive", "30:25:30",
+                                "--gas", "air", "--deco-gas", "50", "--json"])
+        self.assertEqual(code, 0)
+        first, second = json.loads(out)["dives"]
+        self.assertGreater(second["tts_min"], first["tts_min"])
+
+    def test_a_longer_surface_interval_owes_less(self):
+        def tts(si):
+            _c, out, _e = run_cli(["plan", "--dive", "30:25",
+                                   "--dive", f"30:25:{si}", "--gas", "air",
+                                   "--deco-gas", "50", "--json"])
+            return json.loads(out)["dives"][1]["tts_min"]
+        self.assertGreater(tts(15), tts(120))
+
+    def test_a_single_dive_keeps_the_flat_json_shape(self):
+        """Nothing that reads `deco plan --json` today should have to learn
+        about series."""
+        code, out, _ = run_cli(["plan", "--depth", "30", "--time", "25",
+                                "--gas", "air", "--json"])
+        self.assertEqual(code, 0)
+        self.assertNotIn("dives", json.loads(out))
+
+    def test_dive_index_selects_one(self):
+        code, out, _ = run_cli(["plan", "--dive", "30:25", "--dive", "30:25:60",
+                                "--gas", "air", "--dive-index", "2", "--json"])
+        self.assertEqual(code, 0)
+        data = json.loads(out)
+        self.assertEqual(len(data["dives"]), 1)
+        self.assertEqual(data["dives"][0]["dive"], 2)
+
+    def test_dive_index_outside_the_series_is_an_error(self):
+        code, _out, err = run_cli(["plan", "--dive", "30:25", "--gas", "air",
+                                   "--dive-index", "3"])
+        self.assertEqual(code, 2)
+        self.assertIn("outside the series", err)
+
+    def test_dive_cannot_be_mixed_with_depth_time(self):
+        code, _out, err = run_cli(["plan", "--dive", "30:25", "--depth", "30",
+                                   "--time", "25", "--gas", "air"])
+        self.assertEqual(code, 2)
+        self.assertIn("cannot be combined", err)
+
+    def test_the_first_dive_cannot_have_a_surface_interval(self):
+        code, _out, err = run_cli(["plan", "--dive", "30:25:60", "--gas", "air"])
+        self.assertEqual(code, 2)
+        self.assertIn("nothing precedes it", err)
+
+    def test_a_malformed_dive_spec_is_an_error(self):
+        code, _out, err = run_cli(["plan", "--dive", "30", "--gas", "air"])
+        self.assertEqual(code, 2)
+        self.assertIn("DEPTH:RUNTIME", err)
+
+    def test_a_series_round_trips_through_a_saved_config(self):
+        import os
+        import tempfile
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "series.json")
+            code, out, _ = run_cli(["plan", "--dive", "30:25",
+                                    "--dive", "24:30:90", "--gas", "air",
+                                    "--sac", "20", "--save", path, "--json"])
+            self.assertEqual(code, 0)
+            direct = json.loads(out)["dives"]
+            code, out, _ = run_cli(["plan", path, "--json"])
+            self.assertEqual(code, 0)
+            back = json.loads(out)["dives"]
+        self.assertEqual([d["tts_min"] for d in back],
+                         [d["tts_min"] for d in direct])

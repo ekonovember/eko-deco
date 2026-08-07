@@ -84,6 +84,12 @@ MSW_PER_BAR_SALT = 10.0
 MSW_PER_BAR_FRESH = 31.0 / 3.0
 WATER_TYPES = {"salt": MSW_PER_BAR_SALT, "fresh": MSW_PER_BAR_FRESH}
 
+#: Allowed values of `DivePlan.gas_switch_policy`. A frozenset, not a tuple, on
+#: purpose: `tests/planner_diff.registry_gaps` enumerates tuple/dict constants as
+#: tunables needing registration, and this is not a tunable — it is the set of
+#: legal values for one. The tunable is the DivePlan field, registered there.
+GAS_SWITCH_POLICIES = frozenset({"at-mod", "at-first-stop"})
+
 
 #: Named constant sets that reproduce a given planner's output.
 #:
@@ -335,6 +341,40 @@ def ceiling_depth(tissues: Tissues, gf: float,
     return p_amb_to_depth(ceiling(tissues, gf), surface_p, msw_per_bar)
 
 
+def surface_gf(tissues: Tissues, surface_p: float = P_ATM) -> float:
+    """The gradient factor the diver actually **surfaces at** (0..1, sometimes
+    more) — Shearwater's SurfGF.
+
+    `gf_high` is the budget; this is what was spent. Baker's discretisation pads
+    every stop onto a whole-minute grid, so a schedule flown as printed usually
+    surfaces some way under its own GF-High, and that headroom is exactly the
+    number a diver wants after a plan changes underwater.
+
+    Closed form, not a search: invert `ceiling`'s
+
+        P_amb_tol = (P_comp - a*GF) / (GF/b + 1 - GF)
+
+    for the GF that puts the tolerated pressure exactly at the surface,
+
+        GF = (P_comp - P_surf) / (a + P_surf/b - P_surf)
+
+    and take the worst compartment. The denominator is always positive (b < 1,
+    a > 0), so there is no singular case to guard.
+
+    Returned raw: a value over 1.0 means the schedule surfaces beyond its own
+    M-value line and is a real warning, not something to clamp away. Zero means
+    no compartment is supersaturated at the surface at all.
+    """
+    worst = 0.0
+    for i in range(N_COMP):
+        p_comp = tissues.pN2[i] + tissues.pHe[i]
+        a, b_coef = compartment_ab(tissues.pN2[i], tissues.pHe[i], i)
+        gf = (p_comp - surface_p) / (a + surface_p / b_coef - surface_p)
+        if gf > worst:
+            worst = gf
+    return worst
+
+
 def gf_at(p_amb: float, gf_low: float, gf_high: float,
           p_first_stop: float, p_surface: float = P_ATM) -> float:
     """Linearly interpolate GF between GF-Low at the first stop and
@@ -452,6 +492,18 @@ class DivePlan:
     # excess stays within this tolerance (bar); otherwise the switch rounds
     # down to the next shallower stop.
     ppo2_switch_tol: float = 0.05
+    # WHERE on the ascent a deco gas is switched to. "at-mod" (default) takes it
+    # as soon as the ppO2 allows, at the stop depth `switch_depth` snaps to —
+    # what MultiDeco, Shearwater and this planner have always done, and what
+    # gets the richest mix breathing soonest.
+    #
+    # "at-first-stop" holds every deco switch until the first stop is reached.
+    # Teams plan it that way on purpose: a switch flown mid-ascent is a
+    # valve/regulator drill done while moving and negatively task-loaded, so the
+    # convention is to arrive, settle, then switch. It buys safety with deco
+    # time — the richer mix starts working later, so the schedule gets longer,
+    # never shorter (DECISIONS.md #25).
+    gas_switch_policy: str = "at-mod"
 
     def __post_init__(self) -> None:
         # GF-low > GF-high would make the GF line *rise* toward the first stop —
@@ -478,14 +530,27 @@ class DivePlan:
                 f"ppO2 ceilings (bottom {self.ppo2_bottom:g}, deco "
                 f"{self.ppo2_deco:g}) must sit above the hypoxia floor "
                 f"ppo2_min ({self.ppo2_min:g})")
+        if self.gas_switch_policy not in GAS_SWITCH_POLICIES:
+            raise ValueError(
+                f"gas_switch_policy must be one of "
+                f"{', '.join(sorted(GAS_SWITCH_POLICIES))} "
+                f"(got {self.gas_switch_policy!r})")
 
     def _usable(self, gas: Gas, depth: float, ppo2_ceiling: float) -> bool:
         pp = gas.ppo2(depth, self.surface_p, self.msw_per_bar)
         return self.ppo2_min - 1e-9 <= pp <= ppo2_ceiling + 1e-9
 
-    def switch_depth(self, gas: Gas) -> float:
+    def switch_depth(self, gas: Gas, first_stop: float | None = None) -> float:
         """Ascent switch depth for `gas`: its MOD at ppo2_deco snapped to the
-        nearest stop-interval multiple (subject to ppo2_switch_tol)."""
+        nearest stop-interval multiple (subject to ppo2_switch_tol).
+
+        Under `gas_switch_policy` "at-first-stop" a **deco** gas is additionally
+        held back to `first_stop` when its MOD is deeper than that — the team
+        convention of arriving, settling, then switching. Bottom and travel
+        gases are untouched: they are what got the diver down, not a switch made
+        on the way up. `first_stop=None` (an NDL ascent has no stop to hold to)
+        leaves the policy with nothing to apply, so it behaves as "at-mod".
+        """
         mod = gas.mod(self.ppo2_deco, self.surface_p, self.msw_per_bar)
         if mod <= 0:
             return mod
@@ -493,18 +558,31 @@ class DivePlan:
         if (snapped > mod and gas.ppo2(snapped, self.surface_p, self.msw_per_bar)
                 > self.ppo2_deco + self.ppo2_switch_tol + 1e-9):
             snapped = math.floor(mod / self.stop_interval) * self.stop_interval
+        if (self.gas_switch_policy == "at-first-stop" and first_stop is not None
+                and gas in self.deco_gases):
+            snapped = min(snapped, first_stop)
         return snapped
 
-    def best_gas(self, depth: float, bottom_gas: Gas) -> Gas:
+    def best_gas(self, depth: float, bottom_gas: Gas,
+                 first_stop: float | None = None,
+                 exclude: Sequence[Gas] = ()) -> Gas:
         """Richest breathable gas for the ASCENT at `depth` (bottom + travel +
-        deco gases): floored at ppo2_min, switched in at switch_depth()."""
-        candidates = [bottom_gas, *self.travel_gases, *self.deco_gases]
+        deco gases): floored at ppo2_min, switched in at switch_depth().
+
+        `exclude` drops mixes the diver no longer has — a lost-gas bailout. The
+        bottom gas is excluded like any other, so when nothing at all is
+        breathable this returns the *first remaining candidate* rather than
+        pretending the lost cylinder is still there; callers that can fail
+        (`bailout_schedule`) check breathability themselves first.
+        """
+        candidates = [g for g in (bottom_gas, *self.travel_gases,
+                                  *self.deco_gases) if g not in exclude]
         usable = [g for g in candidates
-                  if depth <= self.switch_depth(g) + 1e-9
+                  if depth <= self.switch_depth(g, first_stop) + 1e-9
                   and g.ppo2(depth, self.surface_p, self.msw_per_bar)
                   >= self.ppo2_min - 1e-9]
         if not usable:
-            return bottom_gas
+            return candidates[0] if candidates else bottom_gas
         return max(usable, key=lambda g: g.fO2)
 
     def descent_gas(self, depth: float, bottom_gas: Gas) -> Gas:
@@ -537,16 +615,21 @@ def _round_up_to_stop(depth: float, interval: float) -> float:
     return (math.floor(depth / interval + 1e-9) + 1) * interval
 
 
-def _gas_switch_depths(plan: DivePlan, bottom_gas: Gas) -> list[float]:
+def _gas_switch_depths(plan: DivePlan, bottom_gas: Gas,
+                       first_stop: float | None = None) -> list[float]:
     """Depths (msw) where the breathable-gas choice can change: each gas's
     (stop-rounded) ascent switch depth, its raw MOD at the descent ppO2
-    ceiling, and each hypoxic mix's minimum breathable depth."""
+    ceiling, and each hypoxic mix's minimum breathable depth.
+
+    `first_stop` must match what `best_gas` is given on the same leg — these are
+    the depths `_move` splits at, so a break computed at a switch depth the gas
+    chooser no longer uses would load a whole sub-segment on the wrong mix."""
     depths = set()
     for g in (bottom_gas, *plan.travel_gases, *plan.deco_gases):
         mod_descent = g.mod(plan.ppo2_bottom, plan.surface_p, plan.msw_per_bar)
         if mod_descent > 0:
             depths.add(round(mod_descent, 6))
-        switch = plan.switch_depth(g)
+        switch = plan.switch_depth(g, first_stop)
         if switch > 0:
             depths.add(round(switch, 6))
         dmin = g.min_depth(plan.ppo2_min, plan.surface_p, plan.msw_per_bar)
@@ -557,7 +640,8 @@ def _gas_switch_depths(plan: DivePlan, bottom_gas: Gas) -> list[float]:
 
 def _move(tissues: Tissues, segs: list[DiveSegment], plan: DivePlan,
           bottom_gas: Gas, from_depth: float, to_depth: float, gas_for,
-          kind: str, p_first_stop: float | None) -> None:
+          kind: str, p_first_stop: float | None,
+          first_stop: float | None = None) -> None:
     """Change depth continuously from `from_depth` to `to_depth`, splitting into
     sub-segments at gas-switch depths and loading tissues with the gas chosen
     (by `gas_for`) for each sub-segment.
@@ -570,7 +654,7 @@ def _move(tissues: Tissues, segs: list[DiveSegment], plan: DivePlan,
     descending = to_depth > from_depth
     rate = plan.descent_rate if descending else plan.ascent_rate
     lo, hi = min(from_depth, to_depth), max(from_depth, to_depth)
-    breaks = [d for d in _gas_switch_depths(plan, bottom_gas)
+    breaks = [d for d in _gas_switch_depths(plan, bottom_gas, first_stop)
               if lo + 1e-9 < d < hi - 1e-9]
     seq = [from_depth] + (breaks if descending else breaks[::-1]) + [to_depth]
     runs: list[tuple[float, float, Gas]] = []
@@ -644,9 +728,6 @@ def plan_multilevel(levels: Sequence[Level], bottom_gas: Gas,
     def descent_gas_for(d: float) -> Gas:
         return plan.descent_gas(d, bottom_gas)
 
-    def ascent_gas_for(d: float) -> Gas:
-        return plan.best_gas(d, bottom_gas)
-
     # ---- levels: travel to each in turn, then hold it until its runtime ------
     run = 0.0
     depth = 0.0
@@ -688,25 +769,51 @@ def plan_multilevel(levels: Sequence[Level], bottom_gas: Gas,
                                 ceiling_m=violated))
         run = level.runtime
 
-    bottom_depth = depth
+    _ascend(tissues, segs, plan, bottom_gas, depth)
+    return segs, tissues
 
+
+def _ascend(tissues: Tissues, segs: list[DiveSegment], plan: DivePlan,
+            bottom_gas: Gas, bottom_depth: float,
+            exclude: Sequence[Gas] = ()) -> None:
+    """The decompression ascent from `bottom_depth`, appended to `segs`.
+
+    Split out of `plan_multilevel` so a bailout can re-fly the same ascent from
+    the same tissues on a different gas stack (`bailout_schedule`) instead of
+    re-planning the bottom phase, which already happened and cannot be undone by
+    losing a cylinder afterwards.
+
+    `exclude` are mixes the diver no longer has. Everything else — Baker's stop
+    discretisation, the GF line anchored at the rounded first stop, the
+    last-stop rule — is unchanged, because this is the same code the normal
+    plan runs.
+    """
     # ---- find first stop using GF-Low ----
     ceil_low = ceiling_depth(tissues, plan.gf_low, plan.surface_p, plan.msw_per_bar)
     first_stop_depth = _round_up_to_stop(ceil_low, plan.stop_interval)
     if first_stop_depth > 0:
         first_stop_depth = max(first_stop_depth, plan.last_stop_depth)
+
+    def ascent_gas_for(d: float) -> Gas:
+        # `first_stop_depth` is read at call time, not captured by value: on an
+        # NDL ascent it is 0 and the "at-first-stop" policy must fall back to
+        # at-MOD rather than hold every switch to the surface.
+        return plan.best_gas(d, bottom_gas,
+                             first_stop_depth if first_stop_depth > 0 else None,
+                             exclude)
+
     if first_stop_depth <= 0:
         # No deco: ascend to the surface, switching to a breathable gas if the
         # bottom mix is hypoxic near the surface.
         _move(tissues, segs, plan, bottom_gas, bottom_depth, 0.0,
               ascent_gas_for, "ascent", plan.surface_p)
-        return segs, tissues
+        return
 
     p_first_stop = depth_to_p_amb(first_stop_depth, plan.surface_p, plan.msw_per_bar)
 
     # ---- ascend from bottom to first stop ----
     _move(tissues, segs, plan, bottom_gas, bottom_depth, first_stop_depth,
-          ascent_gas_for, "ascent", p_first_stop)
+          ascent_gas_for, "ascent", p_first_stop, first_stop_depth)
 
     # ---- iterate stops ----
     # Is this a decompression dive at all? The GF-LOW ceiling sets where the
@@ -728,7 +835,7 @@ def plan_multilevel(levels: Sequence[Level], bottom_gas: Gas,
         p_next = depth_to_p_amb(next_depth, plan.surface_p, plan.msw_per_bar)
         gf_at_next = gf_at(p_next, plan.gf_low, plan.gf_high,
                            p_first_stop, plan.surface_p)
-        gas_here = plan.best_gas(current_depth, bottom_gas)
+        gas_here = ascent_gas_for(current_depth)
         p_here = depth_to_p_amb(current_depth, plan.surface_p, plan.msw_per_bar)
 
         # gfdeco.f's DECOMPRESSION_STOP, in his order — which is not the same
@@ -767,10 +874,92 @@ def plan_multilevel(levels: Sequence[Level], bottom_gas: Gas,
         # Ascend to the next stop, switching gas at any MOD crossed on the way up.
         if next_depth < current_depth:
             _move(tissues, segs, plan, bottom_gas, current_depth, next_depth,
-                  ascent_gas_for, "ascent", p_first_stop)
+                  ascent_gas_for, "ascent", p_first_stop, first_stop_depth)
         current_depth = next_depth
 
-    return segs, tissues
+
+def surface_interval(tissues: Tissues, minutes: float, plan: DivePlan,
+                     gas: Gas = AIR) -> Tissues:
+    """Off-gas at the surface for `minutes`, returning the new loading.
+
+    The whole of repetitive diving in one function: the second dive is the first
+    one's `plan_multilevel(..., start_tissues=...)` after this. No tables, no
+    pressure groups — the compartments carry the residual themselves, which is
+    what every modern computer does and what makes a "repetitive" dive nothing
+    more than a dive that did not start clean.
+
+    Breathed on air by default. Surface oxygen shortens the interval a great
+    deal and is worth being able to say, so it is a parameter rather than an
+    assumption.
+    """
+    if minutes < 0:
+        raise ValueError(f"surface interval must be >= 0 min (got {minutes:g})")
+    out = tissues.copy()
+    update_tissues(out, gas, plan.surface_p, plan.surface_p, minutes,
+                   plan.p_h2o)
+    return out
+
+
+def tissues_after(segments: Iterable[DiveSegment], plan: DivePlan,
+                  start_tissues: Tissues | None = None) -> Tissues:
+    """Replay `segments` through the compartments and return the loading.
+
+    The planner returns only the state at the *end* of a dive, but the tissue
+    state part-way through is what a bailout or a repeat dive starts from. This
+    walks the segments the planner already produced, so it is the same Schreiner
+    step applied to the same profile rather than a second model.
+    """
+    tissues = (start_tissues.copy() if start_tissues
+               else Tissues.at_surface(plan.surface_p, AIR, plan.p_h2o))
+    for s in segments:
+        update_tissues(
+            tissues, s.gas,
+            depth_to_p_amb(s.depth_start, plan.surface_p, plan.msw_per_bar),
+            depth_to_p_amb(s.depth_end, plan.surface_p, plan.msw_per_bar),
+            s.duration, plan.p_h2o)
+    return tissues
+
+
+def bailout_schedule(segments: Sequence[DiveSegment], plan: DivePlan,
+                     bottom_gas: Gas, lost: Sequence[Gas],
+                     start_tissues: Tissues | None = None
+                     ) -> list[DiveSegment] | None:
+    """Re-fly the ascent from the end of the bottom phase without `lost`.
+
+    The bottom phase already happened: losing a cylinder at depth does not undo
+    the loading it produced, so this keeps the bottom segments and the loading
+    they caused, and re-runs only the ascent on what is left. That is what
+    separates it from dropping a gas and re-planning — a re-plan would also
+    change the descent and the bottom, which is a different (and wrong)
+    question.
+
+    Returns the FULL segment list (bottom phase + new ascent), or **None** when
+    the scenario cannot be flown: with the bottom gas gone and nothing else
+    breathable at that depth there is no schedule to print, and inventing one
+    would be worse than saying so. Callers surface that as "not plannable"
+    rather than silently skipping it.
+
+    Losing the bottom gas is the case the deco-gas scenarios cannot express, and
+    it is the one that decides whether the stage you carry is a bailout or just
+    an accelerant.
+    """
+    remaining = [g for g in (bottom_gas, *plan.travel_gases, *plan.deco_gases)
+                 if g not in lost]
+    if not remaining:
+        return None
+    bottom_end = _bottom_phase_end(segments)
+    if not bottom_end:
+        return None
+    depth = segments[bottom_end - 1].depth_end
+    # Breathable *here*, right now: ppO2 between the hypoxia floor and the deco
+    # ceiling. Nothing breathable at the bottom depth is a real outcome, not an
+    # error — it is what "you cannot bail out from here on this stack" means.
+    if not any(plan._usable(g, depth, plan.ppo2_deco) for g in remaining):
+        return None
+    segs = list(segments[:bottom_end])
+    tissues = tissues_after(segs, plan, start_tissues)
+    _ascend(tissues, segs, plan, bottom_gas, depth, exclude=lost)
+    return segs
 
 
 # -----------------------------------------------------------------------------

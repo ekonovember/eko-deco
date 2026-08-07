@@ -371,6 +371,40 @@ class DecoApp:
         # --- levels: the dive profile, deepest first (runtime is cumulative) ---
         levels = ttk.LabelFrame(left, text="Levels", padding=6)
         levels.pack(fill=tk.X, pady=(8, 0))
+
+        # Repetitive dives. Only the PROFILE repeats — gases, GF, SAC and the
+        # environment are shared across the day, because that is how a day's
+        # diving is actually planned (DECISIONS.md #26). The level rows below
+        # always show the selected dive; the others are parked in
+        # `_dive_profiles` until switched back to.
+        series = ttk.Frame(levels)
+        series.pack(fill=tk.X, pady=(0, 4))
+        ttk.Label(series, text="Dive").pack(side=tk.LEFT)
+        self.dive_pick = ttk.Combobox(series, width=4, state="readonly",
+                                      values=["1"])
+        self.dive_pick.set("1")
+        self.dive_pick.pack(side=tk.LEFT, padx=(3, 6))
+        self.dive_pick.bind("<<ComboboxSelected>>",
+                            lambda _e: self._select_dive(
+                                int(self.dive_pick.get()) - 1))
+        ttk.Button(series, text="+ dive", width=7,
+                   command=self._add_dive).pack(side=tk.LEFT)
+        ttk.Button(series, text="− dive", width=7,
+                   command=self._remove_dive).pack(side=tk.LEFT, padx=(2, 6))
+        self.surface_interval = tk.StringVar(value="60")
+        self.si_label = ttk.Label(series, text="SI")
+        self.si_entry = ttk.Spinbox(series, from_=0, to=2880, width=5,
+                                    textvariable=self.surface_interval)
+        self.si_unit = ttk.Label(series, text="min before")
+        self.surface_interval.trace_add(
+            "write", lambda *_: None if self._building else self.recompute())
+        #: Profiles of every dive in the day. Index 0 is the one on screen at
+        #: start; each entry is {"surface_interval_min": float, "levels": [...]}
+        #: in the config's own shape, so stashing and saving are the same act.
+        self._dive_profiles: list[dict] = [
+            {"surface_interval_min": 0.0, "levels": []}]
+        self._dive_idx = 0
+
         self.level_list = ttk.Frame(levels)
         self.level_list.pack(fill=tk.X)
         for col, text in enumerate(("depth m", "runtime", "")):
@@ -712,6 +746,17 @@ class DecoApp:
         self.ppo2_switch_tol = self._add_spin(pp2, "", 0.0, 0.5, 0.01, 0.05,
                                               fmt="%.2f", unit="switch tol",
                                               unit_width=10)
+        sw = ttk.Frame(body)
+        sw.pack(fill=tk.X, pady=2)
+        ttk.Label(sw, text="Gas switch", width=8).pack(side=tk.LEFT)
+        self.gas_switch_policy = tk.StringVar(value="at-mod")
+        ttk.Combobox(sw, textvariable=self.gas_switch_policy, width=13,
+                     state="readonly",
+                     values=sorted(b.GAS_SWITCH_POLICIES)).pack(side=tk.LEFT)
+        ttk.Label(sw, text="at-first-stop holds the switch until you stop"
+                  ).pack(side=tk.LEFT, padx=(6, 0))
+        self.gas_switch_policy.trace_add(
+            "write", lambda *_: self.recompute())
         grid = ttk.Frame(body)
         grid.pack(fill=tk.X, pady=2)
         self.min_stop_time = self._add_spin(grid, "Stop grid", 0.1, 10.0, 0.1,
@@ -790,6 +835,91 @@ class DecoApp:
             self._regrid_level_rows()
             if not self._building:
                 self.recompute()
+
+    # ------------------------------------------------------- dive series ----
+
+    def _stash_dive(self) -> None:
+        """Park the level rows on screen back into the selected dive.
+
+        Uses `_row_levels`, not `_levels`: a field blanked mid-edit must survive
+        switching dives, exactly as it survives saving."""
+        self._dive_profiles[self._dive_idx]["levels"] = [
+            self._level_row_dict(rl) for rl in self._row_levels()]
+        if self._dive_idx:
+            self._dive_profiles[self._dive_idx]["surface_interval_min"] = (
+                self._num(self.surface_interval, 60.0, lo=0.0))
+
+    def _show_dive(self, idx: int) -> None:
+        """Rebuild the level rows from dive `idx`. Caller has already stashed."""
+        self._dive_idx = idx
+        was_building, self._building = self._building, True
+        try:
+            for row in list(self.level_rows):
+                for w in row["widgets"]:
+                    w.destroy()
+            self.level_rows.clear()
+            for lv in self._dive_profiles[idx]["levels"] or [
+                    {"depth_m": 30.0, "runtime_min": 40.0}]:
+                self._add_level_row(lv["depth_m"], lv["runtime_min"],
+                                    recompute=False)
+            self.dive_pick.configure(
+                values=[str(i + 1) for i in range(len(self._dive_profiles))])
+            self.dive_pick.set(str(idx + 1))
+            self.surface_interval.set(
+                f"{self._dive_profiles[idx]['surface_interval_min']:g}")
+            # Dive 1 starts on clean tissues: there is no interval in front of
+            # it, so the field is hidden rather than shown reading zero.
+            for w in (self.si_label, self.si_entry, self.si_unit):
+                w.pack_forget()
+            if idx:
+                self.si_label.pack(side=tk.LEFT)
+                self.si_entry.pack(side=tk.LEFT, padx=2)
+                self.si_unit.pack(side=tk.LEFT)
+        finally:
+            self._building = was_building
+
+    def _select_dive(self, idx: int) -> None:
+        self._stash_dive()
+        self._show_dive(idx)
+        self.recompute()
+
+    def _add_dive(self) -> None:
+        """A new dive after the current last one, seeded from the one on screen —
+        a second dive on the same site is the common case, and an empty profile
+        would only have to be retyped."""
+        self._stash_dive()
+        self._dive_profiles.append({
+            "surface_interval_min": 60.0,
+            "levels": [dict(lv) for lv in
+                       self._dive_profiles[self._dive_idx]["levels"]]})
+        self._show_dive(len(self._dive_profiles) - 1)
+        self.recompute()
+
+    def _remove_dive(self) -> None:
+        if len(self._dive_profiles) <= 1:      # a day needs at least one dive
+            return
+        self._stash_dive()
+        self._dive_profiles.pop(self._dive_idx)
+        self._show_dive(min(self._dive_idx, len(self._dive_profiles) - 1))
+        self.recompute()
+
+    def _series(self) -> list[tuple[float, list[b.Level]]]:
+        """The whole day as `(surface_interval, levels)`, plannable rows only.
+
+        Mirrors `_levels()` rather than `_row_levels()`: a half-typed row is
+        skipped so the plan does not blow up mid-keystroke. A dive left with no
+        plannable level at all is dropped from the series — it cannot be planned
+        and must not silently shift the residual loading of the dives after it."""
+        self._stash_dive()
+        out: list[tuple[float, list[b.Level]]] = []
+        for i, prof in enumerate(self._dive_profiles):
+            levels = [b.Level(lv["depth_m"], lv["runtime_min"])
+                      for lv in prof["levels"]
+                      if lv["depth_m"] > 0 and lv["runtime_min"] > 0]
+            if levels:
+                out.append((0.0 if not i else prof["surface_interval_min"],
+                            levels))
+        return out
 
     def _row_levels(self) -> list[_RowLevel]:
         """Every level row exactly as typed — never drops one. This is what gets
@@ -962,6 +1092,7 @@ class DecoApp:
             ppo2_deco=self._num(self.ppo2_deco, 1.6, lo=0.1),
             ppo2_min=self._num(self.ppo2_min, 0.18, lo=0.0),
             ppo2_switch_tol=self._num(self.ppo2_switch_tol, 0.05, lo=0.0),
+            gas_switch_policy=self.gas_switch_policy.get(),
             min_stop_time=self._num(self.min_stop_time, 1.0, lo=0.01),
             p_h2o=self._num(self.p_h2o, b.P_H2O, lo=0.0001),
             surface_p=self._num(self.surface_p, b.P_ATM, lo=0.1),
@@ -971,8 +1102,8 @@ class DecoApp:
         )
 
     def recompute(self) -> None:
-        levels = self._levels()
-        if not levels:                      # every row mid-edit / emptied
+        series = self._series()
+        if not series:                      # every row mid-edit / emptied
             self._error("⚠ profile incomplete — add a level with a depth and "
                         "runtime")
             return
@@ -980,28 +1111,35 @@ class DecoApp:
 
         try:
             plan = self._make_plan()        # validates the gradient factors
-            # ONE PlanResult, exactly as cmd_plan builds one: every figure the
-            # readout prints is read off it rather than re-derived here. The
-            # GUI used to call plan_multilevel itself and then recompute
-            # density, CNS/OTU, END, the final ceiling and the whole gas
-            # accounting inline — at sea-level salt and with no deco stack, so
-            # an altitude or deco-SAC dive showed different numbers from the
+            # ONE PlanResult per dive, exactly as cmd_plan builds them: every
+            # figure the readout prints is read off it rather than re-derived
+            # here. The GUI used to call plan_multilevel itself and then
+            # recompute density, CNS/OTU, END, the final ceiling and the whole
+            # gas accounting inline — at sea-level salt and with no deco stack,
+            # so an altitude or deco-SAC dive showed different numbers from the
             # CLI on the same config (DECISIONS.md #24).
-            res = rp.compute_plan_result(levels, gas, plan, self._gas_plan(),
-                                         self._gas_rows_raw())
+            results = rp.compute_series_result(series, gas, plan,
+                                               self._gas_plan(),
+                                               self._gas_rows_raw())
         except (ValueError, RuntimeError) as e:
             self._error(f"Plan error: {e}")
             return
 
-        scenarios = self._lost_gas_scenarios(levels, gas, plan, res.segments)
+        # A dive with no plannable level is dropped from the series, so the
+        # selected index can outrun the results; show the last one rather than
+        # crash mid-keystroke.
+        res = results[min(self._dive_idx, len(results) - 1)]
+        levels = res.levels
+        scenarios = self._lost_gas_scenarios(levels, gas, plan, res.segments,
+                                             res.bailout)
         self._draw(res.segments, res.max_depth_m, levels[-1].runtime,
                    b.ceiling_profile(res.segments, plan), levels)
-        self._write_readout(res, scenarios)
+        self._write_readout(res, scenarios, results)
         self._write_runtime(res, scenarios)
         self._plan_ok = True                # a valid plan is now on every surface
 
-    def _lost_gas_scenarios(self, levels, gas, plan,
-                            segs) -> list[tuple[str, list]]:
+    def _lost_gas_scenarios(self, levels, gas, plan, segs,
+                            bailout=None) -> list[tuple[str, list]]:
         """Contingency schedules for losing deco gas, MultiDeco-style: the normal
         dive ("OK"), then one re-plan per deco gas without it, and — with two or
         more deco gases — an "all" worst case with every deco gas gone. Only
@@ -1009,7 +1147,15 @@ class DecoApp:
         for any number of deco gases (nothing assumes two).
 
         A lost gas is simply dropped from the deco stack; levels never name a
-        gas (selection is automatic by role), so nothing else needs rewriting."""
+        gas (selection is automatic by role), so nothing else needs rewriting.
+
+        Losing the BOTTOM gas is a different question and gets a different
+        answer: the bottom phase already happened, so it is not re-planned —
+        only the ascent is re-flown on what is left (`buhlmann.bailout_schedule`).
+        Its column appears only when that is actually survivable, which on most
+        deep dives it is not: with the back gas gone and every stage above its
+        MOD there is no schedule to print, and a column that quietly showed one
+        anyway would be the most dangerous cell on the card."""
         scenarios: list[tuple[str, list]] = [("OK", segs)]
         deco = plan.deco_gases
         losses = [(repr(g), (g,)) for g in deco]        # (label, gases lost)
@@ -1024,6 +1170,8 @@ class DecoApp:
                 continue       # a scenario that can't be planned (e.g. hypoxic
                                # gap) just drops its column
             scenarios.append((label, lost_segs))
+        if bailout is not None:
+            scenarios.append(("bottom gas", bailout))
         return scenarios
 
     @staticmethod
@@ -1119,7 +1267,8 @@ class DecoApp:
 
     # ----------------------------------------------------------- readout ----
 
-    def _write_readout(self, res: rp.PlanResult, scenarios=None) -> None:
+    def _write_readout(self, res: rp.PlanResult, scenarios=None,
+                       series=None) -> None:
         """Assemble the Results tab from one `PlanResult`.
 
         Each card is built by its own small method taking `res` and returning
@@ -1132,8 +1281,10 @@ class DecoApp:
         cards: list[list[str]] = [
             self._card_header(res, scenarios),
             *self._cards_warnings(res),
+            *self._card_series(series),
             *self._cards_stops(res, scenarios),
             self._card_gas(res),
+            *self._card_gas_stack(res),
             self._card_dive(res),
             *self._card_environment(res),
             self._card_gas_plan(res),
@@ -1213,6 +1364,41 @@ class DecoApp:
                              ", ".join(repr(g) for g in plan.deco_gases)])
         return format_card([f"GAS · {gas!r}"], gas_rows, aligns=["<", "<"])
 
+    def _card_series(self, series) -> list[list[str]]:
+        """The day at a glance, on every dive's readout. Empty for a single
+        dive. Dive 2 is not dive 1 repeated — its deco is longer for the same
+        profile, and seeing the whole series is the only way that reads as a
+        consequence of the surface interval rather than a mistake."""
+        if not series or len(series) < 2:
+            return []
+        rows = []
+        for i, r in enumerate(series, start=1):
+            mark = "▶" if r is series[self._dive_idx] else " "
+            rows.append([f"{mark} dive {i}",
+                         f"{r.max_depth_m:.0f} m / "
+                         f"{r.levels[-1].runtime:.0f} min",
+                         f"TTS {r.tts_min:.0f}",
+                         f"RT {rp.runtime_min(r.total_runtime_min):d}",
+                         f"surfGF {r.surf_gf*100:.0f}%"])
+        return [format_card(["DIVE SERIES"], rows,
+                            aligns=["<", "<", ">", ">", ">"])]
+
+    def _card_gas_stack(self, res: rp.PlanResult) -> list[list[str]]:
+        """Every mix quoted at its OWN MOD — the deepest it would ever be
+        breathed. The GAS card above answers "what am I breathing at the
+        bottom"; this answers "is each mix in the stack safe where it is
+        actually planned for", which for a deco cylinder is a different depth
+        entirely. Empty when the stack is one gas: the GAS card already said it."""
+        if len(res.gas_stack) < 2:
+            return []
+        rows = [[r.gas.__repr__(), r.role, f"{r.mod_m:.0f}", f"{r.end_m:.0f}",
+                 f"{r.ead_m:.0f}", f"{r.density_g_l:.1f}"
+                                   + (" ⚠" if r.dense else "")]
+                for r in res.gas_stack]
+        return [format_card(["GAS STACK · at each mix's own MOD"], rows,
+                            headers=["gas", "role", "MOD", "END", "EAD", "ρ"],
+                            aligns=["<", "<", ">", ">", ">", ">"])]
+
     def _card_dive(self, res: rp.PlanResult) -> list[str]:
         """Rates and the ppO₂ window are shown because a hand-edited
         `ascent_rate` reshapes every schedule, and a setting the readout stays
@@ -1231,6 +1417,11 @@ class DecoApp:
                            f" · {len(stops)} stops"],
             ["CNS / OTU", f"{res.cns_pct:.0f}% / {res.otu:.0f}"],
             ["final ceiling", f"{res.surface_ceiling_m:.2f} m"],
+            # GF-High is the budget; SurfGF is what the schedule actually spends.
+            # Baker's whole-minute padding usually surfaces the diver under it,
+            # and that headroom is the number worth having when a plan changes.
+            ["SurfGF", f"{res.surf_gf*100:.0f}% (of {plan.gf_high*100:.0f} "
+                       f"allowed)"],
             ["rates", f"down {plan.descent_rate:g} · up {plan.ascent_rate:g}"
                       f" m/min · stops {plan.stop_interval:g} m"],
             ["ppO₂ limits", f"{plan.ppo2_bottom:g} bottom · {plan.ppo2_deco:g}"
@@ -1484,9 +1675,20 @@ class DecoApp:
                     gp.sac_for(gas, plan.deco_gases),
                     plan.surface_p, plan.msw_per_bar)
                 footers.append(f"back gas {back_l:.0f} L on {gas!r}")
-            card = format_card(title, rows_for(ss),
-                               headers=["depth", "stop", "run", "gas"],
-                               footer_lines=footers, aligns=[">", ">", ">", "<"])
+            # The whole schedule on one line, per scenario — what gets pasted
+            # into a message or copied onto a slate. The Copy button above takes
+            # the card text as a whole, so this travels with it.
+            footers.append(rp.backup_line(ss))
+            # Per scenario: a lost deco gas moves every cylinder's pressure, so
+            # the bar column has to be re-derived for the card it appears on.
+            bars = rp.leg_pressures(ss, gp, self._gas_rows_raw(), plan)
+            # Slack from the long footer lines goes into the left-aligned `gas`
+            # column, not the last one: `bar` is a number column and has to stay
+            # snug against the schedule to be readable at a glance.
+            card = format_card(title, rows_for(ss, bars),
+                               headers=["depth", "stop", "run", "gas", "bar"],
+                               footer_lines=footers,
+                               aligns=[">", ">", ">", "<", ">"], widen=3)
             cards.append("\n".join(card))
 
         # Cut table: the bottom-timer backup matrix (computer failure, full gas
@@ -1584,6 +1786,8 @@ class DecoApp:
             self.ppo2_deco.set(f"{cfg.get('ppo2_deco', 1.6):.2f}")
             self.ppo2_min.set(f"{cfg.get('ppo2_min', 0.18):.2f}")
             self.ppo2_switch_tol.set(f"{cfg.get('ppo2_switch_tol', 0.05):.2f}")
+            self.gas_switch_policy.set(
+                cfg.get('gas_switch_policy', 'at-mod'))
             self.min_stop_time.set(f"{cfg.get('min_stop_time', 1.0):g}")
             self.p_h2o.set(f"{cfg.get('p_h2o_bar', b.P_H2O):.4f}")
             self.sac.set(f"{cfg['sac_normal']:g}")
@@ -1617,9 +1821,17 @@ class DecoApp:
             for w in self.level_list.grid_slaves():
                 if int(w.grid_info().get("row", 0)) > 0:
                     w.destroy()
-            for lv in cfg["levels"]:
-                self._add_level_row(lv["depth_m"], lv["runtime_min"],
-                                    recompute=False)
+            # `levels` is dive 1, `repeats` the dives after it. A file written
+            # before repetitive dives existed has no `repeats` and loads as the
+            # single dive it has always been.
+            self._dive_profiles = [
+                {"surface_interval_min": 0.0,
+                 "levels": [dict(lv) for lv in cfg["levels"]]}]
+            for r in cfg.get("repeats", []):
+                self._dive_profiles.append(
+                    {"surface_interval_min": float(r["surface_interval_min"]),
+                     "levels": [dict(lv) for lv in r["levels"]]})
+            self._show_dive(0)
         finally:
             self._building = was_building
         if not self._building:
@@ -1629,6 +1841,9 @@ class DecoApp:
         cfg = dict(self._base_cfg)               # preserve fields the GUI can't edit
         cfg.pop("depth_m", None)                 # legacy square-profile keys
         cfg.pop("bottom_time_min", None)
+        # Park the rows on screen first: saving while looking at dive 2 must
+        # write dive 2's profile to dive 2, not over dive 1's.
+        self._stash_dive()
         gases = [{"role": r["role"].get(),
                   "o2": int(float(r["fo2"].get() or 0)),
                   "he": int(float(r["fhe"].get() or 0)),
@@ -1636,8 +1851,12 @@ class DecoApp:
                   "pressure_bar": self._row_pressure(r),
                   "enabled": bool(r["use"].get())} for r in self.gas_rows]
         cfg.update({
-            "levels": [self._level_row_dict(rl)
-                       for rl in self._row_levels()],   # as typed: lose nothing
+            "repeats": [
+                {"surface_interval_min": prof["surface_interval_min"],
+                 "levels": prof["levels"]}
+                for prof in self._dive_profiles[1:]],
+            # Dive 1, as typed: lose nothing (`_stash_dive` used `_row_levels`).
+            "levels": self._dive_profiles[0]["levels"],
             "gf_low": round(self._pct(self.gf_lo, 0.30) * 100),
             "gf_high": round(self._pct(self.gf_hi, 0.70) * 100),
             "last_stop_m": self._num(self.last_stop, 3.0, lo=0.0),
@@ -1648,6 +1867,7 @@ class DecoApp:
             "ppo2_deco": self._num(self.ppo2_deco, 1.6, lo=0.1),
             "ppo2_min": self._num(self.ppo2_min, 0.18, lo=0.0),
             "ppo2_switch_tol": self._num(self.ppo2_switch_tol, 0.05, lo=0.0),
+            "gas_switch_policy": self.gas_switch_policy.get(),
             "min_stop_time": self._num(self.min_stop_time, 1.0, lo=0.01),
             "p_h2o_bar": self._num(self.p_h2o, b.P_H2O, lo=0.0001),
             "sac_normal": self._num(self.sac, 20.0, lo=1.0),

@@ -729,3 +729,68 @@ every entry unticked — used to fall back to the default stack and then to
 now keeps an explicit empty list empty and `to_buhlmann` raises; the CLI turns
 that into exit 2. An absent `gases` key still gets defaults: that is a partial
 hand-edit, not a gasless dive.
+
+## #25 — Where a deco gas is taken is a setting, and the default stays at MOD
+
+`DivePlan.gas_switch_policy` is `"at-mod"` (default) or `"at-first-stop"`.
+
+At MOD is what MultiDeco, Shearwater and Baker's GFDECO do, and what every
+cross-check in this repo is measured against, so it stays the default: changing
+it would move our schedules away from the tools they are pinned to for a reason
+no diver asked for.
+
+At first stop exists because teams really plan it that way. A gas switch flown
+mid-ascent is a valve and regulator drill done while moving, negatively buoyant
+and task-loaded; the convention is to arrive at the first stop, settle, then
+switch. It is a procedure choice, not a model one, and the planner's job is to
+cost it rather than to have an opinion about it.
+
+**It can only lengthen the deco.** The richer mix starts working later, so the
+obligation is never smaller. `tests/test_buhlmann.TestGasSwitchPolicy` sweeps 42
+dives and asserts exactly that, because a policy that ever came out *faster*
+would mean the switch depth was feeding back into the schedule the wrong way.
+
+**On the standard 1-minute stop grid it usually changes nothing.** Baker's
+padding (#21) rounds each stop onto a whole minute and absorbs the difference;
+at `min_stop_time` 0.1 the same dives show 0.2–0.4 min. That is not a reason to
+distrust the setting — it is the same reason our stop times match GFDECO — but
+it does mean a user who flips it and sees an unchanged TTS is seeing the truth,
+not a broken control.
+
+Only **deco** gases are held back. Bottom and travel mixes are what got the
+diver down; they are not a switch made on the way up. And an NDL ascent has no
+first stop to hold to, so `first_stop=None` falls back to at-MOD rather than
+suppressing every switch to the surface.
+
+## #26 — A dive series shares its settings and repeats only the profile
+
+Repetitive dives are `config["repeats"]`: a list of
+`{"surface_interval_min", "levels"}` after the existing top-level `levels`,
+which stays dive 1.
+
+**Why not a `dives` array replacing `levels`.** That is the tidier schema and it
+was the first plan. But `levels` is read by the CLI, the GUI, `levels_of`, and a
+dozen tests, and every existing `dive_plan.json` uses it — so a rename buys
+symmetry and pays for it in migration risk across the whole surface. `repeats`
+is strictly additive: every config written before repetitive dives existed
+describes exactly the same dive afterwards, and nothing that reads `levels`
+had to change. The wart is that dive 1 is spelled differently from dives 2+;
+`dive_config.series_of` exists so no caller has to care.
+
+**Only the profile repeats.** Gases, GF, SAC, rates and the environment are
+shared across the day, because that is how a day's diving is actually planned:
+one rig, one set of settings, several profiles. A per-dive gas stack would be a
+different feature (twinset in the morning, single in the afternoon) and can be
+added later without moving what is here.
+
+**A surface interval is required on a repeat, never guessed.** Same rule as #9
+and #24: defaulting it would invent residual nitrogen the file never stated, and
+the whole point of the feature is that the second dive's deco comes from the
+first dive's loading. Dive 1 has no interval at all — nothing precedes it — so
+the GUI hides the field rather than showing it reading zero.
+
+**The model needed almost nothing.** `plan_multilevel` already took
+`start_tissues`; `surface_interval` is one `update_tissues` call at surface
+pressure. No tables, no pressure groups — the compartments carry the residual,
+which is what every dive computer does and what makes a repetitive dive just a
+dive that did not start clean.

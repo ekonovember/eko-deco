@@ -87,6 +87,28 @@ def parse_level(spec: str) -> b.Level:
     return b.Level(depth, runtime)
 
 
+def parse_dive(spec: str) -> tuple[float, b.Level]:
+    """Parse one dive of a series as 'DEPTH:RUNTIME[:SURFACE_INTERVAL]'.
+
+    SURFACE_INTERVAL is the time on the surface BEFORE this dive, in minutes —
+    it belongs to the gap, not to the dive, which is why it is the third field
+    and why omitting it on the first dive is the normal case."""
+    parts = spec.split(":")
+    if len(parts) not in (2, 3):
+        raise ValueError(
+            f"dive '{spec}': expected DEPTH:RUNTIME[:SURFACE_INTERVAL], "
+            "e.g. 30:25 or 30:25:60")
+    try:
+        depth, runtime = float(parts[0]), float(parts[1])
+        interval = float(parts[2]) if len(parts) == 3 else 0.0
+    except ValueError as e:
+        raise ValueError(f"dive '{spec}': depth, runtime and surface "
+                         "interval must be numbers") from e
+    if interval < 0:
+        raise ValueError(f"dive '{spec}': surface interval must be >= 0")
+    return interval, b.Level(depth, runtime)
+
+
 def _level_dict(l: b.Level) -> dict:
     """Serialize a Level to the config/JSON shape."""
     return {"depth_m": l.depth, "runtime_min": l.runtime}
@@ -176,6 +198,7 @@ def _build_plan(args) -> b.DivePlan:
         ppo2_bottom=args.ppo2_bottom,
         ppo2_min=args.ppo2_min,
         ppo2_switch_tol=args.ppo2_switch_tol,
+        gas_switch_policy=args.gas_switch_policy,
         min_stop_time=args.min_stop_time,
         p_h2o=_p_h2o(args),
     )
@@ -218,9 +241,19 @@ def _config_from_args(args) -> dict:
                     "tank_l": tk, "pressure_bar": pr}
                    for role, g, tk, pr in gases]
 
-    levels = [_level_dict(l) for l in _args_levels(args)]
+    # `levels` is dive 1; `repeats` are the dives after it, each carrying the
+    # surface interval that precedes it (dive_config.REPEAT_KEYS).
+    if getattr(args, "dive", None):
+        parsed = [parse_dive(d) for d in args.dive]
+        levels = [_level_dict(parsed[0][1])]
+        repeats = [{"surface_interval_min": si, "levels": [_level_dict(lv)]}
+                   for si, lv in parsed[1:]]
+    else:
+        levels = [_level_dict(l) for l in _args_levels(args)]
+        repeats = []
     return {
         "levels": levels,
+        "repeats": repeats,
         "gf_low": round(args.gf_low * 100), "gf_high": round(args.gf_high * 100),
         "sac_normal": sac, "sac_deco": args.sac_deco,
         "sac_multiplier": args.sac_multiplier,
@@ -233,6 +266,7 @@ def _config_from_args(args) -> dict:
         "ppo2_deco": args.ppo2_deco,
         "ppo2_min": args.ppo2_min,
         "ppo2_switch_tol": args.ppo2_switch_tol,
+        "gas_switch_policy": args.gas_switch_policy,
         "min_stop_time": args.min_stop_time,
         "surface_p_bar": _surface_p(args),
         "msw_per_bar": _msw_per_bar(args),
@@ -376,17 +410,32 @@ def cmd_plan(args) -> int:
         except ValueError as e:
             print(f"plan: {e}", file=sys.stderr)
             return 2
-        levels = dc.levels_of(cfg)
+        series = dc.series_of(cfg)
         gf_low, gf_high = cfg["gf_low"] / 100.0, cfg["gf_high"] / 100.0
     else:
-        if not args.level and (args.depth is None or args.time is None):
-            print("plan: --depth and --time (or --level DEPTH:RUNTIME) are "
-                  "required (or pass a config file / --load).", file=sys.stderr)
+        if args.dive and (args.level or args.depth is not None
+                          or args.time is not None):
+            print("plan: --dive describes a whole series, so it cannot be "
+                  "combined with --depth/--time/--level.", file=sys.stderr)
+            return 2
+        if not args.dive and not args.level and (args.depth is None
+                                                 or args.time is None):
+            print("plan: --depth and --time (or --level DEPTH:RUNTIME, or "
+                  "--dive DEPTH:RUNTIME[:SI]) are required (or pass a config "
+                  "file / --load).", file=sys.stderr)
             return 2
         try:
             bottom = parse_gas_spec(args.gas)[0]
             plan = _build_plan(args)          # validates the gradient factors
-            levels = _args_levels(args)
+            if args.dive:
+                first, *rest = [parse_dive(d) for d in args.dive]
+                if first[0]:
+                    print("plan: the first --dive cannot have a surface "
+                          "interval — nothing precedes it.", file=sys.stderr)
+                    return 2
+                series = [(si, [lv]) for si, lv in [first, *rest]]
+            else:
+                series = [(0.0, _args_levels(args))]
             gp, gas_rows = _args_gas_context(args)
         except ValueError as e:
             print(f"plan: {e}", file=sys.stderr)
@@ -406,28 +455,63 @@ def cmd_plan(args) -> int:
         counts4 = (tb, ta, db, da)
 
     try:
-        res = rp.compute_plan_result(levels, bottom, plan, gp, gas_rows,
-                                     contingency=counts4)
+        results = rp.compute_series_result(series, bottom, plan, gp, gas_rows,
+                                           contingency=counts4)
     except ValueError as e:
         print(f"plan: {e}", file=sys.stderr)
         return 2
 
+    if args.dive_index is not None:
+        if not 1 <= args.dive_index <= len(results):
+            print(f"plan: --dive-index {args.dive_index} is outside the "
+                  f"series (1..{len(results)}).", file=sys.stderr)
+            return 2
+        shown = [(args.dive_index, results[args.dive_index - 1])]
+    else:
+        shown = list(enumerate(results, start=1))
+
     model_label = f"Bühlmann GF {int(gf_low * 100)}/{int(gf_high * 100)}"
-    gas_data, gas_lines = _gas_output(res.gas, res.max_depth_m)
-    cont_data, cont_lines = None, []
-    if res.contingency is not None:
-        cont_data, cont_lines = _contingency_output(res.contingency,
-                                                    res.max_depth_m,
-                                                    levels[-1].runtime)
     saved_to = dc.save(cfg if load_path else _config_from_args(args),
                        args.save) if args.save else None
 
+    # Two separate accumulators, not one list of "either": the JSON and text
+    # projections have nothing in common but the loop that builds them.
+    json_dives: list[dict] = []
+    text_lines: list[str] = []
+    for n, res in shown:
+        gas_data, gas_lines = _gas_output(res.gas, res.max_depth_m)
+        cont_data, cont_lines = None, []
+        if res.contingency is not None:
+            cont_data, cont_lines = _contingency_output(
+                res.contingency, res.max_depth_m, res.levels[-1].runtime)
+        # The surface interval belongs to the gap before the dive, so dive 1
+        # never has one: it is the only dive that starts on clean tissues.
+        interval = series[n - 1][0] if n > 1 else None
+        if args.json:
+            data = _plan_json(res, model_label, gas_data, cont_data,
+                              saved_to if n == len(results) else None)
+            data["dive"] = n
+            data["surface_interval_min"] = interval
+            json_dives.append(data)
+        else:
+            if len(results) > 1:
+                text_lines.append(
+                    f"\n=== Dive {n} of {len(results)}"
+                    + (f"  ·  after {interval:g} min on the surface"
+                       if interval is not None else "  ·  first dive")
+                    + " ===")
+            text_lines.extend(_plan_text(
+                res, model_label, gas_lines, cont_lines,
+                saved_to if n == len(results) else None))
+
     if args.json:
-        print(json.dumps(_plan_json(res, model_label, gas_data, cont_data,
-                                    saved_to), indent=2))
+        # A single dive keeps the flat shape it has always had, so nothing that
+        # reads `deco plan --json` today has to learn about series.
+        single = len(results) == 1 and args.dive_index is None
+        print(json.dumps(json_dives[0] if single else {"dives": json_dives},
+                         indent=2))
     else:
-        for line in _plan_text(res, model_label, gas_lines, cont_lines,
-                               saved_to):
+        for line in text_lines:
             print(line)
     return 0
 
@@ -435,6 +519,11 @@ def cmd_plan(args) -> int:
 def _plan_json(res: rp.PlanResult, model_label: str, gas_data, cont_data,
                saved_to) -> dict:
     """The --json projection of a PlanResult."""
+    # `leg_pressures` guarantees one entry per stop leg, so the zips below are
+    # strict: a length mismatch is a bug in the report layer, not something to
+    # paper over with a short iterator.
+    legs = b.stop_legs(res.segments)
+    bars = res.leg_bars or [None] * len(legs)
     out = {
         "model": model_label,
         "input": {"levels": [_level_dict(l) for l in res.levels],
@@ -452,15 +541,36 @@ def _plan_json(res: rp.PlanResult, model_label: str, gas_data, cont_data,
         # LEAVE that stop (truncated to whole minutes) and `leg` is the ascent
         # to it plus the hold. `segments` above is the raw, untruncated dump.
         "stops": [{"depth_m": l.depth, "leg_min": l.leg, "run_min": l.run,
-                   "hold_min": round(l.hold, 2), "gas": repr(l.gas)}
-                  for l in b.stop_legs(res.segments)],
+                   "hold_min": round(l.hold, 2), "gas": repr(l.gas),
+                   "ead_m": round(l.gas.end(l.depth, res.plan.surface_p,
+                                            res.plan.msw_per_bar,
+                                            o2_narcotic=False), 1),
+                   "end_bar": None if bar is None else round(bar, 1)}
+                  for l, bar in zip(legs, bars, strict=True)],
+        "backup_line": res.backup,
+        # Losing the BOTTOM gas: the ascent re-flown on the remaining stack.
+        # null means it cannot be survived on this stack — a finding, not a
+        # missing key (see buhlmann.bailout_schedule).
+        "bailout_bottom_gas": None if res.bailout is None else {
+            "tts_min": round(b.time_to_surface(res.bailout), 2),
+            "stops": [{"depth_m": l.depth, "leg_min": l.leg, "run_min": l.run,
+                       "gas": repr(l.gas)}
+                      for l in b.stop_legs(res.bailout)],
+        },
         "total_runtime_min": round(res.total_runtime_min, 2),
         "tts_min": round(res.tts_min, 2),
         "final_ceiling_m": round(res.surface_ceiling_m, 2),
+        "surf_gf": round(res.surf_gf, 4),
         "cns_pct": round(res.cns_pct, 1),
         "otu": round(res.otu, 1),
         "end_m": round(res.end_m, 1),
         "gas_density_g_l": round(res.density_g_l, 2),
+        "gas_stack": [{"gas": repr(r.gas), "role": r.role,
+                       "mod_m": round(r.mod_m, 1),
+                       "end_m": round(r.end_m, 1),
+                       "ead_m": round(r.ead_m, 1),
+                       "density_g_l": round(r.density_g_l, 2)}
+                      for r in res.gas_stack],
         "warnings": res.warnings,
     }
     if gas_data is not None:
@@ -497,22 +607,33 @@ def _plan_text(res: rp.PlanResult, model_label: str, gas_lines, cont_lines,
     note = rp.environment_note(plan)
     if note:
         lines.append(f"Water: {note}")
-    if plan.travel_gases:
-        lines.append("Travel gases: "
-                     + ", ".join(repr(g) for g in plan.travel_gases))
-    if plan.deco_gases:
-        lines.append("Deco gases: "
-                     + ", ".join(repr(g) for g in plan.deco_gases))
+    # Every mix quoted at its OWN MOD — the deepest it would ever be breathed.
+    # The line above quotes the bottom gas at the actual bottom depth, which is
+    # a different question ("what am I breathing down there") from this one
+    # ("is each mix safe at the worst depth it is planned for").
+    if res.gas_stack:
+        lines.append(f"{'gas stack':<14}{'role':>8}{'MOD':>7}{'END':>7}"
+                     f"{'EAD':>7}{'ρ g/L':>8}")
+        for r in res.gas_stack:
+            flag = " ⚠" if r.dense else ""
+            lines.append(f"{r.gas!r:<14}{r.role:>8}{r.mod_m:>7.1f}"
+                         f"{r.end_m:>7.1f}{r.ead_m:>7.1f}"
+                         f"{r.density_g_l:>8.1f}{flag}")
     lines.append("-" * 78)
     lines.append(f"{'segment':<10}{'from':>7}{'to':>7}{'min':>8}{'run':>8}"
-                 f"{'gas':>14}{'GF':>6}")
+                 f"{'gas':>14}{'EAD':>7}{'GF':>6}")
     lines.append("-" * 78)
     run = 0.0
     for s in res.segments:
         run += s.duration
         gf = "" if s.gf_used is None else f"{s.gf_used:.2f}"
+        # Quoted at the segment's deepest point: narcosis is a worst-case
+        # number, and on an ascent leg the start is the deep end.
+        ead = s.gas.end(max(s.depth_start, s.depth_end), plan.surface_p,
+                        plan.msw_per_bar, o2_narcotic=False)
         lines.append(f"{s.kind:<10}{s.depth_start:>7.1f}{s.depth_end:>7.1f}"
-                     f"{s.duration:>8.1f}{run:>8.1f}{s.gas!r:>14}{gf:>6}")
+                     f"{s.duration:>8.1f}{run:>8.1f}{s.gas!r:>14}"
+                     f"{ead:>7.1f}{gf:>6}")
     lines.append("-" * 78)
     lines.append(f"Total runtime: {res.total_runtime_min:.1f} min    "
                  f"Time to surface (TTS): {res.tts_min:.1f} min")
@@ -521,11 +642,28 @@ def _plan_text(res: rp.PlanResult, model_label: str, gas_lines, cont_lines,
         # The card/GUI notation alongside the raw segment dump above: `run` is
         # when you LEAVE the stop, truncated; the minutes are the leg (ascent
         # to the stop + hold), so they add up to the runtimes.
+        # With cylinders on the stack each stop also carries the pressure the
+        # diver should see leaving it — the one gas figure an SPG can check.
+        bars = res.leg_bars or [None] * len(legs)
         lines.append("Stops as printed on a card (leave-at runtime · leg min): "
                      + "  ".join(f"{l.depth:g}m {l.leg:d}′@{l.run:d}"
-                                 for l in legs))
+                                 + ("" if bar is None else f" {bar:.0f}bar")
+                                 for l, bar in zip(legs, bars, strict=True)))
+    lines.append(f"Backup line: {res.backup}")
+    # The one contingency the deco-gas scenarios cannot express. Usually "no",
+    # and saying so plainly is the point: it is what decides whether the stage
+    # on your hip is a bailout or only an accelerant.
+    if res.bailout is None:
+        lines.append("Lost bottom gas: NOT survivable on this stack — nothing "
+                     f"else is breathable at {res.max_depth_m:g} m")
+    else:
+        lines.append(f"Lost bottom gas: TTS {b.time_to_surface(res.bailout):.0f}"
+                     f" min on " + ", ".join(
+                         dict.fromkeys(repr(l.gas)
+                                       for l in b.stop_legs(res.bailout))))
     lines.append(f"CNS {res.cns_pct:.0f}% · OTU {res.otu:.0f}    "
-                 f"Surface ceiling at GF-High: {res.surface_ceiling_m:.2f} m")
+                 f"Surface ceiling at GF-High: {res.surface_ceiling_m:.2f} m"
+                 f"    SurfGF {res.surf_gf * 100:.0f}%")
     lines.extend(f"⚠  {w}" for w in res.warnings)
     lines.extend(gas_lines)
     lines.extend(cont_lines)
@@ -621,6 +759,27 @@ def main(argv: list[str] | None = None) -> int:
                         help="How far over --ppo2-deco a gas switch may be "
                              "rounded deeper to land on a stop depth (bar). "
                              "0.05 is what puts O2 on the 6 m stop.")
+    common.add_argument("--dive", dest="dive", action="append", metavar="SPEC",
+                        help="One square dive of a repetitive series, "
+                             "DEPTH:RUNTIME[:SURFACE_INTERVAL] (the interval "
+                             "is the surface time BEFORE this dive, minutes). "
+                             "Repeatable, one per dive; residual loading is "
+                             "carried through. Multi-level series come from a "
+                             "config's 'repeats'. Not combinable with "
+                             "--depth/--time/--level.")
+    common.add_argument("--dive-index", type=int, metavar="N",
+                        help="Print only dive N of a series (1-based). "
+                             "Default: every dive.")
+    common.add_argument("--gas-switch", dest="gas_switch_policy",
+                        choices=sorted(b.GAS_SWITCH_POLICIES),
+                        default="at-mod",
+                        help="WHERE a deco gas is taken. 'at-mod' (default) "
+                             "switches as soon as the ppO2 allows, at the "
+                             "stop depth the MOD snaps to — what MultiDeco "
+                             "and Shearwater do. 'at-first-stop' holds every "
+                             "deco switch until the first stop, the team "
+                             "convention of arriving before switching; it "
+                             "lengthens the deco, never shortens it.")
     common.add_argument("--p-h2o", type=_positive_float, default=None,
                         help=f"Alveolar water-vapour pressure (bar). Default "
                              f"{b.P_H2O:g} (Schreiner) — what MultiDeco, "

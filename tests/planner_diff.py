@@ -190,6 +190,9 @@ _PLAN_PINS = {
     "ppo2_deco": (SCHEDULE,), "ppo2_bottom": (), "ppo2_min": (),
     "min_stop_time": (SCHEDULE,),
     "ppo2_switch_tol": (SCHEDULE,),
+    # Holding a switch to the first stop lengthens the deco, so the schedule is
+    # what pins it — jointly, like every other model constant.
+    "gas_switch_policy": (SCHEDULE,),
     "travel_gases": (STATED,), "deco_gases": (STATED,),
 }
 _GAS_PINS = {

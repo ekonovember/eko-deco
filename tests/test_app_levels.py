@@ -17,6 +17,8 @@ try:
     import tkinter as tk
 
     from deco import app
+    from deco import dive_config as dc
+    from deco import report as rp
     _root = tk.Tk()
     _root.withdraw()
     _HAVE_GUI = True
@@ -270,3 +272,81 @@ class TestReadoutAgreesWithTheReportLayer(unittest.TestCase):
         for c in res.gas.cylinders:
             if c.tank_l > 0 and c.pressure_bar > 0:
                 self.assertIn(f"{c.bar_used:.0f} bar", text)
+
+
+@unittest.skipUnless(_HAVE_GUI, "Tk/matplotlib GUI not available")
+class TestDiveSeries(unittest.TestCase):
+    """Repetitive dives in the GUI: the profile repeats, the settings do not."""
+
+    def setUp(self):
+        self.root = tk.Tk()
+        self.root.withdraw()
+        self.app = app.DecoApp(self.root)
+
+    def tearDown(self):
+        self.root.destroy()
+
+    def test_a_new_dive_is_seeded_from_the_one_on_screen(self):
+        self.app._add_dive()
+        self.assertEqual(len(self.app._dive_profiles), 2)
+        self.assertEqual(self.app._dive_profiles[0]["levels"],
+                         self.app._dive_profiles[1]["levels"])
+        self.assertEqual(self.app._dive_idx, 1)
+
+    def test_switching_dives_keeps_each_profile(self):
+        """The bug this guards: editing dive 2 must not overwrite dive 1."""
+        self.app._add_dive()
+        self.app.level_rows[0]["depth"].set("18")
+        self.app._select_dive(0)
+        self.assertEqual(self.app._dive_profiles[1]["levels"][0]["depth_m"], 18)
+        self.assertNotEqual(
+            self.app._dive_profiles[0]["levels"][0]["depth_m"], 18)
+
+    def test_the_second_dive_carries_residual_loading(self):
+        """A repeat of the same profile must owe MORE deco than the first."""
+        self.app._add_dive()
+        self.app.surface_interval.set("30")
+        series = self.app._series()
+        results = rp.compute_series_result(
+            series, self.app._bottom_gas(), self.app._make_plan())
+        self.assertEqual(len(results), 2)
+        self.assertGreater(results[1].tts_min, results[0].tts_min)
+
+    def test_dive_one_has_no_surface_interval(self):
+        """Nothing precedes it, so the series must start from clean tissues."""
+        self.app._add_dive()
+        self.app.surface_interval.set("45")
+        self.app._select_dive(0)
+        self.assertEqual(self.app._series()[0][0], 0.0)
+
+    def test_a_series_round_trips_through_the_config(self):
+        self.app._add_dive()
+        self.app.surface_interval.set("75")
+        self.app.level_rows[0]["depth"].set("21")
+        cfg = self.app._collect_config()
+        self.assertEqual(len(cfg["repeats"]), 1)
+        self.assertEqual(cfg["repeats"][0]["surface_interval_min"], 75.0)
+        self.assertEqual(cfg["repeats"][0]["levels"][0]["depth_m"], 21)
+        # and it survives the config layer's own normalisation
+        back = dc.normalize(cfg)
+        self.assertEqual(len(dc.series_of(back)), 2)
+        self.assertEqual(dc.series_of(back)[1][0], 75.0)
+
+    def test_removing_the_last_dive_is_refused(self):
+        self.app._remove_dive()
+        self.assertEqual(len(self.app._dive_profiles), 1)
+
+    def test_removing_a_dive_drops_only_that_one(self):
+        self.app._add_dive()
+        self.app.level_rows[0]["depth"].set("12")
+        self.app._remove_dive()
+        self.assertEqual(len(self.app._dive_profiles), 1)
+        self.assertNotEqual(
+            self.app._dive_profiles[0]["levels"][0]["depth_m"], 12)
+
+    def test_the_readout_shows_the_series_only_when_there_is_one(self):
+        self.app.recompute()
+        self.assertNotIn("DIVE SERIES", self.app.readout.get("1.0", tk.END))
+        self.app._add_dive()
+        self.app.recompute()
+        self.assertIn("DIVE SERIES", self.app.readout.get("1.0", tk.END))

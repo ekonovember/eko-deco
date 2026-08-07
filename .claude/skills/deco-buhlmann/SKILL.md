@@ -54,6 +54,8 @@ python -m deco.cli plan --level 120:20 --level 45:40 --gas 10/70 --travel-gas 35
 python -m deco.cli plan --depth 40 --time 25 --gas air --deco-gas 50 --contingency 0:2:0:1    # cut table +2 time steps, +1 depth step
 python -m deco.cli plan --depth 32 --time 40 --gas ean36 --deco-gas 50 --water fresh --altitude 150   # lake at altitude
 python -m deco.cli plan --depth 40 --time 25 --gas air --deco-gas 50 --sac 20 --sac-deco 16          # separate deco-cylinder SAC
+python -m deco.cli plan --dive 30:25 --dive 30:25:60 --gas air --deco-gas 50    # repetitive: DEPTH:RUNTIME[:SURFACE_INTERVAL]
+python -m deco.cli plan --depth 40 --time 25 --gas air --deco-gas 50 --gas-switch at-first-stop   # hold switches to the first stop
 ```
 
 Gas syntax: `air`, `o2`, `ean32` / `nx32` / `32`, trimix `21/35` (fO2/fHe %).
@@ -71,7 +73,26 @@ from the CLI, `dive_plan.json` and the GUI alike (DECISIONS #19) — including
 the 6 m stop, EAN50 at 21 m). On Windows set `PYTHONUTF8=1` for clean output.
 Every plan prints ppO2/density/ceiling warnings (`warnings` in `--json`),
 CNS%/OTU, END + gas density — quote the warnings when relaying a schedule; with
-no disclaimer in the output they are the only caveat the user sees. Printed schedules use one notation everywhere (`buhlmann.stop_legs`,
+no disclaimer in the output they are the only caveat the user sees. It also
+prints **SurfGF** (the GF actually surfaced at, against the GF-High allowed —
+`surf_gf`), the **gas stack** (MOD/END/EAD/density per mix, each at its own MOD
+— `gas_stack`), the cylinder pressure **leaving each stop** (`stops[].end_bar`),
+a one-line schedule for a slate (`backup_line`), and whether losing the
+**bottom** gas is survivable on the remaining stack (`bailout_bottom_gas`,
+`null` = not survivable; on a deep dive that is the usual and correct answer —
+relay it as such, never as a missing feature).
+
+**Repetitive dives:** `--dive DEPTH:RUNTIME[:SURFACE_INTERVAL]`, repeatable, one
+per dive; the interval is surface minutes BEFORE that dive and the first dive
+cannot have one. Residual loading carries through, so the same profile repeated
+owes more deco. `--json` returns a `dives` array (a single dive keeps the flat
+shape); `--dive-index N` prints one. In a config the dives after the first live
+in `repeats`, and settings are shared across the day (DECISIONS #26).
+
+**`--gas-switch at-first-stop`** holds every deco switch until the first stop
+instead of taking each mix at its MOD. It can only lengthen the deco, and on the
+default 1-minute stop grid it usually changes nothing — say that rather than
+letting an unchanged TTS read as a broken control (DECISIONS #25). Printed schedules use one notation everywhere (`buhlmann.stop_legs`,
 DECISIONS #17): **`run` is the runtime you LEAVE that depth**, truncated to
 whole minutes; the stop minutes are the **leg** — the ascent to the stop plus
 the hold, measured from the previous stop — so they add up to the runtimes;
@@ -93,4 +114,11 @@ segs, tissues = b.plan_dive(40, 20, b.AIR, plan)
 for s in segs:
     print(s.as_dict())
 print("NDL 30m air:", b.ndl(30, b.AIR))
+
+# repetitive dive: off-gas at the surface, then plan from that loading
+after = b.surface_interval(tissues, 60.0, plan)          # 60 min on the surface
+segs2, _ = b.plan_dive(30, 25, b.AIR, plan, start_tissues=after)
+print("SurfGF:", b.surface_gf(tissues, plan.surface_p))  # what you surfaced at
+# losing the BOTTOM gas: None when nothing left is breathable down there
+bail = b.bailout_schedule(segs, plan, b.AIR, (b.AIR,))
 ```

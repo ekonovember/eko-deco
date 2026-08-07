@@ -20,6 +20,7 @@ Schema::
       "ascent_rate": 10, "descent_rate": 18, "stop_interval": 3, "last_stop_m": 3,
       "ppo2_bottom": 1.4, "ppo2_deco": 1.6, "ppo2_min": 0.18,
       "ppo2_switch_tol": 0.05, "min_stop_time": 1.0,
+      "gas_switch_policy": "at-mod",
       "surface_p_bar": 1.01325, "msw_per_bar": 10.0, "p_h2o_bar": 0.0567,
       "contingency": {"time_before": 1, "time_after": 1,
                       "depth_before": 1, "depth_after": 1},
@@ -59,6 +60,12 @@ pressure the plan derives, so ppO₂, MOD, END, density, CNS/OTU, gas volumes an
 the schedule itself all follow. ``p_h2o_bar`` is the alveolar water-vapour
 pressure — 0.0567 (Schreiner), what MultiDeco, Shearwater and GFDECO use;
 Bühlmann's own 0.0627 is what Subsurface uses — and
+``gas_switch_policy`` is ``"at-mod"`` (take each deco gas as soon as its
+ppO2 allows, the default and what MultiDeco/Shearwater do) or
+``"at-first-stop"`` (hold every deco switch until the first stop is reached —
+the team convention of arriving, settling, then switching; it lengthens the
+deco, never shortens it).
+
 ``ppo2_switch_tol`` how far above ``ppo2_deco`` a gas switch may be rounded
 deeper to land on a stop depth. ``min_stop_time`` is the grid a stop's runtime
 is padded onto (Baker's ``Minimum_Deco_Stop_Time``; 1 min makes a table-friendly
@@ -134,6 +141,8 @@ def default_config() -> dict:
         "ppo2_min": 0.18,
         "ppo2_switch_tol": 0.05,
         "min_stop_time": 1.0,
+        "gas_switch_policy": "at-mod",
+        "repeats": [],
         "surface_p_bar": b.P_ATM,
         "msw_per_bar": b.MSW_PER_BAR,
         "p_h2o_bar": b.P_H2O,
@@ -243,9 +252,35 @@ def _merged(cfg: dict) -> dict:
     # (it would leave the planner with no profile at all).
     if not base.get("levels"):
         base["levels"] = default_config()["levels"]
+    # Repetitive dives. `levels` above is dive 1; `repeats` are the dives that
+    # follow it, each with the surface interval that precedes it. Absent or
+    # empty means a single dive, which is what every config written before this
+    # existed means too.
+    base["repeats"] = [_merge_repeat(r) for r in (cfg.get("repeats") or [])]
     if isinstance(cfg.get("contingency"), dict):
         base["contingency"] = _merge_contingency(cfg["contingency"])
     return base
+
+
+def _merge_repeat(r: dict) -> dict:
+    """One repetitive dive. Same strictness as a level: an unknown key is a
+    typo, and a typo here is a different dive (#9, #24)."""
+    if not isinstance(r, dict):
+        raise TypeError(f"repeat must be an object, got {type(r).__name__}")
+    _reject_unknown(r, REPEAT_KEYS, (), "repeat")
+    if "surface_interval_min" not in r:
+        raise ValueError(
+            "repeat is missing surface_interval_min — a repetitive dive "
+            "without a surface interval is just a longer dive, and guessing "
+            "one would invent residual nitrogen the file never stated")
+    si = float(r["surface_interval_min"])
+    if si < 0:
+        raise ValueError(
+            f"surface_interval_min must be >= 0 (got {si:g})")
+    levels = [_merge_level(l) for l in (r.get("levels") or [])]
+    if not levels:
+        raise ValueError("repeat has no levels — a dive needs a profile")
+    return {"surface_interval_min": si, "levels": levels}
 
 
 #: What a level and a gas may contain. Anything else is a typo, and a typo in a
@@ -253,6 +288,11 @@ def _merged(cfg: dict) -> dict:
 #: the default 30 m because `depth_m` was "missing", and a role of "Bottum"
 #: became a Deco gas — both silently, both exit 0.
 LEVEL_KEYS = ("depth_m", "runtime_min")
+#: One repetitive dive: how long the diver was on the surface first, and the
+#: profile that follows. Everything else — gases, GF, SAC, rates, environment —
+#: is shared across the series, because a day's diving is normally planned on
+#: one rig with one set of settings (DECISIONS.md #26).
+REPEAT_KEYS = ("surface_interval_min", "levels")
 LEVEL_LEGACY = ("gas", "gas_id", "start_min")
 GAS_KEYS = ("role", "o2", "he", "tank_l", "pressure_bar", "enabled")
 GAS_LEGACY = ("id",)
@@ -344,6 +384,24 @@ def levels_of(cfg: dict) -> list[b.Level]:
     return [b.Level(l["depth_m"], l["runtime_min"]) for l in cfg["levels"]]
 
 
+def series_of(cfg: dict) -> list[tuple[float, list[b.Level]]]:
+    """The whole day as ``(surface_interval_min, levels)`` per dive, in order.
+
+    Dive 1 is ``levels`` with a zero interval — it starts from clean tissues, so
+    there is nothing in front of it. Dives 2+ come from ``repeats``. A config
+    with no ``repeats`` yields exactly one entry, which is why every file
+    written before repetitive dives existed still describes the same dive.
+    """
+    cfg = _merged(cfg)
+    out = [(0.0, [b.Level(l["depth_m"], l["runtime_min"])
+                  for l in cfg["levels"]])]
+    for r in cfg["repeats"]:
+        out.append((float(r["surface_interval_min"]),
+                    [b.Level(l["depth_m"], l["runtime_min"])
+                     for l in r["levels"]]))
+    return out
+
+
 def to_buhlmann(cfg: dict) -> tuple[b.Gas, b.DivePlan, b.GasPlan, list[tuple]]:
     """Return ``(bottom_gas, DivePlan, GasPlan, gases)`` where ``gases`` is a list
     of ``(role, Gas, tank_l, pressure_bar)`` tuples. Gas selection is automatic
@@ -378,6 +436,8 @@ def to_buhlmann(cfg: dict) -> tuple[b.Gas, b.DivePlan, b.GasPlan, list[tuple]]:
                       ppo2_min=cfg.get("ppo2_min", 0.18),
                       ppo2_switch_tol=cfg.get("ppo2_switch_tol", 0.05),
                       min_stop_time=cfg.get("min_stop_time", 1.0),
+                      gas_switch_policy=cfg.get(
+                          "gas_switch_policy", "at-mod"),
                       surface_p=cfg.get("surface_p_bar", b.P_ATM),
                       msw_per_bar=cfg.get("msw_per_bar", b.MSW_PER_BAR),
                       p_h2o=cfg.get("p_h2o_bar", b.P_H2O),

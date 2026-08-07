@@ -422,3 +422,67 @@ class TestNoGasIsRefused(unittest.TestCase):
         bottom, _plan, _gp, gases = dc.to_buhlmann(cfg)
         self.assertTrue(gases)
         self.assertIsInstance(bottom, b.Gas)
+
+
+class TestRepetitiveDives(unittest.TestCase):
+    """`repeats` is additive: every config written before it still means the
+    single dive it always meant."""
+
+    def test_a_config_without_repeats_is_one_dive(self):
+        self.assertEqual(len(dc.series_of(dc.default_config())), 1)
+        self.assertEqual(dc.series_of(dc.default_config())[0][0], 0.0)
+
+    def test_series_of_orders_the_day(self):
+        cfg = dc.default_config()
+        cfg["levels"] = [{"depth_m": 30, "runtime_min": 25}]
+        cfg["repeats"] = [
+            {"surface_interval_min": 60, "levels": [{"depth_m": 24,
+                                                     "runtime_min": 30}]},
+            {"surface_interval_min": 90, "levels": [{"depth_m": 18,
+                                                     "runtime_min": 40}]},
+        ]
+        series = dc.series_of(cfg)
+        self.assertEqual([si for si, _ in series], [0.0, 60.0, 90.0])
+        self.assertEqual([lv[0].depth for _, lv in series], [30, 24, 18])
+
+    def test_a_repeat_without_a_surface_interval_is_refused(self):
+        """Guessing one would invent residual nitrogen the file never stated."""
+        cfg = dc.default_config()
+        cfg["repeats"] = [{"levels": [{"depth_m": 20, "runtime_min": 30}]}]
+        with self.assertRaises(ValueError):
+            dc.normalize(cfg)
+
+    def test_a_repeat_without_levels_is_refused(self):
+        cfg = dc.default_config()
+        cfg["repeats"] = [{"surface_interval_min": 60, "levels": []}]
+        with self.assertRaises(ValueError):
+            dc.normalize(cfg)
+
+    def test_a_negative_surface_interval_is_refused(self):
+        cfg = dc.default_config()
+        cfg["repeats"] = [{"surface_interval_min": -5,
+                           "levels": [{"depth_m": 20, "runtime_min": 30}]}]
+        with self.assertRaises(ValueError):
+            dc.normalize(cfg)
+
+    def test_a_mistyped_repeat_key_is_refused_not_defaulted(self):
+        """Same rule as levels and gases (#9, #24): a typo is a different dive."""
+        cfg = dc.default_config()
+        cfg["repeats"] = [{"surface_interval": 60,
+                           "levels": [{"depth_m": 20, "runtime_min": 30}]}]
+        with self.assertRaises(ValueError):
+            dc.normalize(cfg)
+
+    def test_repeats_survive_a_save_load_round_trip(self):
+        import os
+        import tempfile
+        cfg = dc.default_config()
+        cfg["repeats"] = [{"surface_interval_min": 45,
+                           "levels": [{"depth_m": 22, "runtime_min": 35}]}]
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "series.json")
+            dc.save(cfg, path)
+            back = dc.load(path)
+        self.assertEqual(len(dc.series_of(back)), 2)
+        self.assertEqual(dc.series_of(back)[1][0], 45.0)
+        self.assertEqual(dc.series_of(back)[1][1][0].depth, 22)

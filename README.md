@@ -202,6 +202,14 @@ deco plan --depth 32 --time 40 --gas ean36 --deco-gas 50 --deco-gas 100 \
     --gf-low 0.40 --gf-high 0.85 --water fresh --altitude 150 \
     --sac 20 --sac-deco 16
 
+# A day of repetitive diving: each --dive is DEPTH:RUNTIME[:SURFACE_INTERVAL]
+# (minutes on the surface BEFORE that dive). Residual loading carries through,
+# so dive 2 owes more deco than dive 1 for the same profile.
+deco plan --dive 30:25 --dive 30:25:60 --dive 24:30:90 --gas air --deco-gas 50
+
+# Hold every deco switch until the first stop (arrive, settle, then switch)
+deco plan --depth 40 --time 25 --gas air --deco-gas 50 --gas-switch at-first-stop
+
 # NDL & tissue report
 deco ndl     --depth 30 --gas air
 deco ndl     --depth 30 --gas air --altitude 1500     # shorter up a mountain
@@ -216,7 +224,17 @@ rock bottom. Add `--json` to any command for machine-readable output.
 
 Deco-gas switches happen at standard stop depths (O₂ at the 6 m stop, EAN50
 at 21 m), the way dive computers plan them, with a small ppO₂ tolerance for
-the rounding.
+the rounding. `--gas-switch at-first-stop` holds them to the first stop
+instead — the team convention of arriving before switching. It can only make
+the deco longer, and on the standard 1-minute stop grid it usually changes
+nothing at all.
+
+Every plan also reports **SurfGF** (the gradient factor you actually surface
+at, as against the GF-High you allowed), the **gas stack** with each mix's MOD,
+END, EAD and density quoted at its own MOD, the pressure left in the breathed
+cylinder **leaving each stop**, a one-line schedule you can paste onto a slate,
+and whether losing the **bottom** gas is survivable on the rest of the stack —
+which on a deep dive it usually is not, and saying so plainly is the point.
 
 A dive is one or more **levels**. `--depth/--time` is the square-profile
 shorthand for a single level; `--level DEPTH:RUNTIME` (repeatable) plans a
@@ -233,7 +251,8 @@ shallowest-stop depth (`--last-stop`), the ppO₂
 window (`--ppo2-bottom` / `--ppo2-deco` / `--ppo2-min`), the environment
 (`--water`, `--msw-per-bar`, `--altitude`, `--surface-p`), the emergency SAC
 multiplier, problem time and diver count for rock bottom and the emergency gas
-need (`--sac-multiplier`, `--problem-time`, `--divers`) — see
+need (`--sac-multiplier`, `--problem-time`, `--divers`), and `--dive-index N`
+to print one dive of a series — see
 `deco plan -h` (or `ndl -h`, …) for the full list. Ready-to-run
 command snippets live in [`examples/`](examples/).
 
