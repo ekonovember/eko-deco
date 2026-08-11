@@ -16,6 +16,11 @@ is never imported at runtime.
 
 ## License boundary — read before touching
 
+The full GPL-2.0 text is in [`COPYING`](COPYING), as the license requires of
+anyone redistributing this code. The upstream files keep their original
+`SPDX-License-Identifier: GPL-2.0` headers and copyright notices, unmodified;
+`upstream/UPSTREAM.txt` pins the commit they came from.
+
 eko-deco is MIT; everything under this directory is **GPL-2.0**. Comparing
 numerical output against it is fine. Copying code, constants-with-expression
 structure, or comments from here into `buhlmann.py` (or anywhere outside this

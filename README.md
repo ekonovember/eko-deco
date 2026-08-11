@@ -401,7 +401,26 @@ project:
 
 ## License
 
-[MIT](LICENSE).
+**[MIT](LICENSE)** — the library, CLI, GUI and card engine: everything under
+`src/`, `cards/` and the top level.
+
+Two directories under `tests/` are **not** MIT, are test-only, and are never
+imported at runtime or shipped in the wheel:
+
+| Path | License | What |
+|---|---|---|
+| [`tests/subsurface_oracle/`](tests/subsurface_oracle/) | **GPL-2.0** ([`COPYING`](tests/subsurface_oracle/COPYING)) | Unmodified Subsurface `core/deco.cpp` + the headers it needs, kept with their SPDX headers and a pinned upstream commit, compiled to compare our numbers against |
+| [`tests/baker_oracle/`](tests/baker_oracle/) | "Distribute freely — credit the author" ([`LICENSE`](tests/baker_oracle/LICENSE)) | Erik C. Baker's original `gfdeco.f` |
+
+The boundary is one-way and deliberate: output is compared freely, **code,
+constants-with-structure and comments are never copied out** of those
+directories into MIT-licensed files. Model fixes are made clean-room, from the
+published papers plus the numeric disagreement. See
+[`tests/subsurface_oracle/README.md`](tests/subsurface_oracle/README.md).
+
+The optional `[dev]` oracles (`decotengu`, `decodaitengu`) are GPL-3 **pip
+dependencies** — installed for testing, never vendored, never imported by
+`src/deco`.
 
 ## References
 
