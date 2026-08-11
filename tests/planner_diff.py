@@ -577,7 +577,12 @@ def _schedule_delta(scenario: int, surface_p: float, msw_per_bar: float
     here = os.path.dirname(os.path.abspath(__file__))
     with open(os.path.join(here, "shearwater_golden.json")) as fh:
         dives = json.load(fh)["dives"]
-    tag = f"scenario_{scenario}"
+    # Match the export PATH, not a bare "scenario_N" substring. The loose form
+    # silently swallowed a Shearwater fixture whose source merely mentioned the
+    # folder `my_real_dive_scenario_1`: it was then planned as MultiDeco
+    # scenario 1 and compared against a schedule from a different planner and a
+    # different dive, which showed up as a fake model divergence.
+    tag = f"examples/scenario_{scenario}/data.txt"
     worst_stop = worst_tts = 0.0
     stop_tol = tts_tol = 0.0
     planned_tts = 0.0            # the export's own TTS, for the relative term

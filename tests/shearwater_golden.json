@@ -685,6 +685,103 @@
         ],
         "tts_min": 68
       }
+    },
+    {
+      "name": "SW Predator 32m/40min EAN28 +EAN50+O2 GF5/50",
+      "source": "Shearwater Predator on-unit planner, photographed 2026-08-07 \u2014 settings READ OFF THE UNIT, see examples/shearwater/my_conservative_deco_training_dive/dive_parameters.md",
+      "depth_m": 32,
+      "bottom_time_min": 40,
+      "bottom_gas": {
+        "o2": 28,
+        "he": 0
+      },
+      "deco_gases": [
+        {
+          "o2": 50,
+          "he": 0
+        },
+        {
+          "o2": 99,
+          "he": 0
+        }
+      ],
+      "gf": [
+        5,
+        50
+      ],
+      "descent_rate": 10,
+      "ascent_rate": 10,
+      "last_stop_m": 3,
+      "expected": {
+        "stops": [
+          [
+            15,
+            1
+          ],
+          [
+            12,
+            3
+          ],
+          [
+            9,
+            4
+          ],
+          [
+            6,
+            5
+          ],
+          [
+            3,
+            10
+          ]
+        ],
+        "tts_min": 25
+      },
+      "stop_tol_min": 1.0,
+      "tts_tol_min": 1.5,
+      "_note": "The same dive as the MultiDeco export above (examples/scenario_2), now from a real Shearwater \u2014 the two references agree with each other and with us on the obligation below 15 m, and differ from us in the same place. Tolerances are wide for the SAME TWO KNOWN reasons as the GF40/85 Predator entry, both recorded rather than tuned away. (1) The Predator prints the leg (runtime difference, ascent included) while this test compares the hold. (2) We add 21 m / 18 m pass-through stops worth ~1 min that neither the Predator nor MultiDeco makes: at GF-Low 5 the ceiling relaxes faster than the diver ascends, so Baker's rule (DECISIONS #21) becomes visible padding instead of obligation \u2014 suppressing it on a 1-minute grid reproduces this schedule exactly. Gas volumes are NOT asserted: the Predator stays on the bottom gas to 15 m (its first stop) while we switch at EAN50's 21.9 m MOD, which is DECISIONS #27 and a convention, not a model difference. CNS does NOT match (51% theirs vs 36.7% ours) and is deliberately not asserted; see the dive_parameters.md write-up and DECISIONS #27."
+    },
+    {
+      "name": "SW Predator 32m/40min EAN32 +EAN50+O2 GF40/85",
+      "source": "Shearwater Predator on-unit planner, photographed 2026-08-07 \u2014 settings READ OFF THE UNIT, see examples/shearwater/my_real_dive_scenario_1/dive_parameters.md",
+      "depth_m": 32,
+      "bottom_time_min": 40,
+      "bottom_gas": {
+        "o2": 32,
+        "he": 0
+      },
+      "deco_gases": [
+        {
+          "o2": 50,
+          "he": 0
+        },
+        {
+          "o2": 99,
+          "he": 0
+        }
+      ],
+      "gf": [
+        40,
+        85
+      ],
+      "ascent_rate": 10,
+      "last_stop_m": 3,
+      "expected": {
+        "stops": [
+          [
+            6,
+            2
+          ],
+          [
+            3,
+            5
+          ]
+        ],
+        "tts_min": 10
+      },
+      "stop_tol_min": 1.5,
+      "tts_tol_min": 1.5,
+      "_note": "Tolerances are wide for two KNOWN reasons, both recorded rather than tuned away. (1) The Predator prints the leg (difference of runtimes, ascent included) while this test compares the hold, so every stop reads ~0.3 min short on our side \u2014 the same bookkeeping gap the Perdix 2 fixture carries. (2) We add 12 m (1.00 min) and 9 m (0.70 min) pass-through stops that are pure Baker runtime padding, not obligation: the GF-high ceiling was already clear of the next stop at both (DECISIONS #21). The obligation itself is identical \u2014 the 6 m and 3 m legs match exactly and the O2 volume matches to the litre. CNS does NOT match (38% theirs vs 32.3% ours) and is deliberately not asserted here; see the dive_parameters.md write-up."
     }
   ],
   "_shearwater_provenance": [
