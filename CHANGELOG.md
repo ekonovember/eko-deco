@@ -6,6 +6,83 @@ pre-1.0, so anything may still move.
 
 ## [Unreleased]
 
+### Added — the Hermanice pair, and printed cards in the hand-written convention
+
+- **`examples/hermanice_dive/`** — the two plans for one site kept side by side:
+  a MultiDeco 4.24 export of the GF 5/50 training profile (32 m / 40 min EAN32)
+  and five photos of the **Shearwater Perdix** planner for the dive actually
+  made (33 m / 40 min EAN32, GF 40/85), plus the hand-written card that fixes
+  the printed runtime format. Its `README.md` reconciles both against eko-deco.
+  Two findings worth the folder, both since **confirmed by the diver**, which is
+  the point of writing the inference down first. The Perdix's six printed gas
+  quantities pinned its unphotographed environment to surface 0.980–0.984 bar
+  and 10.29–10.31 m/bar; it was in fact **fresh water at 267 m** (0.9816 bar) —
+  inside the box on both axes, and the five deco/ascent rows then reproduce to
+  **±0.6 L** with nothing tuned. And MultiDeco's 21 m first stop on the training
+  profile, which is *deeper* than the same planner's stop on a more heavily
+  loaded EAN28 dive at identical settings and so could not come from the model,
+  turns out to be a **switch stop the instructor added** for an unhurried gas
+  change. Left open: the Perdix's descent rate, ~16 m/min here against the
+  10 m/min the Predator's own bottom row pinned — fitted, and labelled as such.
+- **`cards/make_hermanice.py`** — the 90 × 64 mm card in the hand-written
+  convention: a direction glyph per row (down / level / up), depth, leg minutes,
+  the leave-at runtime in brackets, and a filled **triangle** pointing at each
+  gas-switch row. Every row carries its minutes, with a transit's set grey
+  beside its arrow so no row reads as time held. It prints another planner's
+  schedule verbatim and computes only what that planner does not print: min gas
+  and turn pressure.
+
+### Added — a second real Shearwater plan, and what it corrected
+
+- **`examples/shearwater/my_conservative_deco_training_dive/`** — a photographed
+  Shearwater Predator plan, 32 m / 40 min on EAN28 at **GF 5/50**, the same dive
+  as the MultiDeco export in `examples/scenario_2`. Transcribed, reconciled and
+  added to `tests/shearwater_golden.json`.
+- **A planning queue for the Predator**, `examples/shearwater/to_plan_1…6/`:
+  six sheets, each changing one setting from the last capture and carrying
+  eko-deco's prediction *written down before the plan is made*. In order: no O₂
+  (settles the CNS gap), last stop 6 m, 45 m trimix (fills the only skipped
+  test), salinity fresh-vs-salt, the NDL edge, GF 45/95. Replaces the three
+  generic `scenario_N` templates, whose open questions are either answered now
+  or absorbed into a specific sheet.
+- **Reference rates in the GUI.** The Descent and ascent fields carry a hover
+  info box listing what each planner we cross-check against actually uses
+  (18/10 ours · 10/10 Shearwater · 8/9 MultiDeco), with where each number was
+  read off, plus the same values inline beside the fields.
+
+### Changed — the evidence of record is markdown, not photographs
+
+- **Captured plans are transcribed, screen by screen, and the images are kept
+  outside the repo** (`~/eko-deco-evidence/`). A transcription diffs, greps and
+  clones; 17 MB of JPEG does none of those, and writing one out screen by screen
+  is what makes somebody read the screen. The photos remain the *source* — they
+  are no longer the *archive*. Every folder that held images says where they
+  went and reproduces every value they carried.
+- Transcribing the Perdix screens this way immediately found something the
+  prose had missed — see below. That is the argument for the change, not a
+  side effect of it.
+
+### Fixed — a claim, not code
+
+- `--gas-switch`'s help and [DECISIONS.md #25](DECISIONS.md) said switching at
+  MOD is "what MultiDeco, **Shearwater** and Baker's GFDECO do". Two photographed
+  Predator plans disprove the Shearwater half: it switches only at a stop it
+  actually holds. Default and behaviour unchanged; the claim is corrected and
+  the evidence recorded in [DECISIONS.md #27](DECISIONS.md), together with two
+  open divergences it exposes — pass-through stops cost ~1 min at GF-Low 5 where
+  neither reference planner charges them, and the Predator's CNS reads
+  **higher** than ours by ~1 point per O₂ minute.
+- **…and then the correction was itself corrected, before it could be relied
+  on.** The Perdix plan in `examples/hermanice_dive` breaks its ascent at 21 m —
+  held for zero minutes — purely to change gas, and bills the 21 → 9 m ascent to
+  EAN50. 21 m is EAN50's MOD on the 3 m grid, so that is **at-MOD, our own
+  default**, on the same brand and the same mixes as the Predator that does the
+  opposite. "Shearwater switches at a stop" is a statement about *the Predator*;
+  the two units disagree with each other and we match the newer one. Recorded in
+  [DECISIONS.md #27](DECISIONS.md) as an open divergence between units — not
+  resolved by guessing which is firmware and which is a menu nobody
+  photographed.
+
 ### Added — repetitive dives
 
 - **A dive series.** `config["repeats"]` holds the dives after the first, each

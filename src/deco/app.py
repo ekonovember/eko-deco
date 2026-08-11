@@ -44,6 +44,57 @@ from deco import report as rp
 # (10 m/min) so the same inputs give the same schedule in both.
 ASCENT_RATE = 10.0
 
+# What the reference planners in this repo actually use, for the hover boxes on
+# the rate fields. Every number is READ OFF an artefact we keep, not a vendor
+# claim: the MultiDeco pair off the 4.24 exports in examples/scenario_1|2, the
+# Shearwater pair off the Predator planner photos in
+# examples/shearwater/my_conservative_deco_training_dive (the printed gas
+# volumes only reconcile at 10 m/min down and a 2-minute 17 m ascent). GFDECO
+# and Subsurface take both rates as inputs and ship no default worth quoting, so
+# they are not listed.
+RATE_REFERENCE = (
+    "Descent / ascent, m/min — what the planners we cross-check against use:\n"
+    "  18 / 10   eko-deco default (and what the GFDECO + Subsurface\n"
+    "            cross-checks are run at)\n"
+    "  10 / 10   Shearwater Predator on-unit planner — recovered from the\n"
+    "            printed gas volumes, examples/shearwater/…training_dive\n"
+    "   8 /  9   MultiDeco 4.24 — stated in the exports, examples/scenario_1|2\n"
+    "\n"
+    "Descent rate is not cosmetic: it is bottom time, so a slower descent\n"
+    "loads the fast compartments more and can lengthen the deco."
+)
+
+
+class _Tooltip:
+    """Hover info box for one widget. Plain Tk so the core GUI dependency set
+    does not grow; colours come from the live palette, so it follows dark mode
+    without needing to be rebuilt on a theme switch."""
+
+    def __init__(self, widget, text: str, palette) -> None:
+        self.widget, self.text, self.palette = widget, text, palette
+        self.tip: tk.Toplevel | None = None
+        widget.bind("<Enter>", self._show, add="+")
+        widget.bind("<Leave>", self._hide, add="+")
+        widget.bind("<ButtonPress>", self._hide, add="+")
+
+    def _show(self, _event=None) -> None:
+        if self.tip is not None:
+            return
+        p = self.palette()
+        x = self.widget.winfo_rootx() + 12
+        y = self.widget.winfo_rooty() + self.widget.winfo_height() + 4
+        self.tip = tk.Toplevel(self.widget)
+        self.tip.wm_overrideredirect(True)          # no title bar, no border
+        self.tip.wm_geometry(f"+{x}+{y}")
+        tk.Label(self.tip, text=self.text, justify=tk.LEFT, padx=8, pady=6,
+                 bg=p["field"], fg=p["fg"], relief=tk.SOLID, borderwidth=1,
+                 font=("TkFixedFont", 8)).pack()
+
+    def _hide(self, _event=None) -> None:
+        if self.tip is not None:
+            self.tip.destroy()
+            self.tip = None
+
 
 @dataclass
 class _RowLevel:
@@ -618,20 +669,28 @@ class DecoApp:
     def _add_spin(self, row, label, lo, hi, increment, init,
                   width: int = 5, fmt: str | None = None, unit: str = "",
                   label_width: int | Literal[""] = "",
-                  unit_width: int | Literal[""] = "") -> tk.StringVar:
+                  unit_width: int | Literal[""] = "",
+                  tip: str = "") -> tk.StringVar:
         """Labelled numeric up/down packed onto `row` (several fit one line).
         `unit` goes after the input; `label_width`/`unit_width` align the
         inputs and whatever follows them across rows (Tk's own "unset" for a
-        width is the empty string, not 0)."""
-        ttk.Label(row, text=label, width=label_width).pack(side=tk.LEFT)
+        width is the empty string, not 0). `tip` is a hover info box, attached
+        to the whole label/input/unit group so it is hard to miss."""
+        widgets: list[tk.Widget] = [ttk.Label(row, text=label,
+                                              width=label_width)]
+        widgets[0].pack(side=tk.LEFT)
         var = tk.StringVar(value=(fmt % init) if fmt else f"{init:g}")
         kwargs: dict[str, Any] = {"format": fmt} if fmt else {}
-        ttk.Spinbox(row, from_=lo, to=hi, increment=increment, width=width,
-                    textvariable=var, **kwargs).pack(
-            side=tk.LEFT, padx=(4, 2 if unit else 10))
+        spin = ttk.Spinbox(row, from_=lo, to=hi, increment=increment,
+                           width=width, textvariable=var, **kwargs)
+        spin.pack(side=tk.LEFT, padx=(4, 2 if unit else 10))
+        widgets.append(spin)
         if unit:
-            ttk.Label(row, text=unit, width=unit_width).pack(
-                side=tk.LEFT, padx=(0, 10))
+            widgets.append(ttk.Label(row, text=unit, width=unit_width))
+            widgets[-1].pack(side=tk.LEFT, padx=(0, 10))
+        if tip:
+            for w in widgets:
+                _Tooltip(w, tip, lambda: self._pal)
         # Recompute from a variable trace, not the Spinbox command, so a
         # programmatic var.set() (loading dive_plan.json) refreshes too.
         var.trace_add("write",
@@ -719,9 +778,20 @@ class DecoApp:
         rates.pack(fill=tk.X, pady=2)
         self.descent_rate = self._add_spin(rates, "Descent", 1, 60, 1, 18.0,
                                            fmt="%g", unit="m/min",
-                                           label_width=8, unit_width=6)
+                                           label_width=8, unit_width=6,
+                                           tip=RATE_REFERENCE)
         self.ascent_rate = self._add_spin(rates, "ascent", 1, 30, 1, 10.0,
-                                          fmt="%g", unit="m/min", unit_width=6)
+                                          fmt="%g", unit="m/min", unit_width=6,
+                                          tip=RATE_REFERENCE)
+        # Same idea as the P H2O row below: the reference values at a glance,
+        # with the sourcing in the hover box. Own row rather than trailing the
+        # spinboxes — inline it just fits at this font and would clip at any
+        # larger one.
+        note = ttk.Frame(body)
+        note.pack(fill=tk.X)
+        ttk.Label(note, text="", width=8).pack(side=tk.LEFT)
+        ttk.Label(note, text="18/10 ours · 10/10 Shearwater · 8/9 MultiDeco"
+                  ).pack(side=tk.LEFT)
         stops = ttk.Frame(body)
         stops.pack(fill=tk.X, pady=2)
         self.stop_interval = self._add_spin(stops, "Stops", 1, 10, 1, 3.0,

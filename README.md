@@ -339,6 +339,8 @@ claim is enforced by tests, not asserted:
 | MultiDeco | golden schedules, including every lost-gas column | no-loss plan matches **to the minute** |
 | MultiDeco 4.24, two real exports | the plans in [`examples/`](examples/) — 8 schedules, the printed ppO₂/ead/CNS/OTU, and the gas volumes | every stop within **1 min** (3 on the 68-min all-gas-lost worst case), TTS within **1.5 min**; ppO₂ and ead reproduced **exactly**; bottom-gas litres within **1 %** at a single RMV |
 | Shearwater | the worked planner example in the Perdix 2 manual (GF 30/70, its stated rates) | runtime and TTS match **exactly** |
+| Shearwater Predator, two real on-unit plans | transcribed screens in [`examples/shearwater/`](examples/shearwater/) — 32 m/40 min at GF 40/85 and at GF 5/50, settings read off the unit | the **obligation matches minute for minute**; we add ~1 min of pass-through stops, switch deco gas at MOD where it switches at a stop, and read **lower** CNS — all three recorded in [DECISIONS.md](DECISIONS.md) #27, none of them fitted away |
+| Shearwater Perdix, the dive actually made | transcribed screens in [`examples/hermanice_dive/`](examples/hermanice_dive/) — 33 m/40 min EAN32 at GF 40/85, fresh water at 267 m | five gas rows reproduce to **±0.6 L** at an environment nobody tuned (it was inferred from the gas column, then confirmed by the diver); **CNS agrees to half a point**; and this unit switches gas **at the MOD**, as we do — unlike the Predator |
 
 - `tests/test_subsurface_crosscheck.py` — the Subsurface oracle (`tests/subsurface_oracle/`,
   GPL-2.0, test-only; see the README there for the license boundary). Cross-checks
