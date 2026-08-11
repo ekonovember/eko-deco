@@ -140,14 +140,50 @@ the TTS row straight over the summary.
   — preprinted pages use 3 m depth rows with stop time, gas and run time filled
   in; `D / R / T` plus `D+5 / T+5` contingency columns.
 
-## Current cards
+## The hand-written variant, and what it fixes
 
-| File | Dive |
-|------|------|
-| `card_v1_air_gf2050.pdf` | 32 m / 20 min, air 2×12 @ 230 b + EAN50 AL 11,3 @ 210 b, GF 20/50 — on plan + lost EAN50, bottom time 20/23/26/29 |
-| `card_v2_ean32_gf4085.pdf` | 32 m / 20 min, EAN32 2×12 @ 230 b + EAN50 AL 11,3 @ 210 b, GF 40/85 — same grid (no mandatory stop at 20 min) plus the NDL strip |
+A diver's own wetnotes card for `../examples/scenario_2`, photographed
+2026-08-05, uses a tighter notation than the printed one. It is recorded here
+because it is evidence of how a schedule gets written **by hand**, which is a
+different question from how a planner prints one:
 
-Both carry min gas and turn pressure for 1 and 2 divers. The numbers are
-regenerated with `deco.cli plan --depth 32 --time 20 …`; if you change a card,
-change the plan invocation in `make_cards.py`'s header comment too so the card
-stays re-derivable.
+```
+        RT
+  ↓  32   4   (4)
+  —  32  36  (40)
+  ↑  21   1  (41)
+  ↑  18   1  (41)  ▼
+  —  18   1  (42)
+  —  15   2  (44)
+  —  12   2  (46)
+  —   9   5  (51)
+  —   6   5  (56)  ▼
+  —   3  10  (66)
+```
+
+`↓` descent · `—` held · `↑` ascent, then depth, **leg** minutes, and the
+runtime **in brackets**. `▼` in the margin marks a gas switch.
+
+Three rules worth carrying into any printed card:
+
+1. **The runtime is bracketed and the leg is not.** Two numeric columns that
+   could be confused are separated by punctuation rather than by a header —
+   on a wetnotes card there is no room for headers.
+2. **Every row carries a direction glyph**, so a transit row and a held row are
+   distinguishable at a glance underwater. This is the part a planner export
+   does *not* give you: MultiDeco says `Wynurz.do` / `Przyst. na` in words,
+   which does not survive being copied onto a slate.
+3. **A gas switch is a margin mark, not a row.** It annotates the row it happens
+   on; it is not measured from and gets no line of its own — the same rule as
+   `buhlmann.StopLeg` and DECISIONS #17.
+
+Every row of it matches `../examples/scenario_2/data.txt` exactly, including
+the two rows that share runtime `(41)` (the 21 → 18 m transit is under a
+minute, so the truncated runtime does not advance) — copied faithfully rather
+than "fixed", which is the right instinct. Legs are rounded to whole minutes
+(`36` for `35:59`, `1` for `0:27`) while the runtime column stays exact: the
+same priority `report.runtime_min` encodes.
+
+**No dive-specific card generator lives here.** `make_cards.py` is the engine;
+cards are made per dive, rendered from `deco plan --json`, and the PDFs are
+gitignored. Don't commit a plan back into this directory.

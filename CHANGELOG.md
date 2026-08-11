@@ -6,13 +6,13 @@ pre-1.0, so anything may still move.
 
 ## [Unreleased]
 
-### Added — the Hermanice pair, and printed cards in the hand-written convention
+### Added — the Hermanice pair, and the hand-written card convention
 
 - **`examples/hermanice_dive/`** — the two plans for one site kept side by side:
   a MultiDeco 4.24 export of the GF 5/50 training profile (32 m / 40 min EAN32)
-  and five photos of the **Shearwater Perdix** planner for the dive actually
-  made (33 m / 40 min EAN32, GF 40/85), plus the hand-written card that fixes
-  the printed runtime format. Its `README.md` reconciles both against eko-deco.
+  and the **Shearwater Perdix** planner screens for the dive actually made
+  (33 m / 40 min EAN32, GF 40/85), transcribed verbatim. Its `README.md`
+  reconciles both against eko-deco.
   Two findings worth the folder, both since **confirmed by the diver**, which is
   the point of writing the inference down first. The Perdix's six printed gas
   quantities pinned its unphotographed environment to surface 0.980–0.984 bar
@@ -24,20 +24,24 @@ pre-1.0, so anything may still move.
   turns out to be a **switch stop the instructor added** for an unhurried gas
   change. Left open: the Perdix's descent rate, ~16 m/min here against the
   10 m/min the Predator's own bottom row pinned — fitted, and labelled as such.
-- **`cards/make_hermanice.py`** — the 90 × 64 mm card in the hand-written
-  convention: a direction glyph per row (down / level / up), depth, leg minutes,
-  the leave-at runtime in brackets, and a filled **triangle** pointing at each
-  gas-switch row. Every row carries its minutes, with a transit's set grey
-  beside its arrow so no row reads as time held. It prints another planner's
-  schedule verbatim and computes only what that planner does not print: min gas
-  and turn pressure.
+- **The hand-written card convention, in `cards/README.md`** — read off a
+  diver's own wetnotes card and reconciled row by row against the export it
+  copies: a direction glyph per row (down / level / up), depth, leg minutes, the
+  leave-at runtime **in brackets**, and a margin **triangle** at each gas-switch
+  row. The bracket is what separates two numeric columns where there is no room
+  for a header; the glyph is what a planner export does not give you, because
+  `Wynurz.do` / `Przyst. na` in words does not survive being copied onto a
+  slate. No dive-specific card generator is kept — the engine stays, plans do
+  not.
 
 ### Added — a second real Shearwater plan, and what it corrected
 
-- **`examples/shearwater/my_conservative_deco_training_dive/`** — a photographed
-  Shearwater Predator plan, 32 m / 40 min on EAN28 at **GF 5/50**, the same dive
-  as the MultiDeco export in `examples/scenario_2`. Transcribed, reconciled and
-  added to `tests/shearwater_golden.json`.
+- **A second Shearwater Predator plan** — 32 m / 40 min on EAN28 at **GF 5/50**,
+  the same dive as the MultiDeco export in `examples/scenario_2`. Transcribed,
+  reconciled, and added to `tests/shearwater_golden.json`, which now carries both
+  Predator captures whole: the schedules as entries and everything else the
+  screens printed — settings read off the unit, per-row gas quantities, CNS, and
+  what the gas column settles — in a `_predator_provenance` block beside them.
 - **A planning queue for the Predator**, `examples/shearwater/to_plan_1…6/`:
   six sheets, each changing one setting from the last capture and carrying
   eko-deco's prediction *written down before the plan is made*. In order: no O₂
@@ -50,14 +54,23 @@ pre-1.0, so anything may still move.
   (18/10 ours · 10/10 Shearwater · 8/9 MultiDeco), with where each number was
   read off, plus the same values inline beside the fields.
 
-### Changed — the evidence of record is markdown, not photographs
+### Changed — the evidence of record is the test, not a photograph
 
 - **Captured plans are transcribed, screen by screen, and the images are kept
   outside the repo** (`~/eko-deco-evidence/`). A transcription diffs, greps and
-  clones; 17 MB of JPEG does none of those, and writing one out screen by screen
+  clones; 22 MB of JPEG does none of those, and writing one out screen by screen
   is what makes somebody read the screen. The photos remain the *source* — they
-  are no longer the *archive*. Every folder that held images says where they
-  went and reproduces every value they carried.
+  are no longer the *archive*.
+- **And once a test pins a capture, the transcription lives in the test.** The
+  two Predator folders are gone: their schedules were already asserted by
+  `tests/shearwater_golden.json`, so the settings and printed totals moved in
+  beside them and the prose restating it went away. A page that repeats what a
+  fixture asserts is a second copy that can drift from it. What survives outside
+  the fixture is only what a fixture cannot hold: the *findings*, in
+  [DECISIONS.md #27](DECISIONS.md), and the forward-looking capture queue.
+  `examples/hermanice_dive/` keeps its folder for exactly one reason — no test
+  covers it yet, because the golden schema has no water/altitude fields and the
+  dive is fresh water at 267 m.
 - Transcribing the Perdix screens this way immediately found something the
   prose had missed — see below. That is the argument for the change, not a
   side effect of it.

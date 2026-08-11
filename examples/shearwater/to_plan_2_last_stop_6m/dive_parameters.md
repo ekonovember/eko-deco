@@ -6,7 +6,8 @@ have a 3 m twin of, and it is the case where the CNS hypothesis predicts we
 
 ## Set on the unit
 
-As for [`../my_conservative_deco_training_dive`](../my_conservative_deco_training_dive),
+As for the GF 5/50 Predator capture (`tests/shearwater_golden.json`,
+`_predator_provenance`),
 **change one thing**:
 
 | Setting | Value | |

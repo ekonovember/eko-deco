@@ -12,10 +12,22 @@ wrong*, and that question is unanswerable once the source has been tidied.
 
 ## What we already have
 
-| Folder | Dive | What it settled |
-|---|---|---|
-| [`my_real_dive_scenario_1`](my_real_dive_scenario_1) | 32 m / 40 min EAN32, GF 40/85, last stop 3 m | first evidence of the pass-through-stop and gas-switch divergences; CNS 38 % vs our 30.7 % |
-| [`my_conservative_deco_training_dive`](my_conservative_deco_training_dive) | 32 m / 40 min EAN28, GF 5/50, last stop 3 m | bottom time **includes the descent**; rates are 10/10 m/min on a whole-minute grid; gas volumes use 1.000 bar + 10 m/bar; the switch happens **at a stop**, not at a MOD; CNS 51 % vs our 36.7 % — see DECISIONS #27 |
+Two Shearwater Predator on-unit plans, photographed 2026-08-07. **They do not
+have folders here** — a capture that is pinned by a test belongs in the test.
+Both live in [`../../tests/shearwater_golden.json`](../../tests/shearwater_golden.json):
+the schedules as `SW Predator …` entries, and everything else the screens
+printed (settings, gas quantities, CNS, and what the gas column settles) in the
+`_predator_provenance` block beside them. The originals are in
+`~/eko-deco-evidence/`.
+
+| Dive | What it settled |
+|---|---|
+| 32 m / 40 min EAN32, GF 40/85, last stop 3 m | first evidence of the pass-through-stop and gas-switch divergences; CNS 38 % vs our 30.7 % |
+| 32 m / 40 min EAN28, GF 5/50, last stop 3 m | bottom time **includes the descent**; rates are 10/10 m/min on a whole-minute grid; gas volumes use 1.000 bar + 10 m/bar; the switch happens **at a stop**, not at a MOD; CNS 51 % vs our 36.7 % — see DECISIONS #27 |
+
+A third capture, a Shearwater **Perdix**, is in
+[`../hermanice_dive`](../hermanice_dive): no test pins it yet, so it keeps its
+folder until one does.
 
 ## The queue — plan these next
 
@@ -52,13 +64,18 @@ Shearwater Cloud so its real profile is on the record.
    page · gas usage · summary. Any filenames; they sort by time anyway.
 3. Drop them in the folder. Note anything you had to change from the sheet.
 
-**The photographs do not stay in the repo.** They are transcribed into the
-folder's `dive_parameters.md` — every screen, verbatim, including whatever
-disagrees with us — and the originals are then moved to `~/eko-deco-evidence/`.
-Markdown is the evidence of record: it diffs, it greps, it survives a `git
-clone` on a phone tether, and a transcription that had to be written screen by
-screen is a transcription somebody actually read. Photos are the *source*;
-they are not the *archive*.
+**The photographs do not stay in the repo, and neither does the sheet once a
+test pins it.** Each capture is transcribed — every screen, verbatim, including
+whatever disagrees with us — into the golden fixture that asserts it
+(`tests/shearwater_golden.json`: the schedule as an entry, the settings and the
+printed totals as a provenance block). The originals move to
+`~/eko-deco-evidence/`, and the folder here goes away.
+
+Text is the evidence of record: it diffs, it greps, it survives a `git clone` on
+a phone tether, and a transcription that had to be written screen by screen is
+one somebody actually read. Photos are the *source*, not the *archive* — and a
+folder restating what a test already asserts is a second copy that can drift
+from it.
 
 A setting we have to guess turns a scenario from evidence into an inference —
 the difference between the two classes of fixture already in
@@ -79,7 +96,7 @@ The schedule is a function of every one of them. Two known traps:
   default and is *not* the same as our 10.0 msw/bar salt-water constant. Getting
   this wrong shifts every pressure in the plan and would look like a model
   disagreement. **Still open for the model.** What *is* settled is the display:
-  every printed gas volume in `my_conservative_deco_training_dive` reconciles
+  every printed gas volume on the GF 5/50 Predator capture reconciles
   exactly at surface 1.000 bar and 10 m/bar, which is a display convention (as
   it is in MultiDeco) and says nothing about the tissue math.
 - ~~**What "bottom time" counts.**~~ **Answered: it includes the descent.** The

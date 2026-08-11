@@ -1,28 +1,35 @@
 # Hermanice — the training profile and the plan actually dived
 
-Two plans for the same site, made in two different planners, plus the
-hand-written card that fixes the printed format. Same role as
+Two plans for the same site, made in two different planners. Same role as
 [`../scenario_1`](../scenario_1) and [`../shearwater`](../shearwater):
-**primary evidence, kept verbatim.** Don't reformat or "fix" anything in the
-three folders — if a number here disagrees with ours, the interesting question
-is which of us is wrong, and that is unanswerable once the source is tidied.
+**primary evidence, kept verbatim.** Don't reformat or "fix" anything in these
+two folders — if a number here disagrees with ours, the interesting question is
+which of us is wrong, and that is unanswerable once the source is tidied.
 
 | Folder | What |
 |---|---|
 | [`training_dive/`](training_dive) | MultiDeco 4.24 export — 32 m / 40 min on EAN32, **GF 5/50**, the deliberately over-conservative practice profile |
 | [`actual_plan/`](actual_plan) | [`screens.md`](actual_plan/screens.md) — the Shearwater **Perdix** on-unit planner, photographed 2026-08-08, all five screens verbatim: 33 m / 40 min on EAN32, **GF 40/85**, last stop 3 m, RMV 20. Reconciled in § 2 below |
-| [`runtime_convention/`](runtime_convention) | [`card.md`](runtime_convention/card.md) — the hand-written wetnotes card that transcribes [`../scenario_2`](../scenario_2): direction glyph, depth, leg minutes, `(runtime)`, triangles at the gas switches |
 
 > **The photographs themselves are not in the repo.** Every value they carry is
-> transcribed here and in [`runtime_convention/card.md`](runtime_convention/card.md),
+> transcribed here and in [`actual_plan/screens.md`](actual_plan/screens.md),
 > screen by screen, and the originals are kept outside the tree
-> (`~/eko-deco-evidence/`). Markdown is the evidence of record: it diffs, it
-> greps, and it does not cost 4 MB. Transcriptions are **verbatim** — if a
-> number here disagrees with ours, that is the finding, not a typo to correct.
+> (`~/eko-deco-evidence/`). Text is the evidence of record: it diffs, it greps,
+> and it does not cost 4 MB. Transcriptions are **verbatim** — if a number here
+> disagrees with ours, that is the finding, not a typo to correct.
+>
+> **This folder is temporary.** Nothing here is pinned by a test yet — the
+> golden fixture has no water/altitude fields, so a fresh-water dive at 267 m
+> cannot be expressed as an entry without extending it. The moment it can, this
+> goes the way the two Predator captures did: into
+> [`../../tests/shearwater_golden.json`](../../tests/shearwater_golden.json),
+> and the folder is deleted. A capture a test asserts does not also need a page
+> restating it.
 
-Both plans are printed as 90 × 64 mm cards by
-[`../../cards/make_hermanice.py`](../../cards/make_hermanice.py), in the
-convention the third folder fixes.
+The hand-written wetnotes card that fixes the printed runtime format — the
+convention both of these get written onto — is transcribed in
+[`../../cards/README.md`](../../cards/README.md), with the engine that renders
+it. No dive-specific card generator is kept.
 
 ---
 
@@ -141,7 +148,7 @@ opposite convention:
 
 | Unit | EAN50 MOD → grid | Ascent rows | Switched at |
 |---|---|---|---|
-| Predator (`../shearwater/my_conservative_deco_training_dive`) | 21 m | `15 asc … 28/00` — one row, straight through 21 m | **15 m**, the first held stop |
+| Predator, GF 5/50 (`tests/shearwater_golden.json`) | 21 m | `15 asc … 28/00` — one row, straight through 21 m | **15 m**, the first held stop |
 | Perdix (here) | 21 m | `21 asc … 32/00` then `9 asc … 50/00` — broken at 21 m | **21 m**, the MOD |
 
 **So "Shearwater switches at a stop" is a statement about the Predator, not
@@ -190,8 +197,7 @@ Two conventions follow from that, and one number is left over:
    transit, to the litre.
 2. **Stop legs are billed at the stop depth for the whole leg.** This Perdix
    does *not* use the convention the Predator in
-   [`../shearwater/my_conservative_deco_training_dive`](../shearwater/my_conservative_deco_training_dive)
-   used (whole-minute legs at mean depth), which would put the 21 → 9 ascent at
+   the Predator used (whole-minute legs at mean depth), which would put the 21 → 9 ascent at
    2 min × mean depth = 148 L against the 59 L printed.
 3. **The descent rate is the one free parameter left, and it is ~16 m/min.**
    With the environment fixed, the bottom row's 3275 L needs a **2.0 min**

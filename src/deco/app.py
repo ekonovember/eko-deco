@@ -48,7 +48,7 @@ ASCENT_RATE = 10.0
 # the rate fields. Every number is READ OFF an artefact we keep, not a vendor
 # claim: the MultiDeco pair off the 4.24 exports in examples/scenario_1|2, the
 # Shearwater pair off the Predator planner photos in
-# examples/shearwater/my_conservative_deco_training_dive (the printed gas
+# tests/shearwater_golden.json, _predator_provenance (the printed gas
 # volumes only reconcile at 10 m/min down and a 2-minute 17 m ascent). GFDECO
 # and Subsurface take both rates as inputs and ship no default worth quoting, so
 # they are not listed.

@@ -579,7 +579,7 @@ def _schedule_delta(scenario: int, surface_p: float, msw_per_bar: float
         dives = json.load(fh)["dives"]
     # Match the export PATH, not a bare "scenario_N" substring. The loose form
     # silently swallowed a Shearwater fixture whose source merely mentioned the
-    # folder `my_real_dive_scenario_1`: it was then planned as MultiDeco
+    # the GF 40/85 Predator capture: it was then planned as MultiDeco
     # scenario 1 and compared against a schedule from a different planner and a
     # different dive, which showed up as a fake model divergence.
     tag = f"examples/scenario_{scenario}/data.txt"

@@ -322,7 +322,7 @@
     },
     {
       "name": "MD 32m/40min EAN36 +EAN50+O2 GF40/85",
-      "source": "MultiDeco 4.24 export (Polish), examples/scenario_1/data.txt \u2014 see _scenario_provenance",
+      "source": "MultiDeco 4.24 export (Polish), examples/scenario_1/data.txt — see _scenario_provenance",
       "depth_m": 32,
       "bottom_time_min": 40,
       "bottom_gas": {
@@ -365,7 +365,7 @@
     },
     {
       "name": "MD 32m/40min EAN36 +O2 (lost EAN50) GF40/85",
-      "source": "MultiDeco 4.24 export (Polish), examples/scenario_1/data.txt \u2014 see _scenario_provenance",
+      "source": "MultiDeco 4.24 export (Polish), examples/scenario_1/data.txt — see _scenario_provenance",
       "depth_m": 32,
       "bottom_time_min": 40,
       "bottom_gas": {
@@ -404,7 +404,7 @@
     },
     {
       "name": "MD 32m/40min EAN36 +EAN50 (lost O2) GF40/85",
-      "source": "MultiDeco 4.24 export (Polish), examples/scenario_1/data.txt \u2014 see _scenario_provenance",
+      "source": "MultiDeco 4.24 export (Polish), examples/scenario_1/data.txt — see _scenario_provenance",
       "depth_m": 32,
       "bottom_time_min": 40,
       "bottom_gas": {
@@ -443,7 +443,7 @@
     },
     {
       "name": "MD 32m/40min EAN36 only (lost both) GF40/85",
-      "source": "MultiDeco 4.24 export (Polish), examples/scenario_1/data.txt \u2014 see _scenario_provenance",
+      "source": "MultiDeco 4.24 export (Polish), examples/scenario_1/data.txt — see _scenario_provenance",
       "depth_m": 32,
       "bottom_time_min": 40,
       "bottom_gas": {
@@ -477,7 +477,7 @@
     },
     {
       "name": "MD 32m/40min EAN28 +EAN50+O2 GF5/50",
-      "source": "MultiDeco 4.24 export (Polish), examples/scenario_2/data.txt \u2014 see _scenario_provenance",
+      "source": "MultiDeco 4.24 export (Polish), examples/scenario_2/data.txt — see _scenario_provenance",
       "depth_m": 32,
       "bottom_time_min": 40,
       "bottom_gas": {
@@ -532,7 +532,7 @@
     },
     {
       "name": "MD 32m/40min EAN28 +O2 (lost EAN50) GF5/50",
-      "source": "MultiDeco 4.24 export (Polish), examples/scenario_2/data.txt \u2014 see _scenario_provenance",
+      "source": "MultiDeco 4.24 export (Polish), examples/scenario_2/data.txt — see _scenario_provenance",
       "depth_m": 32,
       "bottom_time_min": 40,
       "bottom_gas": {
@@ -587,7 +587,7 @@
     },
     {
       "name": "MD 32m/40min EAN28 +EAN50 (lost O2) GF5/50",
-      "source": "MultiDeco 4.24 export (Polish), examples/scenario_2/data.txt \u2014 see _scenario_provenance",
+      "source": "MultiDeco 4.24 export (Polish), examples/scenario_2/data.txt — see _scenario_provenance",
       "depth_m": 32,
       "bottom_time_min": 40,
       "bottom_gas": {
@@ -638,7 +638,7 @@
     },
     {
       "name": "MD 32m/40min EAN28 only (lost both) GF5/50",
-      "source": "MultiDeco 4.24 export (Polish), examples/scenario_2/data.txt \u2014 see _scenario_provenance",
+      "source": "MultiDeco 4.24 export (Polish), examples/scenario_2/data.txt — see _scenario_provenance",
       "depth_m": 32,
       "bottom_time_min": 40,
       "bottom_gas": {
@@ -688,7 +688,7 @@
     },
     {
       "name": "SW Predator 32m/40min EAN28 +EAN50+O2 GF5/50",
-      "source": "Shearwater Predator on-unit planner, photographed 2026-08-07 \u2014 settings READ OFF THE UNIT, see examples/shearwater/my_conservative_deco_training_dive/dive_parameters.md",
+      "source": "Shearwater Predator on-unit planner, photographed 2026-08-07 - settings READ OFF THE UNIT, transcribed in _predator_provenance above",
       "depth_m": 32,
       "bottom_time_min": 40,
       "bottom_gas": {
@@ -739,11 +739,11 @@
       },
       "stop_tol_min": 1.0,
       "tts_tol_min": 1.5,
-      "_note": "The same dive as the MultiDeco export above (examples/scenario_2), now from a real Shearwater \u2014 the two references agree with each other and with us on the obligation below 15 m, and differ from us in the same place. Tolerances are wide for the SAME TWO KNOWN reasons as the GF40/85 Predator entry, both recorded rather than tuned away. (1) The Predator prints the leg (runtime difference, ascent included) while this test compares the hold. (2) We add 21 m / 18 m pass-through stops worth ~1 min that neither the Predator nor MultiDeco makes: at GF-Low 5 the ceiling relaxes faster than the diver ascends, so Baker's rule (DECISIONS #21) becomes visible padding instead of obligation \u2014 suppressing it on a 1-minute grid reproduces this schedule exactly. Gas volumes are NOT asserted: the Predator stays on the bottom gas to 15 m (its first stop) while we switch at EAN50's 21.9 m MOD, which is DECISIONS #27 and a convention, not a model difference. CNS does NOT match (51% theirs vs 36.7% ours) and is deliberately not asserted; see the dive_parameters.md write-up and DECISIONS #27."
+      "_note": "The same dive as the MultiDeco export above (examples/scenario_2), now from a real Shearwater — the two references agree with each other and with us on the obligation below 15 m, and differ from us in the same place. Tolerances are wide for the SAME TWO KNOWN reasons as the GF40/85 Predator entry, both recorded rather than tuned away. (1) The Predator prints the leg (runtime difference, ascent included) while this test compares the hold. (2) We add 21 m / 18 m pass-through stops worth ~1 min that neither the Predator nor MultiDeco makes: at GF-Low 5 the ceiling relaxes faster than the diver ascends, so Baker's rule (DECISIONS #21) becomes visible padding instead of obligation — suppressing it on a 1-minute grid reproduces this schedule exactly. Gas volumes are NOT asserted: the Predator stays on the bottom gas to 15 m (its first stop) while we switch at EAN50's 21.9 m MOD, which is DECISIONS #27 and a convention, not a model difference. CNS does NOT match (51% theirs vs 36.7% ours) and is deliberately not asserted; see the dive_parameters.md write-up and DECISIONS #27."
     },
     {
       "name": "SW Predator 32m/40min EAN32 +EAN50+O2 GF40/85",
-      "source": "Shearwater Predator on-unit planner, photographed 2026-08-07 \u2014 settings READ OFF THE UNIT, see examples/shearwater/my_real_dive_scenario_1/dive_parameters.md",
+      "source": "Shearwater Predator on-unit planner, photographed 2026-08-07 - settings READ OFF THE UNIT, transcribed in _predator_provenance above",
       "depth_m": 32,
       "bottom_time_min": 40,
       "bottom_gas": {
@@ -781,7 +781,7 @@
       },
       "stop_tol_min": 1.5,
       "tts_tol_min": 1.5,
-      "_note": "Tolerances are wide for two KNOWN reasons, both recorded rather than tuned away. (1) The Predator prints the leg (difference of runtimes, ascent included) while this test compares the hold, so every stop reads ~0.3 min short on our side \u2014 the same bookkeeping gap the Perdix 2 fixture carries. (2) We add 12 m (1.00 min) and 9 m (0.70 min) pass-through stops that are pure Baker runtime padding, not obligation: the GF-high ceiling was already clear of the next stop at both (DECISIONS #21). The obligation itself is identical \u2014 the 6 m and 3 m legs match exactly and the O2 volume matches to the litre. CNS does NOT match (38% theirs vs 32.3% ours) and is deliberately not asserted here; see the dive_parameters.md write-up."
+      "_note": "Tolerances are wide for two KNOWN reasons, both recorded rather than tuned away. (1) The Predator prints the leg (difference of runtimes, ascent included) while this test compares the hold, so every stop reads ~0.3 min short on our side — the same bookkeeping gap the Perdix 2 fixture carries. (2) We add 12 m (1.00 min) and 9 m (0.70 min) pass-through stops that are pure Baker runtime padding, not obligation: the GF-high ceiling was already clear of the next stop at both (DECISIONS #21). The obligation itself is identical — the 6 m and 3 m legs match exactly and the O2 volume matches to the litre. CNS does NOT match (38% theirs vs 32.3% ours) and is deliberately not asserted here; see the dive_parameters.md write-up."
     }
   ],
   "_shearwater_provenance": [
@@ -796,6 +796,48 @@
     "exactly. The 30m/30min walkthrough on p.30 was evaluated and REJECTED",
     "as golden data: its table is truncated mid-schedule (runtime shown is",
     "inconsistent with the in-dive TTS on the same pages)."
+  ],
+  "_predator_provenance": [
+    "The two 32 m / 40 min SW Predator dives below are real on-unit planner runs,",
+    "photographed 2026-08-07 and transcribed here. Unlike the MultiDeco 45 m set,",
+    "the settings are NOT inferred - they were read off the unit's own screens.",
+    "The photographs are kept outside the repo (~/eko-deco-evidence/); this block",
+    "and the per-dive _note fields are the evidence of record.",
+    "",
+    "Read off the screens, both dives: OC planner, depth 32 m, time 40 min,",
+    "RMV 20 L/min, start CNS 0 %, last stop 3 m, gases 99/00 + 50/00 + bottom mix.",
+    "GF 40/85 on one (Deco Setup + Display Setup: Meters, Altitude SeaLvl) and",
+    "GF 5/50 on the other (main display 'Conserv. 05/50' and ready-to-plan",
+    "'GF: 5/50'). NOT shown on any screen, so not established: salinity, the",
+    "ppO2 switch limits, and - on the GF 40/85 dive - the ascent rate.",
+    "",
+    "What the printed gas column settles, and it is the useful part of the",
+    "capture. Every Qty on the GF 5/50 dive is reproduced exactly by",
+    "RMV x minutes x (1.0 + depth/10), stop legs charged at the stop depth for",
+    "the whole leg and ascent legs at mean depth over a whole number of minutes:",
+    "  3 m 10 min -> 260   6 m 5 min -> 160   9 m 4 min -> 152",
+    "  12 m 3 min -> 132   15 m 1 min ->  50   asc 32->15 m -> 134",
+    "Three conventions follow:",
+    "  * The gas arithmetic uses surface 1.000 bar and exactly 10 m/bar. Whether",
+    "    the MODEL does is still open - this is a display convention, as in",
+    "    MultiDeco.",
+    "  * Bottom time INCLUDES the descent. The bottom row prints 3259 L where",
+    "    40 min at 32 m would be 3360; the 101 L deficit is a 3.2 min descent at",
+    "    10 m/min inside the 40. Same convention as ours, MultiDeco, GFDECO and",
+    "    Subsurface.",
+    "  * Descent and ascent are 10 m/min on a whole-minute grid - the 17 m ascent",
+    "    is billed as 2 min (1.7 rounded up), which is why Run steps 40 -> 42.",
+    "",
+    "Printed totals not pinned by the schedule assertions, kept for reference:",
+    "  GF 5/50 : run 65, deco 25, CNS 51 %, gas 28/00 3393 L / 50/00 334 L /",
+    "            99/00 420 L; schedule 15m 1' @43, 12m 3' @46, 9m 4' @50,",
+    "            6m 5' @55, 3m 10' @65.",
+    "  GF 40/85: run 50, deco 10, CNS 38 %, gas 32/00 3433 L / 50/00 0 L /",
+    "            99/00 194 L; schedule 6m 2' @45, 3m 5' @50. EAN50 reads 0 L",
+    "            because the unit's first stop is 6 m, where O2 beats it.",
+    "",
+    "The three divergences these two dives establish - pass-through stops, the",
+    "gas-switch depth, and the CNS clock - are DECISIONS #27. None is fitted away."
   ],
   "_scenario_provenance": [
     "The eight 32 m / 40 min dives below come from two real MultiDeco 4.24",

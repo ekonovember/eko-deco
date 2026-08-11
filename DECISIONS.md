@@ -805,8 +805,8 @@ dive that did not start clean.
 ## #27 — Pass-through stops and the gas switch: two references disagree with us at low GF-Low
 
 Two Shearwater Predator plans photographed on 2026-08-07
-(`examples/shearwater/my_real_dive_scenario_1` and
-`.../my_conservative_deco_training_dive`) put a real computer's schedule beside
+(transcribed in `tests/shearwater_golden.json`, `_predator_provenance` and the
+two `SW Predator` entries) put a real computer's schedule beside
 ours for the first time. The obligation matches minute for minute. Two
 conventions do not, and both are recorded here rather than "fixed", because
 both are choices we made on purpose and can now name a price for.

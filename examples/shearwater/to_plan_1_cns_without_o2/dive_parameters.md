@@ -7,8 +7,8 @@ turned off.
 ## Set on the unit
 
 Everything exactly as it was for
-[`../my_conservative_deco_training_dive`](../my_conservative_deco_training_dive)
-— **change one thing**:
+the GF 5/50 Predator capture (`tests/shearwater_golden.json`,
+`_predator_provenance`) — **change one thing**:
 
 | Setting | Value | |
 |---|---|---|
