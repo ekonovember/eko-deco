@@ -775,11 +775,13 @@ def main(argv: list[str] | None = None) -> int:
                         default="at-mod",
                         help="WHERE a deco gas is taken. 'at-mod' (default) "
                              "switches as soon as the ppO2 allows, at the "
-                             "stop depth the MOD snaps to — what MultiDeco "
-                             "and Shearwater do. 'at-first-stop' holds every "
-                             "deco switch until the first stop, the team "
-                             "convention of arriving before switching; it "
-                             "lengthens the deco, never shortens it.")
+                             "stop depth the MOD snaps to. 'at-first-stop' "
+                             "holds every deco switch until the first stop, "
+                             "the team convention of arriving before "
+                             "switching; it lengthens the deco, never "
+                             "shortens it. Note a real Shearwater Predator "
+                             "does neither exactly: it switches only at a "
+                             "stop it actually holds (see DECISIONS.md #27).")
     common.add_argument("--p-h2o", type=_positive_float, default=None,
                         help=f"Alveolar water-vapour pressure (bar). Default "
                              f"{b.P_H2O:g} (Schreiner) — what MultiDeco, "

@@ -734,7 +734,7 @@ hand-edit, not a gasless dive.
 
 `DivePlan.gas_switch_policy` is `"at-mod"` (default) or `"at-first-stop"`.
 
-At MOD is what MultiDeco, Shearwater and Baker's GFDECO do, and what every
+At MOD is what MultiDeco and Baker's GFDECO do, and what every
 cross-check in this repo is measured against, so it stays the default: changing
 it would move our schedules away from the tools they are pinned to for a reason
 no diver asked for.
@@ -761,6 +761,13 @@ Only **deco** gases are held back. Bottom and travel mixes are what got the
 diver down; they are not a switch made on the way up. And an NDL ascent has no
 first stop to hold to, so `first_stop=None` falls back to at-MOD rather than
 suppressing every switch to the surface.
+
+**Correction (#27):** the claim above that *Shearwater* switches at MOD is too
+broad. Two photographed **Predator** plans show it switching only at a stop it
+actually holds — a third behaviour neither policy expresses. A **Perdix**, on a
+neighbouring dive with the same mixes, does switch at the MOD, so the two units
+disagree with each other and at-MOD is not unsupported. The default is unchanged
+and the reason for it is unchanged; only the list of who does what is corrected.
 
 ## #26 — A dive series shares its settings and repeats only the profile
 
@@ -794,3 +801,76 @@ the GUI hides the field rather than showing it reading zero.
 pressure. No tables, no pressure groups — the compartments carry the residual,
 which is what every dive computer does and what makes a repetitive dive just a
 dive that did not start clean.
+
+## #27 — Pass-through stops and the gas switch: two references disagree with us at low GF-Low
+
+Two Shearwater Predator plans photographed on 2026-08-07
+(`examples/shearwater/my_real_dive_scenario_1` and
+`.../my_conservative_deco_training_dive`) put a real computer's schedule beside
+ours for the first time. The obligation matches minute for minute. Two
+conventions do not, and both are recorded here rather than "fixed", because
+both are choices we made on purpose and can now name a price for.
+
+**1. Pass-through stops cost ~1 min, and at GF-Low 5 two references skip them.**
+#21 holds a stop at the rounded GF-Low ceiling even where the ascent has already
+cleared it, read off `gfdeco.f` and pinned to GFDECO at 0.00 min. On the
+32 m/40 min EAN28 GF 5/50 dive our GF-5 ceiling on leaving the bottom is 17.98 m
+(18.03 m at surface 1.000 bar — the first stop lands on 18 m or 21 m on 13 mbar
+of surface pressure, which is its own warning about that GF), so we hold at 18 m
+and then 15 m. The Predator ascends straight to 15 m. So does the MultiDeco 4.24
+export of the *same dive* (`examples/scenario_2`, golden entry
+`MD 32m/40min EAN28 +EAN50+O2 GF5/50`) — neither has a stop above 15 m.
+
+Replaying our own tissue model on a 1-minute grid with the GF line anchored at
+21 m and the pass-through stops suppressed reproduces the Predator's schedule
+exactly — `15m 1′ 12m 3′ 9m 4′ 6m 5′ 3m 10′`, run 65, deco 25, SurfGF 48 %. The
+model, the GF line and the stop grid all agree; only this rule differs.
+
+**We keep it.** It is Baker's, it is what the GFDECO cross-check pins, and it
+errs long. But the note in #21 that it "usually" costs nothing is only true at
+ordinary GF-Lows, where the ceiling still blocks on arrival. At GF-Low 5 the
+ceiling relaxes faster than the diver ascends and the rule becomes a visible
+1 min of deep padding that no reference planner charges. A future option to
+suppress it would be legitimate; fitting the ceiling to close the gap would not.
+
+**2. The *Predator* switches gas at a stop, not at a MOD — but a Perdix does
+not.** #25 says at-MOD is "what MultiDeco, Shearwater and Baker's GFDECO do".
+For the Predator that is disproved: on the GF 5/50 dive EAN50's MOD is 21.9 m
+and the printed `15 asc 42 28/00 134` row bills the *whole* 32 → 15 m ascent to
+the bottom gas. On the GF 40/85 dive the first stop is 6 m, where O₂ beats
+EAN50, and EAN50 reads 0 L for the dive. The Predator's rule is "switch only at
+a stop the diver actually holds", which is neither of our policies —
+`at-first-stop` switches at our first stop, and our first stop can be a
+pass-through the Predator never makes.
+
+**The generalisation to the brand does not survive**, and it was corrected
+before it could be relied on. The Shearwater **Perdix** plan in
+[`examples/hermanice_dive`](examples/hermanice_dive) breaks its ascent at 21 m —
+a depth it holds for zero minutes — purely to change gas, and bills the 21 → 9 m
+ascent to EAN50. 21 m is EAN50's MOD snapped to the 3 m grid. That is **at-MOD,
+i.e. our default**, on the same brand, the same mixes and a neighbouring dive.
+
+So the two units disagree with each other, and we match the newer one. Whether
+that is firmware, a menu setting on no photographed screen, or a model
+difference is **not established** and is recorded as open rather than guessed.
+The default stays `at-mod`: it is what the MultiDeco exports show, what every
+cross-check is measured against, and what the Perdix does. The difference is gas
+accounting, not schedule — the obligation is identical either way.
+
+What changes is the claim, not the code — #25's sentence is corrected here and
+in the `--gas-switch` help, and it is corrected to name a *unit*, not a brand.
+
+**3. CNS is a genuine open disagreement, and it is the O₂ clock.** The Predator
+reads 38 % where we read 30.7 %, and 51 % where we read 36.7 %. Split by gas,
+the gap is +7.3 and +14.3 points over 7 and 15 minutes of O₂ — **+0.98 points
+per O₂ minute in both dives**. Charging O₂ at a flat 2.0 %/min and leaving every
+other gas at our own rates reproduces both totals to the displayed integer;
+2.0 %/min is the NOAA-interpolated rate at ppO₂ 1.584, i.e. the 6 m stop, so the
+Predator behaves as if it charges O₂ at its switch-depth ppO₂ for the whole time
+it is breathed, where we integrate at the actual depth (~4× slower at 3 m).
+
+**Nothing is changed on two data points and one fitted parameter.** The decisive
+plan is one with no O₂ at all (EAN50 shallowest): if CNS matches there, the
+whole disagreement is the O₂ clock. Until then this is recorded, not modelled —
+and it is recorded loudly, because ours is the *lower* number and the diver's
+own computer is the one they will be reading.
