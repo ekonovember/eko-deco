@@ -16,7 +16,8 @@ Schema::
       ],
       "gf_low": 30, "gf_high": 70,
       "sac_normal": 20, "sac_deco": null,
-      "sac_multiplier": 2.0, "problem_minutes": 1, "divers": 1,
+      "emergency": true, "sac_emergency": 40, "problem_minutes": 1, "divers": 1,
+      "turn_pressure": true, "turn_rule": "rock-bottom",
       "ascent_rate": 10, "descent_rate": 18, "stop_interval": 3, "last_stop_m": 3,
       "ppo2_bottom": 1.4, "ppo2_deco": 1.6, "ppo2_min": 0.18,
       "ppo2_switch_tol": 0.05, "min_stop_time": 1.0,
@@ -51,9 +52,25 @@ inline ``{"o2", "he"}`` mix), any legacy ``Level``-role gas and any legacy
 ``start_min`` arrival time are dropped — gas is automatic-by-role now, and
 levels no longer carry an arrival time.
 
-``sac_deco`` is an optional second consumption rate for gas breathed off a
-designated ``Deco`` cylinder (``null`` = one rate for the whole dive, the
-previous behaviour). ``surface_p_bar`` and ``msw_per_bar`` are the environment:
+``sac_normal`` is the baseline consumption (SAC/RMV, litres per minute at the
+surface) every gas estimate is built on — it is always in force, so every plan
+carries gas figures. ``sac_deco`` is an optional second consumption rate for gas
+breathed off a designated ``Deco`` cylinder (``null`` = one rate for the whole
+dive, the previous behaviour).
+
+``emergency`` switches the whole emergency block on or off — with it ``false``
+there is no reserve, no rock bottom and no ``(emrg)`` column anywhere, so a card
+carries the baseline numbers and nothing else. Its inputs are ``sac_emergency``
+(the stressed rate in L/min — an absolute figure, not a multiplier;
+``0`` = twice ``sac_normal``), ``problem_minutes`` at max depth and ``divers``
+(2 = a buddy out of gas, sharing every litre of the ascent including the deco
+stages). ``turn_pressure`` prints a turn pressure beside the reserve and
+``turn_rule`` picks how it is sized: ``"rock-bottom"`` (half the gas above
+minimum gas, so the diver surfaces exactly on the reserve) or ``"thirds"`` (the
+cave rule — ⅔ of the fill, flagged when a third does not cover rock bottom).
+See DECISIONS.md #28.
+
+``surface_p_bar`` and ``msw_per_bar`` are the environment:
 surface pressure and how many metres of water make a bar — 10.0 for salt water
 (the default), 10 1/3 for fresh (``buhlmann.WATER_TYPES``). They move every
 pressure the plan derives, so ppO₂, MOD, END, density, CNS/OTU, gas volumes and
@@ -127,9 +144,15 @@ def default_config() -> dict:
         "levels": [{"depth_m": 45.0, "runtime_min": 10.0}],
         "gf_low": 30,
         "gf_high": 70,
+        # The baseline rate every gas estimate is built on. Kept in step with
+        # `report.DEFAULT_SAC` (a test pins the two together), so a CLI run with
+        # no --sac and a first-launch GUI plan the same litres.
         "sac_normal": 20.0,
         "sac_deco": None,
-        "sac_multiplier": 2.0,
+        "emergency": True,
+        "sac_emergency": 40.0,          # absolute L/min, = 20 x the old x2
+        "turn_pressure": True,
+        "turn_rule": "rock-bottom",
         "problem_minutes": 1.0,
         "divers": 1,
         "ascent_rate": 10.0,
@@ -204,7 +227,8 @@ def save(cfg: dict, path: str | None = None) -> str:
     return path
 
 
-LEGACY_KEYS = ("solo", "sac_stress", "depth_m", "bottom_time_min", "show_rd")
+LEGACY_KEYS = ("solo", "sac_stress", "sac_multiplier", "depth_m",
+               "bottom_time_min", "show_rd")
 
 
 def normalize(cfg: dict) -> dict:
@@ -223,11 +247,21 @@ def _merged(cfg: dict) -> dict:
     base.update({k: v for k, v in cfg.items()
                  if k not in ("gases", "levels", "contingency")
                  and k not in LEGACY_KEYS})
-    # Legacy configs stored an absolute distress SAC (plus a solo flag);
-    # translate it into the emergency multiplier and drop both keys.
-    if "sac_multiplier" not in cfg and "sac_stress" in cfg:
+    # Emergency rate, twice migrated: the oldest configs stored an absolute
+    # distress SAC (`sac_stress`, plus a solo flag), then a multiplier on the
+    # working SAC (`sac_multiplier`). It is an absolute L/min figure again
+    # (DECISIONS.md #28), so both legacy forms resolve to one here and are
+    # dropped from the file. A config that names none keeps the old default
+    # behaviour — twice the working SAC — rather than inheriting a 40 L/min
+    # that has nothing to do with the SAC the file actually sets.
+    if "sac_emergency" not in cfg:
         sac = float(cfg.get("sac_normal", base["sac_normal"])) or 1.0
-        base["sac_multiplier"] = round(float(cfg["sac_stress"]) / sac, 2)
+        if "sac_multiplier" in cfg:
+            base["sac_emergency"] = round(sac * float(cfg["sac_multiplier"]), 2)
+        elif "sac_stress" in cfg:
+            base["sac_emergency"] = float(cfg["sac_stress"])
+        else:
+            base["sac_emergency"] = round(sac * b.EMERGENCY_SAC_FACTOR, 2)
     # Gases: drop legacy "Level"-role entries entirely (they existed only to be
     # force-breathed on a level; gas is automatic-by-role now).
     # An explicit "gases" key is taken as given, the empty list included. It
@@ -445,7 +479,10 @@ def to_buhlmann(cfg: dict) -> tuple[b.Gas, b.DivePlan, b.GasPlan, list[tuple]]:
     sac_deco = cfg.get("sac_deco")
     gp = b.GasPlan(sac=cfg["sac_normal"],
                    sac_deco=None if sac_deco is None else float(sac_deco),
-                   sac_multiplier=cfg.get("sac_multiplier", 2.0),
+                   sac_emergency=float(cfg.get("sac_emergency", 0.0)),
                    problem_minutes=cfg.get("problem_minutes", 1.0),
-                   divers=int(cfg.get("divers", 1)))
+                   divers=int(cfg.get("divers", 1)),
+                   emergency=bool(cfg.get("emergency", True)),
+                   turn_pressure=bool(cfg.get("turn_pressure", True)),
+                   turn_rule=cfg.get("turn_rule", "rock-bottom"))
     return bottom, plan, gp, gases

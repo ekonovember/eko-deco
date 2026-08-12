@@ -55,14 +55,26 @@ Erik Baker's gradient factors — a zero-dependency core, plus a CLI and a Tkint
   CNS/OTU and gas volumes — so a mountain lake plans as a mountain lake.
   (It assumes you are *acclimatised*: the tissues start at the site's surface
   pressure. Drove up this morning? Add margin the model doesn't.)
-- Rock-bottom / minimum-gas planning: one basic SAC — plus an optional separate
-  **deco SAC** for gas breathed off a stage — an emergency SAC
-  multiplier (e.g. 1.5), a problem-solving time and a diver count. Rock bottom
-  is the back-gas reserve to survive a problem at the worst moment and follow
-  the real ascent/deco to the first gas switch (to the surface, through every
-  stop, if there is none); with 2 divers the emergency assumes a buddy out of
-  gas sharing your supply until that first switch — plus
-  Time-To-Surface (TTS).
+- Gas estimates on **every** plan, from one baseline SAC/RMV in surface
+  litres per minute (plus an optional separate **deco SAC** for gas breathed off
+  a stage). No flag to remember: without `--sac` the CLI plans at 20 L/min and
+  says it assumed it.
+- Rock-bottom / minimum-gas planning as a **block you switch on or off**
+  (`--no-emergency`, or its own checkbox in the GUI — off, no reserve figure
+  appears anywhere, so a card is never ambiguous about whether it carries one).
+  Its inputs: an **emergency SAC** in L/min (absolute, one stressed rate for
+  every mix), a problem-solving time and a diver count. Rock bottom is the
+  back-gas reserve to survive a problem at the worst moment and follow the real
+  ascent/deco to the first gas switch (to the surface, through every stop, if
+  there is none); with **2 divers** every litre of that ascent is shared — the
+  back gas *and* the deco stage, because the diver who lost their gas may have
+  no stage of their own — plus Time-To-Surface (TTS).
+- A **turn pressure** beside it, shown or hidden on its own switch and sized by
+  the rule you dive: **rock bottom** (half the gas above minimum gas — you
+  surface exactly on the reserve, and a deeper or longer dive turns you earlier)
+  or **thirds** (the cave rule, ⅔ of the fill, whatever the profile). When a
+  third does not cover rock bottom — 45 m for a pair on a single 12 — every
+  view says so, the wetnotes card included.
 - Lost-deco-gas contingencies in the GUI: the schedule re-planned without each
   deco gas (and without all of them), with per-scenario gas usage showing what
   the dive **needs at the normal SAC against what you actually carry** (tank size
@@ -70,7 +82,7 @@ Erik Baker's gradient factors — a zero-dependency core, plus a CLI and a Tkint
   need **plus the rock-bottom reserve held on top**: the problem-solving minutes
   at the worst moment (end of the bottom phase, at max depth) plus the real
   planned ascent + deco to the next gas switch (all the way to the surface if
-  there is none) at the emergency SAC (SAC × multiplier) — bar
+  there is none) at the emergency SAC — bar
   remaining, and a `SHORT!` flag when a contingency outruns a cylinder at the
   normal SAC — plus a second `SHORT!` inside the parens when even need-plus-reserve
   is exceeded.
@@ -131,9 +143,12 @@ Run `deco-gui` for the visual planner shown above:
   *end* of the level, transit included, so levels simply follow one another; an
   editable gas stack (bottom / travel / deco, each with its own O₂, He, tank and
   fill, and a **use** checkbox to leave a gas out of the plan without deleting
-  it); SAC, the emergency SAC multiplier, the problem time (minutes solving
-  the problem at max depth before the emergency ascent) and a **2 divers**
-  checkbox (a buddy shares your gas until the first switch); four **Contingency (cut table)**
+  it); the baseline SAC (+ optional deco SAC); a separate **Emergency gas**
+  box with its own on/off checkbox — emergency SAC in L/min, the problem time
+  (minutes solving the problem at max depth before the emergency ascent) and a
+  **2 divers** checkbox (the team shares the whole ascent, stages included) and
+  a **Turn pressure** checkbox with its rule dropdown; four
+  **Contingency (cut table)**
   sliders — bottom-time steps −/+ and depth steps −/+ on the fixed 3 min × 3 m
   grid (0 disables a direction); plus **Save / Reload** of the shared
   `dive_plan.json`.
@@ -191,7 +206,7 @@ deco plan --depth 40 --time 25 --gas air --deco-gas 50 --contingency 0:2:0:1
 # Hypoxic trimix + travel gas, per-gas tanks, gas planning (TTS + rock bottom)
 deco plan --depth 60 --time 25 --gas 10/70@24 \
     --travel-gas 35/25@11 --deco-gas 50@11 --deco-gas 100@7 \
-    --sac 18 --sac-multiplier 1.5
+    --sac 18 --sac-emergency 27
 
 # Save a dive to the shared config, then re-plan it (the GUI reads the same file)
 deco plan --depth 45 --time 10 --gas air@24@232 --deco-gas 50@11@200 --sac 20 --save
@@ -249,9 +264,11 @@ deeper, add a level for the shallow depth.
 There are more knobs than shown above — ascent/descent/stop rates, the
 shallowest-stop depth (`--last-stop`), the ppO₂
 window (`--ppo2-bottom` / `--ppo2-deco` / `--ppo2-min`), the environment
-(`--water`, `--msw-per-bar`, `--altitude`, `--surface-p`), the emergency SAC
-multiplier, problem time and diver count for rock bottom and the emergency gas
-need (`--sac-multiplier`, `--problem-time`, `--divers`), and `--dive-index N`
+(`--water`, `--msw-per-bar`, `--altitude`, `--surface-p`), the emergency block
+and its inputs — whether to compute it at all, the stressed rate, the problem
+time, the diver count and the turn pressure (`--no-emergency`,
+`--sac-emergency`, `--problem-time`, `--divers`, `--no-turn-pressure`,
+`--turn-rule rock-bottom|thirds`) — and `--dive-index N`
 to print one dive of a series — see
 `deco plan -h` (or `ndl -h`, …) for the full list. Ready-to-run
 command snippets live in [`examples/`](examples/).

@@ -140,6 +140,15 @@ def registry() -> list[Tunable]:
         Tunable("OTU_EXPONENT", _v("OTU_EXPONENT"), "module", "hardcoded",
                 (OXTOX,), "Repex / Hamilton"),
 
+        # --- emergency gas: ours alone. No reference planner prints a
+        # reserve we could compare against, so nothing here is pinnable.
+        Tunable("EMERGENCY_SAC_FACTOR", _v("EMERGENCY_SAC_FACTOR"), "module",
+                "setting", (), "fallback only: emergency SAC when the plan "
+                "names none. The rate itself is an absolute setting"),
+        Tunable("TURN_RULES", _v("TURN_RULES"), "module", "setting", (),
+                "how the turn pressure is sized; ours alone, no planner we "
+                "cross-check against prints one"),
+
         # --- cut-table grid
         Tunable("CONTINGENCY_TIME_STEP", _v("CONTINGENCY_TIME_STEP"), "module",
                 "setting", (), "our cut table; not a shared quantity"),
@@ -196,8 +205,9 @@ _PLAN_PINS = {
     "travel_gases": (STATED,), "deco_gases": (STATED,),
 }
 _GAS_PINS = {
-    "sac": (VOLUMES,), "sac_deco": (VOLUMES,), "sac_multiplier": (),
-    "problem_minutes": (), "divers": (),
+    "sac": (VOLUMES,), "sac_deco": (VOLUMES,), "sac_emergency": (),
+    "problem_minutes": (), "divers": (), "emergency": (),
+    "turn_pressure": (), "turn_rule": (),
 }
 
 

@@ -60,7 +60,7 @@ class TestGasReport(unittest.TestCase):
         self.assertIsNotNone(res.gas.turn_pressure_bar)
 
     def test_emergency_total_is_need_plus_reserve(self):
-        res = self._result(sac_multiplier=1.8, problem_minutes=2.0)
+        res = self._result(sac_emergency=36.0, problem_minutes=2.0)
         segs = res.segments
         gp = res.gas.plan
         for c in res.gas.cylinders:
@@ -68,6 +68,98 @@ class TestGasReport(unittest.TestCase):
                 [s for s in segs if s.gas == c.gas], gp.sac)
             reserve = b.emergency_gas_liters(segs, c.gas, gp, res.plan)
             self.assertAlmostEqual(c.liters_emergency, need + reserve, places=6)
+
+    def test_the_baseline_sac_default_matches_the_config_schema(self):
+        """One baseline rate across the front ends: a CLI run with no --sac and
+        a first-launch GUI must plan the same litres."""
+        from deco import dive_config as dc
+
+        self.assertAlmostEqual(rp.DEFAULT_SAC,
+                               dc.default_config()["sac_normal"])
+
+    def test_emergency_off_reports_nothing_rather_than_zero(self):
+        """The whole emergency block drops out — as None, never as 0.0. A zero
+        reserve is a claim ("this dive needs none"); None is the truth ("not
+        asked for"). DECISIONS.md #28."""
+        res = self._result(emergency=False)
+        self.assertFalse(res.gas.emergency)
+        self.assertIsNone(res.gas.rock_bottom_l)
+        self.assertIsNone(res.gas.rock_bottom_bar)
+        self.assertIsNone(res.gas.turn_pressure_bar)
+        for c in res.gas.cylinders:
+            self.assertIsNone(c.liters_emergency)
+            self.assertIsNone(c.bar_used_emergency)
+            self.assertIsNone(c.bar_left_emergency)
+            self.assertFalse(c.short_emergency)
+            # …while the baseline accounting is untouched.
+            self.assertGreater(c.liters, 0)
+            self.assertIsNotNone(c.bar_used)
+
+    def test_the_toggle_changes_nothing_else(self):
+        """Turning the emergency block off must not move a planned litre."""
+        on, off = self._result(), self._result(emergency=False)
+        self.assertEqual([c.liters for c in on.gas.cylinders],
+                         [c.liters for c in off.gas.cylinders])
+
+    def test_two_divers_double_every_reserve_including_the_stage(self):
+        """The scenario the emergency block exists for: a buddy out of gas
+        breathes off the twinset to the switch and off the stage after it, so
+        both reserves double (DECISIONS.md #28)."""
+        one = self._result(sac_emergency=30.0, divers=1)
+        two = self._result(sac_emergency=30.0, divers=2)
+        for c1, c2 in zip(one.gas.cylinders, two.gas.cylinders, strict=True):
+            reserve1 = c1.liters_emergency - c1.liters
+            reserve2 = c2.liters_emergency - c2.liters
+            self.assertGreater(reserve1, 0, msg=repr(c1.gas))
+            self.assertAlmostEqual(reserve2, 2 * reserve1, places=6,
+                                   msg=repr(c1.gas))
+
+    def test_turn_pressure_can_be_hidden(self):
+        self.assertIsNotNone(self._result().gas.turn_pressure_bar)
+        off = self._result(turn_pressure=False)
+        self.assertIsNone(off.gas.turn_pressure_bar)
+        self.assertIsNone(off.gas.turn_reserve_bar)
+        # …and the reserve itself is untouched: hiding the turn pressure is a
+        # display choice, not a change of plan.
+        self.assertAlmostEqual(off.gas.rock_bottom_l,
+                               self._result().gas.rock_bottom_l, places=9)
+
+    def test_the_emergency_switch_takes_the_turn_pressure_with_it(self):
+        self.assertIsNone(self._result(emergency=False).gas.turn_pressure_bar)
+
+    def test_rock_bottom_rule_surfaces_exactly_on_the_reserve(self):
+        rep = self._result().gas
+        self.assertAlmostEqual(rep.turn_reserve_bar, rep.rock_bottom_bar,
+                               places=6)
+        self.assertFalse(rep.turn_below_rock_bottom)
+
+    def test_thirds_is_two_thirds_of_the_fill_whatever_the_profile(self):
+        shallow = rp.compute_plan_result(
+            [b.Level(18.0, 30.0)], b.AIR, b.DivePlan(),
+            b.GasPlan(sac=20.0, turn_rule="thirds"),
+            [("Bottom", b.AIR, 24.0, 232.0)])
+        deep = self._result(turn_rule="thirds")
+        for res in (shallow, deep):
+            self.assertAlmostEqual(res.gas.turn_pressure_bar, 232.0 * 2 / 3,
+                                   places=6)
+            self.assertAlmostEqual(res.gas.turn_reserve_bar, 232.0 / 3,
+                                   places=6)
+
+    def test_thirds_is_flagged_when_a_third_does_not_cover_rock_bottom(self):
+        """A rule of thumb that knows nothing about the profile can leave the
+        team surfacing on less than minimum gas — 45 m for two divers on a
+        single 12 L. Saying so is why both numbers are computed."""
+        gp = b.GasPlan(sac=20.0, divers=2, turn_rule="thirds")
+        res = rp.compute_plan_result(
+            [b.Level(45.0, 20.0)], b.AIR, b.DivePlan(deco_gases=(b.EAN50,)),
+            gp, [("Bottom", b.AIR, 12.0, 200.0),
+                 ("Deco", b.EAN50, 11.0, 200.0)])
+        self.assertTrue(res.gas.turn_below_rock_bottom)
+        self.assertLess(res.gas.turn_reserve_bar, res.gas.rock_bottom_bar)
+
+    def test_an_unknown_turn_rule_is_refused(self):
+        with self.assertRaises(ValueError):
+            b.GasPlan(sac=20.0, turn_rule="halves")
 
     def test_short_flag_on_undersized_tank(self):
         gp = b.GasPlan(sac=25.0)

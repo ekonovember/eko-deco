@@ -478,16 +478,17 @@ class DecoApp:
         ttk.Button(gases, text="+ Add gas", command=self._add_gas_row).pack(
             anchor="w", pady=(4, 0))
 
-        # --- gas planning (SAC + emergency multiplier; 1–2 divers) ---
-        gp = ttk.LabelFrame(left, text="Gas planning (rock bottom)", padding=6)
+        # --- gas planning: the BASELINE consumption, always in force ---
+        # Every gas figure on every surface is built on this SAC, so it is not
+        # in the emergency box below and cannot be switched off.
+        gp = ttk.LabelFrame(left, text="Gas planning (SAC / RMV)", padding=6)
         gp.pack(fill=tk.X, pady=(8, 0))
         sacrow = ttk.Frame(gp)
         sacrow.pack(fill=tk.X, pady=2)
         self.sac = self._add_spin(sacrow, "SAC", 1, 99, 0.5, 20,
                                   fmt="%.1f", unit="L/min", label_width=7,
                                   unit_width=5)
-        self.sac_mult = self._add_spin(sacrow, "Emergency ×", 1.0, 9.0, 0.05, 2.0,
-                                       fmt="%.2f")
+        ttk.Label(sacrow, text="surface litres/min").pack(side=tk.LEFT)
         # Deco SAC: 0 = "same as the bottom SAC" (the whole-dive single rate).
         # Hanging on a stop is not working the bottom, and MultiDeco/Shearwater
         # plan the two rates apart — see DECISIONS.md #16.
@@ -497,17 +498,64 @@ class DecoApp:
                                        fmt="%.1f", unit="L/min", label_width=7,
                                        unit_width=5)
         ttk.Label(decorow, text="0 = same as SAC").pack(side=tk.LEFT)
-        emrow = ttk.Frame(gp)
+
+        # --- emergency gas: a block of its own, switched on or off as one ---
+        # Its own frame and its own checkbox because it answers a different
+        # question (what a failure costs, not what the dive costs) and because
+        # a diver must be able to tell at a glance whether the card in their
+        # pocket carries reserve figures at all (DECISIONS.md #28).
+        self.emergency = tk.BooleanVar(value=True)
+        em = ttk.LabelFrame(left, padding=6, labelwidget=ttk.Checkbutton(
+            left, text="Emergency gas (bailout / rock bottom)",
+            variable=self.emergency))
+        em.pack(fill=tk.X, pady=(8, 0))
+        emrow = ttk.Frame(em)
         emrow.pack(fill=tk.X, pady=2)
-        self.problem_min = self._add_spin(emrow, "Problem", 0, 30, 0.5, 1,
-                                          fmt="%.1f", unit="min", label_width=7,
+        self.sac_emergency = self._add_spin(
+            emrow, "Emrg SAC", 0, 199, 1.0, 40, fmt="%.1f", unit="L/min",
+            label_width=8, unit_width=5,
+            tip="Stressed consumption for the whole emergency ascent, in "
+                "surface litres per minute — one absolute rate for every mix "
+                "(a diver solving a problem has no deco SAC).\n"
+                "0 = twice the working SAC.")
+        emrow2 = ttk.Frame(em)
+        emrow2.pack(fill=tk.X, pady=2)
+        self.problem_min = self._add_spin(emrow2, "Problem", 0, 30, 0.5, 1,
+                                          fmt="%.1f", unit="min", label_width=8,
                                           unit_width=5)
-        # Buddy out of gas: share the supply until the first gas switch
+        # Buddy out of gas: the team shares every litre of the ascent, deco
+        # stages included — two divers hang on one stage (DECISIONS.md #28).
         self.two_divers = tk.BooleanVar(value=False)
-        ttk.Checkbutton(emrow, text="2 divers",
+        ttk.Checkbutton(emrow2, text="2 divers (share the whole ascent)",
                         variable=self.two_divers).pack(side=tk.LEFT)
-        self.two_divers.trace_add(
-            "write", lambda *_: None if self._building else self.recompute())
+        # Turn pressure: its own switch again, because a team that turns on
+        # runtime does not want the number on the card at all, and the two
+        # rules give genuinely different answers (DECISIONS.md #28).
+        emrow3 = ttk.Frame(em)
+        emrow3.pack(fill=tk.X, pady=2)
+        self.turn_pressure = tk.BooleanVar(value=True)
+        ttk.Checkbutton(emrow3, text="Turn pressure",
+                        variable=self.turn_pressure).pack(side=tk.LEFT)
+        self.turn_rule = tk.StringVar(value="rock-bottom")
+        rule = ttk.Combobox(emrow3, width=12, state="readonly",
+                            values=list(b.TURN_RULES),
+                            textvariable=self.turn_rule)
+        rule.pack(side=tk.LEFT, padx=(6, 4))
+        _Tooltip(rule, "rock-bottom — split the gas above minimum gas in half; "
+                       "you surface exactly on the reserve, and a deeper or "
+                       "longer dive turns you earlier.\n"
+                       "thirds — the cave rule: turn at ⅔ of the fill whatever "
+                       "the profile. Flagged when that third does not cover "
+                       "rock bottom.", lambda: self._pal)
+        #: Everything the checkbox greys out — the inputs that only mean
+        #: something while the emergency block is on.
+        self._emergency_rows = (emrow, emrow2, emrow3)
+        for var in (self.two_divers, self.emergency, self.turn_pressure,
+                    self.turn_rule):
+            var.trace_add("write",
+                          lambda *_: None if self._building else self.recompute())
+        self.emergency.trace_add("write", lambda *_: self._sync_emergency_state())
+        self._sync_emergency_state()
 
         self._add_algorithm_panel(left)
 
@@ -1116,15 +1164,34 @@ class DecoApp:
         return {bank.gas: bank
                 for bank in rp.aggregate_banks(self._gas_rows_raw())}
 
+    def _sync_emergency_state(self) -> None:
+        """Grey the emergency inputs out when the block is off. They keep their
+        values — unticking the box is "don't plan for this", not "forget what I
+        typed" — but a live-looking spinbox that changes no number on screen is
+        exactly the passthrough trap DECISIONS #19 exists to prevent."""
+        # The ttk state flag rather than the -state option: it is what every
+        # themed widget in these rows understands (labels included), so one
+        # loop greys the whole block.
+        flags = ["disabled"] if not self.emergency.get() else ["!disabled"]
+        for row in self._emergency_rows:
+            for child in row.winfo_children():
+                if isinstance(child, ttk.Widget):
+                    child.state(flags)
+
     def _gas_plan(self) -> b.GasPlan:
-        """Consumption inputs (SAC, deco SAC, emergency multiplier, problem
-        minutes, team size) from the UI as a ``buhlmann.GasPlan``."""
+        """Consumption inputs (baseline SAC, deco SAC, and the emergency block:
+        its own SAC, problem minutes, team size and whether it is wanted at all)
+        from the UI as a ``buhlmann.GasPlan``."""
         deco = self._num(self.sac_deco, 0.0, lo=0.0)
         return b.GasPlan(sac=self._num(self.sac, 20.0, lo=1.0),
                          sac_deco=deco if deco > 0 else None,
-                         sac_multiplier=self._num(self.sac_mult, 2.0, lo=1.0),
+                         sac_emergency=self._num(self.sac_emergency, 0.0,
+                                                 lo=0.0),
                          problem_minutes=self._num(self.problem_min, 1.0, lo=0.0),
-                         divers=2 if self.two_divers.get() else 1)
+                         divers=2 if self.two_divers.get() else 1,
+                         emergency=bool(self.emergency.get()),
+                         turn_pressure=bool(self.turn_pressure.get()),
+                         turn_rule=self.turn_rule.get())
 
     # ----------------------------------------------------------- compute ----
 
@@ -1522,51 +1589,70 @@ class DecoApp:
         # figure comes from the shared report layer, the SAME accounting the CLI
         # renders, so the two front ends can't diverge on the numbers. ---
         gp = self._gas_plan()
-        sac, sac_mult = gp.sac, gp.sac_multiplier
         gas = res.bottom_gas
         rep = res.gas
         assert rep is not None       # recompute always passes a GasPlan
+        # With the emergency block off the whole column goes — not a blank one,
+        # not a zero: the card must read as "these are the dive's litres" with
+        # nothing that could be mistaken for a reserve (DECISIONS.md #28).
+        emrg_on = rep.emergency
         plan_rows: list[list[str]] = []
         for c in rep.cylinders:
             if c.tank_l <= 0:
                 need, have = f"{c.liters:.0f} L", "set tank"
-                emrg = f"{c.liters_emergency:.0f} L"
+                emrg = "" if not emrg_on else f"{c.liters_emergency:.0f} L"
             elif c.pressure_bar > 0:
                 need = f"{c.bar_used:.0f} bar" + (" SHORT!" if c.short else "")
                 have = f"{c.pressure_bar:.0f} bar"
-                emrg = (f"{c.bar_used_emergency:.0f} bar"
+                emrg = ("" if not emrg_on else
+                        f"{c.bar_used_emergency:.0f} bar"
                         + (" SHORT!" if c.short_emergency else ""))
             else:
                 need, have = f"{c.bar_used:.0f} bar", f"{c.tank_l:.0f} L"
-                emrg = f"{c.bar_used_emergency:.0f} bar"
-            plan_rows.append([c.role, repr(c.gas), need, have, emrg])
-        # Rock bottom is a back-gas reserve: show it in bar only when the bottom
-        # gas actually has a Bottom-role cylinder with a fill; else fall back to
-        # litres. All the math (rock_bottom_bar / turn_pressure_bar) is the
-        # report layer's.
-        back = self._banks_by_gas().get(gas)
-        is_bottom = back is not None and back.role == "Bottom"
-        rock_bar = rep.rock_bottom_bar if is_bottom else None
-        if rock_bar is not None:
-            if rep.back_pressure_bar <= 0:
-                rb_line = f"rock bottom {rock_bar:.0f} bar reserve"
-            else:
+                emrg = "" if not emrg_on else f"{c.bar_used_emergency:.0f} bar"
+            row = [c.role, repr(c.gas), need, have]
+            plan_rows.append([*row, emrg] if emrg_on else row)
+        footers = ["litres are ideal-gas: a 232 bar fill"
+                   " holds ~5% less, 300 bar ~10%"]
+        gp_title = f"GAS PLAN · SAC {gp.sac:g} L/min"
+        if emrg_on:
+            # Rock bottom is a back-gas reserve: show it in bar only when the
+            # bottom gas actually has a Bottom-role cylinder with a fill; else
+            # fall back to litres. All the math (rock_bottom_bar /
+            # turn_pressure_bar) is the report layer's.
+            back = self._banks_by_gas().get(gas)
+            is_bottom = back is not None and back.role == "Bottom"
+            rock_bar = rep.rock_bottom_bar if is_bottom else None
+            if rock_bar is not None:
+                rb_line = f"rock bottom {rock_bar:.0f} bar"
                 turn = rep.turn_pressure_bar
-                rb_line = (f"rock bottom {rock_bar:.0f} bar · turn ~{turn:.0f} bar"
-                           if turn is not None else
-                           f"rock bottom {rock_bar:.0f} bar · over "
-                           f"{rep.back_pressure_bar:.0f} bar fill!")
+                if turn is not None:
+                    rb_line += f" · turn ~{turn:.0f} bar ({gp.turn_rule})"
+                    if rep.turn_below_rock_bottom:
+                        rb_line += (f" — leaves {rep.turn_reserve_bar:.0f},"
+                                    f" under the reserve!")
+                elif gp.turn_pressure and rep.back_pressure_bar > 0:
+                    # Wanted a turn pressure and there is no usable gas above
+                    # the reserve to split: that is the finding, not a blank.
+                    rb_line += f" · over {rep.back_pressure_bar:.0f} bar fill!"
+                elif rep.back_pressure_bar <= 0:
+                    rb_line += " reserve"
+            else:
+                rb_line = (f"rock bottom {rep.rock_bottom_l:.0f} L "
+                           "(set bottom tank)")
+            footers.insert(0, rb_line)
+            gp_title += (f" · emergency {gp.sac_emergency:g} L/min"
+                         f" · problem {gp.problem_minutes:g} min"
+                         + (f" · {gp.divers} divers" if gp.divers > 1 else ""))
         else:
-            rb_line = f"rock bottom {rep.rock_bottom_l:.0f} L (set bottom tank)"
-        gp_title = (f"GAS PLAN · SAC {sac:g} ×{sac_mult:.2f} emergency"
-                    f" · problem {gp.problem_minutes:g} min"
-                    + (f" · {gp.divers} divers" if gp.divers > 1 else ""))
+            gp_title += " · no emergency reserve"
+        headers = ["role", "gas", "need", "have"]
+        aligns = ["<", "<", ">", ">"]
         return format_card([gp_title], plan_rows,
-                           headers=["role", "gas", "need", "have", "(emrg)"],
-                           footer_lines=[rb_line,
-                                         "litres are ideal-gas: a 232 bar fill"
-                                         " holds ~5% less, 300 bar ~10%"],
-                           aligns=["<", "<", ">", ">", ">"])
+                           headers=[*headers, "(emrg)"] if emrg_on
+                           else headers,
+                           footer_lines=footers,
+                           aligns=[*aligns, ">"] if emrg_on else aligns)
 
     def _cards_stops(self, res: rp.PlanResult, scenarios) -> list[list[str]]:
         """The stops table with one column per lost-gas scenario, then the
@@ -1606,10 +1692,18 @@ class DecoApp:
             # cylinders (tank litres × fill pressure). Litres, SHORT flags and
             # bar-left all come from the shared report layer — the same figures
             # the per-cylinder card above and the CLI show.
+            # The emergency figures are per scenario, which is the whole point
+            # of computing them here rather than reusing the main report: with
+            # both stages gone the bailout is flown on the twinset, so the back
+            # gas's reserve is the whole ascent; with the stack intact it is the
+            # twinset to the switch and then the stage — shared by both divers
+            # all the way when `divers` is 2 (DECISIONS.md #28).
+            emrg_on = gp.emergency
+            ncols = 6 if emrg_on else 5
             usage_rows: list[list[str]] = []
             for label, ss in scenarios:
                 if usage_rows:
-                    usage_rows.append([""] * 6)   # blank row between scenarios
+                    usage_rows.append([""] * ncols)   # blank row between scenarios
                 scen = ("OK" if label == "OK"
                         else "All" if label == "all" else label)
                 srep = rp.gas_report(ss, gas, gp, gas_rows_raw, plan)
@@ -1617,33 +1711,42 @@ class DecoApp:
                 for i, c in enumerate(srep.cylinders):
                     have_l = c.tank_l * c.pressure_bar
                     tot_need += c.liters
-                    tot_emrg += c.liters_emergency
+                    tot_emrg += c.liters_emergency or 0.0
                     tot_have += have_l
+                    head = [scen if i == 0 else "", repr(c.gas)]
                     if have_l <= 0:
-                        usage_rows.append([scen if i == 0 else "", repr(c.gas),
-                                           "set tank", f"{c.liters:.0f}",
-                                           f"({c.liters_emergency:.0f})", ""])
+                        row = [*head, "set tank", f"{c.liters:.0f}"]
+                        if emrg_on:
+                            row.append(f"({c.liters_emergency:.0f})")
+                        usage_rows.append([*row, ""])
                         continue
                     short = " SHORT!" if c.short else ""
-                    short_e = " SHORT!" if c.short_emergency else ""
                     # have_l > 0 means tank and fill are both set, so bar_left
                     # is never None here — `or 0.0` only satisfies the checker.
                     left = max(c.bar_left or 0.0, 0.0)
-                    left_e = max(c.bar_left_emergency or 0.0, 0.0)
-                    usage_rows.append(
-                        [scen if i == 0 else "", repr(c.gas), f"{have_l:.0f}",
-                         f"{c.liters:.0f}{short}",
-                         f"({c.liters_emergency:.0f}{short_e})",
-                         f"{left:.0f} / {left_e:.0f}"])
-                usage_rows.append(["", "TOTAL", f"{tot_have:.0f}",
-                                   f"{tot_need:.0f}", f"({tot_emrg:.0f})", ""])
+                    row = [*head, f"{have_l:.0f}", f"{c.liters:.0f}{short}"]
+                    bars = f"{left:.0f}"
+                    if emrg_on:
+                        short_e = " SHORT!" if c.short_emergency else ""
+                        row.append(f"({c.liters_emergency:.0f}{short_e})")
+                        bars += f" / {max(c.bar_left_emergency or 0.0, 0.0):.0f}"
+                    usage_rows.append([*row, bars])
+                total = ["", "TOTAL", f"{tot_have:.0f}", f"{tot_need:.0f}"]
+                if emrg_on:
+                    total.append(f"({tot_emrg:.0f})")
+                usage_rows.append([*total, ""])
+            titles = ["GAS USAGE · litres have / need"
+                      + (" (emergency)" if emrg_on else "")]
+            headers = ["scenario", "gas", "have", "need"]
+            aligns = ["<", "<", ">", ">"]
+            if emrg_on:
+                titles.append("(emergency) = need + rock-bottom reserve · "
+                              "bar left at normal / emrg")
+                headers.append("(emrg)")
+                aligns.append(">")
             stop_cards.append(format_card(
-                ["GAS USAGE · litres have / need (emergency)",
-                 "(emergency) = need + rock-bottom reserve · "
-                 "bar left at normal / emrg"], usage_rows,
-                headers=["scenario", "gas", "have", "need", "(emrg)",
-                         "bar left"],
-                aligns=["<", "<", ">", ">", ">", ">"]))
+                titles, usage_rows, headers=[*headers, "bar left"],
+                aligns=[*aligns, ">"]))
         elif not stops:
             stop_cards.append(format_card(["BÜHLMANN STOPS"],
                                           [["—", "no mandatory stops"]],
@@ -1696,11 +1799,19 @@ class DecoApp:
         back = self._banks_by_gas().get(gas)
         is_bottom = back is not None and back.role == "Bottom"
         rock_bar = rep.rock_bottom_bar if is_bottom else None
-        if rock_bar is not None:
+        # No emergency block, no MIN GAS line: a card that prints one is
+        # promising a reserve the plan was not asked to compute.
+        if not rep.emergency:
+            min_gas = None
+        elif rock_bar is not None:
             min_gas = f"MIN GAS {rock_bar:.0f} bar"
             turn = rep.turn_pressure_bar
             if turn is not None:
                 min_gas += f" · TURN {turn:.0f} bar"
+                # On the card that goes in the water, an under-reserved turn
+                # pressure is flagged where it is read, not only on screen.
+                if rep.turn_below_rock_bottom:
+                    min_gas += " ⚠ under MIN GAS"
         else:
             min_gas = f"MIN GAS {rep.rock_bottom_l:.0f} L"
 
@@ -1733,7 +1844,8 @@ class DecoApp:
             # changes which ppO2 offences the dive actually contains.
             footers = [f"⚠ {w}" for w in
                        rp.warning_lines(ss, plan, gas, depth)]
-            footers.append(min_gas)
+            if min_gas is not None:
+                footers.append(min_gas)
             if label != "OK":
                 # The same accounting as every other litre on screen: the
                 # bottom gas's own SAC (a deco cylinder is billed at sac_deco)
@@ -1862,9 +1974,13 @@ class DecoApp:
             self.p_h2o.set(f"{cfg.get('p_h2o_bar', b.P_H2O):.4f}")
             self.sac.set(f"{cfg['sac_normal']:g}")
             self.sac_deco.set(f"{cfg.get('sac_deco') or 0:g}")
-            self.sac_mult.set(f"{cfg.get('sac_multiplier', 2.0):.2f}")
+            self.emergency.set(bool(cfg.get("emergency", True)))
+            self.sac_emergency.set(f"{cfg.get('sac_emergency', 0.0):g}")
+            self.turn_pressure.set(bool(cfg.get("turn_pressure", True)))
+            self.turn_rule.set(cfg.get("turn_rule", "rock-bottom"))
             self.problem_min.set(f"{cfg.get('problem_minutes', 1.0):g}")
             self.two_divers.set(int(cfg.get("divers", 1)) >= 2)
+            self._sync_emergency_state()
             # msw/bar is the stored truth; the dropdown and the altitude box are
             # only ways of typing it, so set them FROM the numbers, not the
             # other way round (a custom value must survive a round-trip).
@@ -1943,7 +2059,10 @@ class DecoApp:
             "sac_normal": self._num(self.sac, 20.0, lo=1.0),
             "sac_deco": (sd if (sd := self._num(self.sac_deco, 0.0, lo=0.0)) > 0
                          else None),
-            "sac_multiplier": round(self._num(self.sac_mult, 2.0, lo=1.0), 2),
+            "emergency": bool(self.emergency.get()),
+            "sac_emergency": self._num(self.sac_emergency, 0.0, lo=0.0),
+            "turn_pressure": bool(self.turn_pressure.get()),
+            "turn_rule": self.turn_rule.get(),
             "problem_minutes": self._num(self.problem_min, 1.0, lo=0.0),
             "divers": 2 if self.two_divers.get() else 1,
             "surface_p_bar": self._num(self.surface_p, b.P_ATM, lo=0.1),

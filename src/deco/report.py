@@ -26,6 +26,13 @@ from deco import buhlmann as b
 #: Default cylinder fill pressure (bar) when none is given.
 DEFAULT_FILL_BAR = 232.0
 
+#: Baseline consumption (L/min at the surface, SAC/RMV) when the caller names
+#: none. Every plan carries gas estimates now — CLI, GUI and agent alike — so
+#: there is always a rate; the only question is whether the diver chose it or
+#: took this one (DECISIONS.md #28). Shared with `dive_config.default_config`
+#: so the two front ends start from the same number.
+DEFAULT_SAC = 20.0
+
 
 #: The printed-schedule notation lives in `buhlmann` so the dependency-free
 #: core can reach it too (the contingency cut table renders cells there).
@@ -276,11 +283,18 @@ class CylinderNeed:
     """Need vs have for one breathed mix. ``liters`` is the planned dive at
     the normal SAC; ``liters_emergency`` is the emergency TOTAL — that normal
     need PLUS the rock-bottom reserve held on top for a worst-moment issue
-    (`buhlmann.emergency_gas_liters`: the worst level's reserve, not the last level's)."""
+    (`buhlmann.emergency_gas_liters`: the worst level's reserve, not the last
+    level's).
+
+    ``liters_emergency`` is **None when the plan's emergency block is off**
+    (``GasPlan.emergency``), and so is every figure derived from it. None means
+    "not asked for", which is why it is not 0.0: a renderer that prints a zero
+    reserve says the dive needs none, and that is a different — and dangerous —
+    claim from saying nothing (DECISIONS.md #28)."""
     gas: b.Gas
     role: str
     liters: float
-    liters_emergency: float
+    liters_emergency: float | None
     tank_l: float
     pressure_bar: float
 
@@ -290,7 +304,9 @@ class CylinderNeed:
 
     @property
     def bar_used_emergency(self) -> float | None:
-        return self.liters_emergency / self.tank_l if self.tank_l > 0 else None
+        if self.liters_emergency is None or self.tank_l <= 0:
+            return None
+        return self.liters_emergency / self.tank_l
 
     @property
     def bar_left(self) -> float | None:
@@ -300,7 +316,8 @@ class CylinderNeed:
 
     @property
     def bar_left_emergency(self) -> float | None:
-        if self.tank_l > 0 and self.pressure_bar > 0:
+        if (self.liters_emergency is not None
+                and self.tank_l > 0 and self.pressure_bar > 0):
             return self.pressure_bar - self.liters_emergency / self.tank_l
         return None
 
@@ -312,34 +329,85 @@ class CylinderNeed:
 
     @property
     def short_emergency(self) -> bool:
-        return (self.tank_l > 0 and self.pressure_bar > 0
+        """True when even need-plus-reserve exceeds the fill. False — not a
+        crash — when no emergency was asked for: nothing was claimed, so
+        nothing is short."""
+        return (self.liters_emergency is not None
+                and self.tank_l > 0 and self.pressure_bar > 0
                 and self.liters_emergency / self.tank_l
                 > self.pressure_bar + 1e-9)
 
 
 @dataclass(frozen=True)
 class GasReport:
-    """Per-mix consumption plus the rock-bottom (minimum gas) reserve."""
+    """Per-mix consumption plus the rock-bottom (minimum gas) reserve.
+
+    ``rock_bottom_l`` is None exactly when the emergency block is off, like
+    `CylinderNeed.liters_emergency`."""
     plan: b.GasPlan
     cylinders: list[CylinderNeed]
-    rock_bottom_l: float
+    rock_bottom_l: float | None
     back_tank_l: float
     back_pressure_bar: float
 
     @property
+    def emergency(self) -> bool:
+        """Does this report carry emergency figures at all? One place for the
+        front ends to ask, so no view has to test a litre count for None to
+        decide whether to draw a column."""
+        return self.rock_bottom_l is not None
+
+    @property
     def rock_bottom_bar(self) -> float | None:
         return (self.rock_bottom_l / self.back_tank_l
-                if self.back_tank_l > 0 else None)
+                if self.rock_bottom_l is not None and self.back_tank_l > 0
+                else None)
 
     @property
     def turn_pressure_bar(self) -> float | None:
-        """Half the usable gas above rock bottom, from the fill — None when
-        rock bottom is not expressible in bar or exceeds the fill."""
+        """The pressure at which the dive turns, by `GasPlan.turn_rule`:
+
+        * ``rock-bottom`` — half the usable gas above rock bottom, from the
+          fill. Surfacing pressure is exactly rock bottom.
+        * ``thirds`` — ⅔ of the fill, the cave rule, whatever the profile.
+
+        None when the plan does not want one (`GasPlan.turn_pressure` off, or
+        the whole emergency block off), when there is no fill to divide, or —
+        for the rock-bottom rule — when the reserve is not expressible in bar
+        or already exceeds the fill. A turn pressure that cannot be computed is
+        absent, never a plausible-looking number."""
+        if not (self.emergency and self.plan.turn_pressure):
+            return None
+        if self.back_pressure_bar <= 0:
+            return None
+        if self.plan.turn_rule == "thirds":
+            return self.back_pressure_bar * 2.0 / 3.0
         rb = self.rock_bottom_bar
-        if rb is None or self.back_pressure_bar <= 0:
+        if rb is None:
             return None
         usable = self.back_pressure_bar - rb
         return self.back_pressure_bar - usable / 2.0 if usable > 0 else None
+
+    @property
+    def turn_reserve_bar(self) -> float | None:
+        """What is left in the back gas on surfacing if the dive turns at
+        `turn_pressure_bar` and the way out costs what the way in did:
+        ``2 × turn − fill``. Rock bottom by construction under the
+        ``rock-bottom`` rule; a third of the fill under ``thirds``."""
+        turn = self.turn_pressure_bar
+        return (None if turn is None
+                else 2.0 * turn - self.back_pressure_bar)
+
+    @property
+    def turn_below_rock_bottom(self) -> bool:
+        """Does the turn pressure surface the diver with LESS than minimum gas?
+
+        Only ``thirds`` can fail this — it is a rule of thumb that knows
+        nothing about the profile, so on a deep or long dive a third of the
+        fill is simply not enough to get two divers up. Saying so is the whole
+        value of computing both numbers (DECISIONS.md #28)."""
+        left, rb = self.turn_reserve_bar, self.rock_bottom_bar
+        return left is not None and rb is not None and left < rb - 1e-9
 
 
 @overload
@@ -392,9 +460,13 @@ def gas_report(segments: Sequence[b.DiveSegment],
             gas_plan.sac_for(s.gas, deco_gases), surface_p, msw_per_bar)
         # Emergency TOTAL for this gas = the normal need plus the rock-bottom
         # reserve held on top for the worst-moment issue (the diver carries
-        # both — the reserve is not dipped into on a normal dive).
-        reserve = b.emergency_gas_liters(segments, s.gas, gas_plan, plan)
-        liters_e = liters + reserve
+        # both — the reserve is not dipped into on a normal dive). With the
+        # emergency block off it is not computed at all: the re-planning inside
+        # `emergency_gas_liters` is the expensive part of this function, and a
+        # figure nobody will print should not be paid for.
+        liters_e = (liters + b.emergency_gas_liters(segments, s.gas, gas_plan,
+                                                    plan)
+                    if gas_plan.emergency else None)
         bank = banks.get(s.gas)
         role = (bank.role if bank
                 else "Bottom" if s.gas == bottom_gas else "stage")
@@ -403,7 +475,8 @@ def gas_report(segments: Sequence[b.DiveSegment],
             tank_l=bank.tank_l if bank else 0.0,
             pressure_bar=bank.pressure_bar if bank else 0.0))
     back = banks.get(bottom_gas)
-    rock = b.rock_bottom_liters(segments, bottom_gas, gas_plan, plan)
+    rock = (b.rock_bottom_liters(segments, bottom_gas, gas_plan, plan)
+            if gas_plan.emergency else None)
     return GasReport(plan=gas_plan, cylinders=cylinders, rock_bottom_l=rock,
                      back_tank_l=back.tank_l if back else 0.0,
                      back_pressure_bar=back.pressure_bar if back else 0.0)

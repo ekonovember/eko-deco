@@ -6,6 +6,42 @@ pre-1.0, so anything may still move.
 
 ## [Unreleased]
 
+### Changed — gas estimates on every plan; the emergency reserve is a block you switch
+
+- **The baseline SAC/RMV is always in force.** Every plan reports gas now —
+  CLI, GUI, agent and card alike. `deco plan` without `--sac` falls back to
+  20 L/min (`report.DEFAULT_SAC`, the config's own `sac_normal` default) and
+  says so: `SAC 20 L/min assumed — pass --sac`, plus `"sac_assumed": true` in
+  `--json`. Previously no `--sac` meant no litres at all.
+- **The emergency reserve is an optional block** — `--no-emergency`, the
+  config's `"emergency": false`, or its own checkbox in the GUI's new
+  *Emergency gas* frame (which greys its inputs out when unticked). Off, every
+  emergency figure disappears: no `(emrg)` column, no `MIN GAS` line on the
+  wetnotes card, no `rock_bottom_l` / `liters_emergency` keys in the JSON. In
+  the report layer those fields are `None`, never `0.0` — absent, not "none
+  needed".
+- **The emergency SAC is an absolute rate.** `sac_multiplier` / `--sac-multiplier`
+  are replaced by `sac_emergency` / `--sac-emergency` in litres per minute, one
+  stressed rate for every mix (a deco SAC splits the planned dive only, not the
+  emergency). `0` = twice the working SAC, so an unset plan is unchanged.
+  Configs migrate on load — both `sac_multiplier` and the older `sac_stress`
+  resolve to a rate and are dropped.
+- **Two divers now share the whole emergency ascent, deco stages included.**
+  The sharing used to stop at the first gas switch; it does not, because the
+  diver who lost their gas may have no stage of their own. Reserves on deco
+  cylinders double accordingly — an 11 L stage at 200 bar often reads `SHORT!`
+  for a pair, which is a real finding about a real rig.
+- **Turn pressure is its own switch inside the emergency block, with a rule to
+  pick.** `--turn-pressure` / `--no-turn-pressure` (config `turn_pressure`, a
+  checkbox in the GUI) shows or hides it; `--turn-rule rock-bottom|thirds`
+  (config `turn_rule`, a dropdown) picks how it is sized — half the gas above
+  minimum gas, so you surface exactly on the reserve, or the cave rule's ⅔ of
+  the fill. When thirds leaves **less than rock bottom** on surfacing, the CLI,
+  the Results tab and the wetnotes card all say so; `turn_reserve_bar` and
+  `turn_below_rock_bottom` carry it in the JSON and the report layer.
+- See [DECISIONS.md](DECISIONS.md) #28 for the reasoning; #7 and #16 are
+  annotated where this supersedes them.
+
 ### Added — the Hermanice pair, and the hand-written card convention
 
 - **`examples/hermanice_dive/`** — the two plans for one site kept side by side:

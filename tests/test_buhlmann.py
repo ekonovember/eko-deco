@@ -301,20 +301,20 @@ class TestTTSandRockBottom(unittest.TestCase):
         self.assertFalse(any(s.kind == "stop" for s in segs))
         self.assertAlmostEqual(b.time_to_surface(segs), 18 / 10.0, places=6)
 
-    def test_rock_bottom_scales_linearly_with_multiplier(self):
+    def test_rock_bottom_scales_linearly_with_the_emergency_sac(self):
         segs, _ = b.plan_dive(30, 20, b.AIR, b.DivePlan())
-        gp1 = b.GasPlan(sac=20, sac_multiplier=1.0)
-        gp2 = b.GasPlan(sac=20, sac_multiplier=2.0)
+        gp1 = b.GasPlan(sac=20, sac_emergency=20.0)
+        gp2 = b.GasPlan(sac=20, sac_emergency=40.0)
         self.assertAlmostEqual(b.rock_bottom_liters(segs, b.AIR, gp2, PLAIN),
                                2 * b.rock_bottom_liters(segs, b.AIR, gp1, PLAIN),
                                places=6)
 
-    def test_rock_bottom_grows_with_multiplier(self):
+    def test_rock_bottom_grows_with_the_emergency_sac(self):
         segs, _ = b.plan_dive(30, 20, b.AIR, b.DivePlan())
         lo = b.rock_bottom_liters(segs, b.AIR,
-                                  b.GasPlan(sac=20, sac_multiplier=1.5), PLAIN)
+                                  b.GasPlan(sac=20, sac_emergency=30.0), PLAIN)
         hi = b.rock_bottom_liters(segs, b.AIR,
-                                  b.GasPlan(sac=20, sac_multiplier=3.0), PLAIN)
+                                  b.GasPlan(sac=20, sac_emergency=60.0), PLAIN)
         self.assertGreater(hi, lo)
 
     def test_rock_bottom_is_problem_plus_real_ascent(self):
@@ -322,8 +322,8 @@ class TestTTSandRockBottom(unittest.TestCase):
         # all on the bottom gas at the emergency SAC (no switch, so no divers
         # split here).
         segs, _ = b.plan_dive(18, 20, b.AIR, b.DivePlan())
-        gp = b.GasPlan(sac=20, sac_multiplier=2.0, problem_minutes=2.0)
-        sac_e = 20 * 2.0
+        gp = b.GasPlan(sac=20, sac_emergency=40.0, problem_minutes=2.0)
+        sac_e = 40.0
         be = b._bottom_phase_end(segs)
         ascent = b.segment_gas_liters(segs[be:], sac_e)
         problem = sac_e * b.depth_to_p_amb(18) * 2.0
@@ -331,7 +331,7 @@ class TestTTSandRockBottom(unittest.TestCase):
                                problem + ascent, places=6)
 
     def test_rock_bottom_grows_with_depth(self):
-        gp = b.GasPlan(sac=20, sac_multiplier=2.0)
+        gp = b.GasPlan(sac=20, sac_emergency=40.0)
         deep, _ = b.plan_dive(45, 20, b.AIR, b.DivePlan())
         shallow, _ = b.plan_dive(30, 20, b.AIR, b.DivePlan())
         self.assertGreater(b.rock_bottom_liters(deep, b.AIR, gp, PLAIN),
@@ -343,7 +343,7 @@ class TestTTSandRockBottom(unittest.TestCase):
         # old full-deco method produced.
         segs, _ = b.plan_dive(45, 25, b.AIR,
                               b.DivePlan(deco_gases=(b.EAN50,)))
-        gp = b.GasPlan(sac=20, sac_multiplier=2.0)
+        gp = b.GasPlan(sac=20, sac_emergency=40.0)
         bar = b.rock_bottom_liters(segs, b.AIR, gp, DECO50) / 24.0
         self.assertGreater(bar, 15)
         self.assertLess(bar, 120)
@@ -363,8 +363,8 @@ class TestTTSandRockBottom(unittest.TestCase):
                 b.DiveSegment("bottom", 30, 30, 18.0, b.AIR),
                 b.DiveSegment("ascent", 30, 6, 2.4, b.EAN50),
                 b.DiveSegment("stop", 6, 6, 5.0, b.EAN50)]
-        gp = b.GasPlan(sac=20, sac_multiplier=1.5, problem_minutes=2.0)
-        sac_e = 20 * 1.5
+        gp = b.GasPlan(sac=20, sac_emergency=30.0, problem_minutes=2.0)
+        sac_e = 30.0
         air = sac_e * b.depth_to_p_amb(30) * 2.0            # problem only
         ean50 = b.segment_gas_liters(segs[2:], sac_e)
         self.assertAlmostEqual(b.emergency_gas_liters(segs, b.AIR, gp, PLAIN),
@@ -373,11 +373,12 @@ class TestTTSandRockBottom(unittest.TestCase):
                                ean50, places=6)
 
     def test_emergency_reserve_is_ascent_only_at_base_sac(self):
-        # multiplier 1 + no problem time = just the ascent/deco consumption of
-        # each gas (the bottom phase is not part of the reserve).
+        # emergency SAC = the working SAC, no problem time = just the
+        # ascent/deco consumption of each gas (the bottom phase is not part of
+        # the reserve).
         segs, _ = b.plan_dive(40, 25, b.AIR,
                               b.DivePlan(deco_gases=(b.EAN50,)))
-        gp = b.GasPlan(sac=20, sac_multiplier=1.0, problem_minutes=0.0)
+        gp = b.GasPlan(sac=20, sac_emergency=20.0, problem_minutes=0.0)
         be = b._bottom_phase_end(segs)
         for gas in (b.AIR, b.EAN50):
             self.assertAlmostEqual(
@@ -389,41 +390,37 @@ class TestTTSandRockBottom(unittest.TestCase):
     def test_emergency_problem_minutes_bill_the_bottom_gas_only(self):
         segs, _ = b.plan_dive(40, 25, b.AIR,
                               b.DivePlan(deco_gases=(b.EAN50,)))
-        gp0 = b.GasPlan(sac=20, sac_multiplier=2.0, problem_minutes=0.0)
-        gp5 = b.GasPlan(sac=20, sac_multiplier=2.0, problem_minutes=5.0)
+        gp0 = b.GasPlan(sac=20, sac_emergency=40.0, problem_minutes=0.0)
+        gp5 = b.GasPlan(sac=20, sac_emergency=40.0, problem_minutes=5.0)
         self.assertAlmostEqual(b.emergency_gas_liters(segs, b.EAN50, gp5, DECO50),
                                b.emergency_gas_liters(segs, b.EAN50, gp0, DECO50),
                                places=6)
         self.assertAlmostEqual(b.emergency_gas_liters(segs, b.AIR, gp5, DECO50)
                                - b.emergency_gas_liters(segs, b.AIR, gp0, DECO50),
-                               2.0 * 20 * b.depth_to_p_amb(40) * 5.0, places=6)
+                               40.0 * b.depth_to_p_amb(40) * 5.0, places=6)
 
-    def test_emergency_two_divers_share_until_the_first_switch(self):
-        # Buddy out of gas: problem minutes + the ascent on the bottom gas
-        # (up to the EAN50 switch) are doubled; the deco gas after the switch
-        # is each diver's own, so its need does not change.
+    def test_emergency_two_divers_share_the_whole_ascent(self):
+        # Buddy out of gas: every litre of the emergency ascent is shared —
+        # the problem minutes and the back gas up to the switch, AND the deco
+        # stage after it, because the diver who lost their gas has no stage of
+        # their own to switch to. Both reserves double (DECISIONS.md #28).
         segs, _ = b.plan_dive(40, 25, b.AIR,
                               b.DivePlan(deco_gases=(b.EAN50,)))
-        gp1 = b.GasPlan(sac=20, sac_multiplier=2.0, problem_minutes=2.0,
+        gp1 = b.GasPlan(sac=20, sac_emergency=40.0, problem_minutes=2.0,
                         divers=1)
-        gp2 = b.GasPlan(sac=20, sac_multiplier=2.0, problem_minutes=2.0,
+        gp2 = b.GasPlan(sac=20, sac_emergency=40.0, problem_minutes=2.0,
                         divers=2)
-        self.assertAlmostEqual(b.emergency_gas_liters(segs, b.EAN50, gp2, DECO50),
-                               b.emergency_gas_liters(segs, b.EAN50, gp1, DECO50),
-                               places=6)
-        be = b._bottom_phase_end(segs)
-        shared = b.segment_gas_liters(
-            [s for s in segs[be:] if s.gas == b.AIR], 40)
-        problem = 40 * b.depth_to_p_amb(40) * 2.0
-        self.assertAlmostEqual(b.emergency_gas_liters(segs, b.AIR, gp2, DECO50)
-                               - b.emergency_gas_liters(segs, b.AIR, gp1, DECO50),
-                               shared + problem, places=6)
+        for gas in (b.AIR, b.EAN50):
+            self.assertAlmostEqual(
+                b.emergency_gas_liters(segs, gas, gp2, DECO50),
+                2 * b.emergency_gas_liters(segs, gas, gp1, DECO50),
+                places=6, msg=repr(gas))
 
     def test_emergency_two_divers_no_switch_shares_to_the_surface(self):
         segs, _ = b.plan_dive(40, 25, b.AIR, b.DivePlan())
-        gp1 = b.GasPlan(sac=20, sac_multiplier=2.0, problem_minutes=0.0,
+        gp1 = b.GasPlan(sac=20, sac_emergency=40.0, problem_minutes=0.0,
                         divers=1)
-        gp2 = b.GasPlan(sac=20, sac_multiplier=2.0, problem_minutes=0.0,
+        gp2 = b.GasPlan(sac=20, sac_emergency=40.0, problem_minutes=0.0,
                         divers=2)
         be = b._bottom_phase_end(segs)
         ascent_e = b.segment_gas_liters(segs[be:], 40)
@@ -433,8 +430,8 @@ class TestTTSandRockBottom(unittest.TestCase):
 
     def test_rock_bottom_scales_with_divers(self):
         segs, _ = b.plan_dive(30, 20, b.AIR, b.DivePlan())
-        gp1 = b.GasPlan(sac=20, sac_multiplier=2.0, divers=1)
-        gp2 = b.GasPlan(sac=20, sac_multiplier=2.0, divers=2)
+        gp1 = b.GasPlan(sac=20, sac_emergency=40.0, divers=1)
+        gp2 = b.GasPlan(sac=20, sac_emergency=40.0, divers=2)
         self.assertAlmostEqual(b.rock_bottom_liters(segs, b.AIR, gp2, PLAIN),
                                2 * b.rock_bottom_liters(segs, b.AIR, gp1, PLAIN),
                                places=6)
@@ -444,7 +441,7 @@ class TestTTSandRockBottom(unittest.TestCase):
         # gas — the user-facing invariant the rock-bottom column relies on.
         plan = b.DivePlan(deco_gases=(b.EAN50, b.O2))
         segs, _ = b.plan_dive(45, 25, b.AIR, plan)
-        gp = b.GasPlan(sac=18, sac_multiplier=1.8, problem_minutes=1.0)
+        gp = b.GasPlan(sac=18, sac_emergency=32.4, problem_minutes=1.0)
         self.assertAlmostEqual(b.rock_bottom_liters(segs, b.AIR, gp, plan),
                                b.emergency_gas_liters(segs, b.AIR, gp, plan),
                                places=6)
@@ -469,7 +466,7 @@ class TestReserveWorstMoment(unittest.TestCase):
     def test_deep_first_reserves_for_the_deep_level(self):
         plan = self._plan()
         segs, _ = b.plan_multilevel(list(self.DEEP_FIRST), b.AIR, plan)
-        gp = b.GasPlan(sac=20, sac_multiplier=1.5, problem_minutes=2.0)
+        gp = b.GasPlan(sac=20, sac_emergency=30.0, problem_minutes=2.0)
         got = b.rock_bottom_liters(segs, b.AIR, gp, plan)
         # what the dive truncated at the deep level actually needs
         deep, _ = b.plan_dive(45.0, 25.0, b.AIR, plan)
@@ -485,7 +482,7 @@ class TestReserveWorstMoment(unittest.TestCase):
         that."""
         plan = self._plan()
         segs, _ = b.plan_dive(40.0, 25.0, b.AIR, plan)
-        gp = b.GasPlan(sac=20, sac_multiplier=1.5, problem_minutes=2.0)
+        gp = b.GasPlan(sac=20, sac_emergency=30.0, problem_minutes=2.0)
         self.assertAlmostEqual(b.rock_bottom_liters(segs, b.AIR, gp, plan),
                                b._reserve_at(segs, b.AIR, gp, plan), places=6)
 
@@ -495,7 +492,7 @@ class TestReserveWorstMoment(unittest.TestCase):
         plan = self._plan()
         levels = [b.Level(18.0, 20.0), b.Level(45.0, 40.0)]
         segs, _ = b.plan_multilevel(levels, b.AIR, plan)
-        gp = b.GasPlan(sac=20, sac_multiplier=1.5, problem_minutes=2.0)
+        gp = b.GasPlan(sac=20, sac_emergency=30.0, problem_minutes=2.0)
         self.assertAlmostEqual(b.rock_bottom_liters(segs, b.AIR, gp, plan),
                                b._reserve_at(segs, b.AIR, gp, plan), places=6)
 
@@ -961,7 +958,7 @@ class TestDomainValidation(unittest.TestCase):
 
     def test_gasplan_rejects_nonsense_inputs(self):
         for kw in ({"sac": 0.0}, {"sac": -20.0},
-                   {"sac": 20.0, "sac_multiplier": 0.5},
+                   {"sac": 20.0, "sac_emergency": -1.0},
                    {"sac": 20.0, "problem_minutes": -1.0},
                    {"sac": 20.0, "divers": 0},
                    {"sac": 20.0, "sac_deco": 0.0}):
@@ -969,7 +966,7 @@ class TestDomainValidation(unittest.TestCase):
                 b.GasPlan(**kw)
 
     def test_gasplan_accepts_sane_inputs(self):
-        b.GasPlan(sac=20.0, sac_multiplier=1.0, problem_minutes=0.0,
+        b.GasPlan(sac=20.0, sac_emergency=35.0, problem_minutes=0.0,
                   divers=2, sac_deco=12.0)
 
 
@@ -1065,16 +1062,24 @@ class TestDecoSac(unittest.TestCase):
         with self.assertRaises(ValueError):
             b.GasPlan(sac=20.0, sac_deco=-5.0)
 
-    def test_reserve_follows_the_deco_rate(self):
-        """The rock-bottom reserve on a deco gas is held at that gas's own
-        emergency rate, so a lower deco SAC lowers the reserve too."""
+    def test_the_deco_rate_does_not_reach_the_reserve(self):
+        """The deco SAC splits the PLANNED dive, not the emergency: a diver
+        solving a problem does not have a relaxed hanging rate, so the reserve
+        on a deco gas is held at the one emergency SAC (DECISIONS.md #28)."""
         plan = b.DivePlan(deco_gases=(b.Gas(0.50),))
         segs, _ = b.plan_dive(40.0, 25.0, b.AIR, plan)
-        one = b.emergency_gas_liters(segs, b.Gas(0.50), b.GasPlan(sac=20.0),
+        one = b.emergency_gas_liters(segs, b.Gas(0.50),
+                                     b.GasPlan(sac=20.0, sac_emergency=40.0),
                                      plan)
-        two = b.emergency_gas_liters(segs, b.Gas(0.50),
-                                     b.GasPlan(sac=20.0, sac_deco=10.0), plan)
-        self.assertAlmostEqual(two, one / 2.0, places=6)
+        two = b.emergency_gas_liters(
+            segs, b.Gas(0.50),
+            b.GasPlan(sac=20.0, sac_deco=10.0, sac_emergency=40.0), plan)
+        self.assertAlmostEqual(two, one, places=6)
+        # …and it does follow the emergency SAC itself.
+        half = b.emergency_gas_liters(segs, b.Gas(0.50),
+                                      b.GasPlan(sac=20.0, sac_emergency=20.0),
+                                      plan)
+        self.assertAlmostEqual(half, one / 2.0, places=6)
 
     def test_rock_bottom_is_unaffected_by_the_deco_rate(self):
         """Rock bottom is back gas: it must not move when the deco SAC does."""

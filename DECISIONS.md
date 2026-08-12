@@ -131,11 +131,14 @@ legacy `start_min` migrate by dropping it.
 
 `emergency_gas_liters` counts, per gas: `problem_minutes` at max depth (billed
 to the gas breathed there — the bottom gas) plus the **real planned ascent and
-deco** at the emergency SAC (`sac × sac_multiplier`), following each gas only
+deco** at the emergency SAC (`GasPlan.sac_emergency`), following each gas only
 as far as the next switch. Gas already breathed on the way down is normal
-`need`, not reserve. With `divers > 1`, the problem minutes and the ascent up
-to the *first* gas switch are multiplied (a buddy sharing your supply); past
-that switch each diver is back on their own cylinder.
+`need`, not reserve. With `divers > 1` the whole emergency ascent is shared,
+deco stages included.
+
+*Two things in this entry were later changed by [#28](#28--the-emergency-block-is-an-option-with-its-own-rate-and-the-team-shares-every-litre): the emergency rate
+is an absolute L/min figure, not `sac × sac_multiplier`, and the sharing no
+longer stops at the first gas switch. The rest stands.*
 
 **Why.** This is standard minimum-gas: what you must still have in the cylinder
 at the worst moment of the dive. Billing the entire decompression to back gas
@@ -331,9 +334,11 @@ against real plans, which is the wrong direction for a gas figure.
 **Scope.** It follows the *role*, not the mix: membership is the plan's
 `deco_gases`, so a mix carried as both bottom and deco gas bills at the deco
 rate wherever it is breathed — MultiDeco's simplification too. The emergency
-reserve on a deco gas scales with it (`sac_for` × `sac_multiplier`), but **rock
-bottom does not move**: that is back gas by definition, and a regression test
-pins it.
+reserve on a deco gas **no longer scales with it** — the emergency has one
+stressed rate for every mix ([#28](#28--the-emergency-block-is-an-option-with-its-own-rate-and-the-team-shares-every-litre)), because a diver
+solving a problem does not have a relaxed hanging rate. **Rock bottom does not
+move** either way: that is back gas by definition, and a regression test pins
+it.
 
 ## #17 — One printed-schedule notation, defined once
 
@@ -874,3 +879,81 @@ plan is one with no O₂ at all (EAN50 shallowest): if CNS matches there, the
 whole disagreement is the O₂ clock. Until then this is recorded, not modelled —
 and it is recorded loudly, because ours is the *lower* number and the diver's
 own computer is the one they will be reading.
+
+---
+
+## #28 — The emergency block is an option, with its own rate, and the team shares every litre
+
+Three changes to gas planning, made together on 2026-08-12 because they are one
+decision about what an emergency figure *is*.
+
+**1. The baseline SAC is always in force; the emergency block is optional.**
+Every plan carries gas estimates — CLI, GUI, agent, wetnotes card — because a
+schedule without litres is half a plan, and `--sac` was the easiest flag in the
+tool to forget. Without one the CLI falls back to `report.DEFAULT_SAC` (20
+L/min, the config schema's own default) and *says so*: `SAC 20 L/min assumed`.
+The emergency accounting on top of it is a switch (`GasPlan.emergency`, the
+config's `"emergency"`, `--no-emergency`, its own checkbox in the GUI). Off, it
+is gone from every view and from the JSON: no `(emrg)` column, no `MIN GAS`
+line on the card, no `rock_bottom_l` key.
+
+**Why a switch at all.** The reserve doubles the width of every gas table, and
+on a shallow single-stage dive that is clutter a diver did not ask for. The
+important half is that it is *visibly* on or off — a card either carries reserve
+figures or plainly does not, and you can tell which at a glance in the water.
+
+**Absent, not zero.** `CylinderNeed.liters_emergency` and
+`GasReport.rock_bottom_l` are `None` when the block is off, never `0.0`. A zero
+reserve is a claim ("this dive needs none"); `None` is the truth ("not asked
+for"). The renderers drop the column rather than print either.
+
+**2. The emergency SAC is an absolute rate.** `sac_multiplier` is gone;
+`sac_emergency` is litres per minute at the surface, one rate for every mix on
+the emergency ascent — a stressed diver does not have a deco SAC, so
+`sac_deco` (#16) splits the *planned* dive only. `0` means "twice the working
+SAC" (`EMERGENCY_SAC_FACTOR`), which is what the old multiplier defaulted to, so
+nothing moves for a plan that never set it. Configs migrate on load, both
+generations of them: `sac_stress` (absolute) and `sac_multiplier` (× SAC) both
+resolve to `sac_emergency` and are dropped.
+
+**Why absolute.** It is what a diver writes on a plan ("assume 30 L/min coming
+up"), and it is checkable against a number they have seen on a real ascent. A
+multiplier hides the rate behind an arithmetic step and moves it whenever the
+working SAC is edited — which is exactly when you are least likely to re-check
+the reserve.
+
+**3. Two divers share the whole ascent, deco stages included.** The sharing used
+to stop at the first gas switch, on the assumption that the out-of-gas diver
+switches to their own stage. Often they cannot: the reason they are on your
+regulator may be the reason they have no stage, and a lost-stage scenario is
+one of the very contingencies the planner enumerates. So with `divers = 2` every
+litre of the emergency ascent doubles — the twinset to the switch and the 50 %
+after it.
+
+**4. The turn pressure is its own switch, with two rules.** Inside the
+emergency block, `turn_pressure` decides whether a turn pressure is printed at
+all — a team that turns on runtime does not want the number on the card — and
+`turn_rule` decides how it is sized:
+
+* `rock-bottom` (default): split the gas *above* minimum gas in half, so the
+  diver surfaces on exactly the reserve. It follows the profile — deeper or
+  longer turns you earlier.
+* `thirds`: the cave rule, ⅔ of the fill, whatever the dive. Independent of the
+  model, which is its whole appeal on a slate.
+
+Both are reported through one number, `GasReport.turn_reserve_bar` = `2 × turn −
+fill` — what is left if the way out costs what the way in did. That makes the
+two rules comparable, and it makes the failure visible: when the thirds reserve
+comes out **below rock bottom** (45 m for two divers on a single 12, say), every
+view says so where the turn pressure is printed, card included. Thirds is the
+only rule that can fail this; the rock-bottom rule satisfies it by construction.
+We compute both rather than picking for the diver, and then we say when the one
+they picked does not cover the ascent it is supposed to fund.
+
+**Consequence, and it is the point.** The reserve is now per scenario in a way
+that bites: with both stages lost the bailout is flown on the twinset and the
+back-gas reserve is the entire ascent; with the stack intact an 11 L stage at
+200 bar frequently reads `SHORT!` for two divers, which is a real finding about
+a real rig and not a rounding difference. It is deliberately the pessimistic
+reading of a shared ascent — see #7 on why this particular number is allowed
+only to err upward.

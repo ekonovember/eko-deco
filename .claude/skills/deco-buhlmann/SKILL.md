@@ -22,7 +22,8 @@ has `deco` on PATH).
 - "Show the tissue loading after this profile"
 - "How does GF low/high change the schedule?"
 - Trimix, nitrox, multi-gas deco plans
-- "Rock bottom / minimum gas for this dive" (SAC + emergency multiplier + problem time, single diver) and TTS
+- "Rock bottom / minimum gas for this dive" (emergency SAC in L/min + problem time + diver count; `--no-emergency` drops the whole block) and TTS
+- "Where do I turn this dive?" (`--turn-rule rock-bottom|thirds`, `--no-turn-pressure`)
 - "Do I have enough gas?" — per-cylinder need vs carried (tank size x fill pressure)
 - Hypoxic trimix that needs a travel gas
 - "Backup / cut table for a bottom timer" — contingency matrix on a 3 min × 3 m grid (time rows × depth columns)
@@ -45,7 +46,9 @@ python -m deco.cli plan --depth 30 --time 25 --gas air
 python -m deco.cli plan --depth 45 --time 25 --gas 21/35 --deco-gas 50 --deco-gas 100 --gf-low 0.30 --gf-high 0.70
 python -m deco.cli ndl  --depth 30 --gas air
 python -m deco.cli tissues --depth 40 --time 20 --gas ean32 --json
-python -m deco.cli plan --depth 60 --time 25 --gas 10/70 --travel-gas 35/25 --deco-gas 50 --deco-gas 100 --sac 18 --sac-multiplier 1.5 --tank-size 24
+python -m deco.cli plan --depth 60 --time 25 --gas 10/70 --travel-gas 35/25 --deco-gas 50 --deco-gas 100 --sac 18 --sac-emergency 27 --tank-size 24
+python -m deco.cli plan --depth 40 --time 25 --gas air --deco-gas 50 --no-emergency   # baseline litres only, no reserve figures
+python -m deco.cli plan --depth 40 --time 25 --gas air@24@232 --deco-gas 50 --sac 20 --turn-rule thirds   # turn at 2/3 of the fill
 python -m deco.cli plan --depth 45 --time 10 --gas air@24 --deco-gas 50@11 --sac 20 --save   # write dive_plan.json
 python -m deco.cli plan dive_plan.json                                                        # replan the saved dive
 python -m deco.cli plan --depth 45 --time 25 --gas 21/35 --deco-gas 50 --last-stop 6   # Shearwater-style last stop
@@ -67,7 +70,15 @@ Defaults: GF 30/70 on the CLI (the library `DivePlan` uses 30/80), descent
 BAR`) plan fresh water and altitude dives, and they move the schedule, ppO2,
 MOD, END, density, CNS/OTU and gas volumes together — say so when relaying a
 plan for a lake. Altitude assumes an acclimatised diver. `--sac-deco` bills gas
-breathed off a deco cylinder at its own rate. Every algorithm input is settable
+breathed off a deco cylinder at its own rate. **Gas is on every plan**: with no
+`--sac` the baseline is 20 L/min and the output says it was assumed. The
+emergency reserve is a separate block — `--sac-emergency` (absolute L/min, one
+stressed rate for every mix), `--problem-time`, `--divers` (2 shares the whole
+ascent, stages included) — and `--no-emergency` removes it from the text and
+the JSON entirely rather than zeroing it. The turn pressure inside it has its
+own switch (`--no-turn-pressure`) and two rules (`--turn-rule
+rock-bottom|thirds`); when thirds leaves less than rock bottom the output says
+so, and that flag is worth quoting (DECISIONS #28). Every algorithm input is settable
 from the CLI, `dive_plan.json` and the GUI alike (DECISIONS #19) — including
 `--p-h2o` (0.0627 Bühlmann / 0.0567 Schreiner) and `--ppo2-switch-tol`. Deco-gas switches snap to standard stop depths (O2 at
 the 6 m stop, EAN50 at 21 m). On Windows set `PYTHONUTF8=1` for clean output.

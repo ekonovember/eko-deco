@@ -1382,19 +1382,62 @@ def contingency_schedules(levels: Sequence[Level], bottom_gas: Gas,
 # Gas management: consumption, TTS and "rock bottom" (minimum) gas
 # -----------------------------------------------------------------------------
 
+#: Emergency SAC when none is given: twice the working SAC, the rule of thumb
+#: minimum-gas calculations have always used. It is a *fallback*, not the input
+#: — the emergency rate is an absolute L/min figure everywhere it is set
+#: (DECISIONS.md #28), so nothing downstream multiplies anything.
+EMERGENCY_SAC_FACTOR = 2.0
+
+#: How the turn pressure is worked out. Both rules answer "at what pressure do
+#: I turn the dive", and both leave the same shape of reserve at the end — the
+#: difference is what sizes it (`report.GasReport.turn_pressure_bar`):
+#:
+#: * ``rock-bottom`` — split the gas *above* the computed minimum-gas reserve in
+#:   half. The reserve on surfacing is exactly rock bottom, so it follows the
+#:   dive: a deeper or longer profile turns you earlier.
+#: * ``thirds`` — the cave rule: a third in, a third out, a third untouched, so
+#:   the turn is at ⅔ of the fill whatever the profile. Simple enough to do on
+#:   a wrist slate, and independent of any model — which is the point of it.
+TURN_RULES = ("rock-bottom", "thirds")
+
+
 @dataclass
 class GasPlan:
-    """Consumption inputs. SAC = surface air consumption in litres/min at 1 bar."""
+    """Consumption inputs. SAC = surface air consumption in litres/min at 1 bar.
+
+    Two rates, both absolute: `sac` is what the diver breathes on the planned
+    dive, `sac_emergency` what the whole team breathes once something has gone
+    wrong. `emergency` is whether the emergency accounting is asked for at all
+    — see the flag's own comment."""
     sac: float                            # normal / working SAC
-    sac_multiplier: float = 2.0           # emergency SAC = sac * sac_multiplier
+    #: Stressed consumption for the emergency ascent, in L/min at the surface.
+    #: 0 = derive it from `sac` (× `EMERGENCY_SAC_FACTOR`), the same "0 means
+    #: follow the other field" convention as `sac_deco`; `__post_init__`
+    #: resolves it, so readers always see a real rate.
+    sac_emergency: float = 0.0
     problem_minutes: float = 1.0          # time solving the problem at max depth
     divers: int = 1                       # divers sharing the supply in an
                                           # emergency (2 = buddy out of gas,
-                                          # shared until the first gas switch)
+                                          # shared to the surface — DECISIONS #28)
     # Separate SAC for gas breathed off a designated deco cylinder — hanging on
     # a stop is not working the bottom, and MultiDeco/Shearwater plan the two
     # rates apart. None = one rate for the whole dive (see DECISIONS.md #16).
+    # It splits the *planned* dive only: the emergency has one rate for
+    # everything, because a stressed diver does not have a deco SAC.
     sac_deco: float | None = None
+    #: Is the emergency reserve part of this plan? False drops it from the
+    #: accounting and from every view — no reserve, no rock bottom, no (emrg)
+    #: column — so a card carries the baseline numbers and nothing else. The
+    #: toggle is honoured by `report.gas_report`, which then never computes it;
+    #: the helpers below always answer when asked directly (DECISIONS.md #28).
+    emergency: bool = True
+    #: Print a turn pressure alongside the reserve? A one-number "turn here" is
+    #: the most-used figure on a slate for some teams and noise for others (a
+    #: deco dive turns on runtime, not on gas), so it is its own switch inside
+    #: the emergency block rather than something to mentally filter out.
+    turn_pressure: bool = True
+    #: Which rule sizes it — one of `TURN_RULES`.
+    turn_rule: str = "rock-bottom"
 
     def __post_init__(self) -> None:
         if self.sac <= 0:
@@ -1402,15 +1445,21 @@ class GasPlan:
         if self.sac_deco is not None and self.sac_deco <= 0:
             raise ValueError(
                 f"deco SAC must be > 0 L/min when set (got {self.sac_deco:g})")
-        if self.sac_multiplier < 1.0:
+        if self.sac_emergency < 0:
             raise ValueError(
-                f"emergency SAC multiplier must be >= 1 "
-                f"(got {self.sac_multiplier:g})")
+                f"emergency SAC must be >= 0 L/min "
+                f"(got {self.sac_emergency:g})")
+        if self.sac_emergency == 0:
+            self.sac_emergency = self.sac * EMERGENCY_SAC_FACTOR
         if self.problem_minutes < 0:
             raise ValueError(
                 f"problem_minutes must be >= 0 (got {self.problem_minutes:g})")
         if self.divers < 1:
             raise ValueError(f"divers must be >= 1 (got {self.divers})")
+        if self.turn_rule not in TURN_RULES:
+            raise ValueError(
+                f"unknown turn rule {self.turn_rule!r} — expected one of "
+                f"{', '.join(TURN_RULES)}")
 
     def sac_for(self, gas: Gas, deco_gases: Sequence[Gas] = ()) -> float:
         """The consumption rate to bill `gas` at: `sac_deco` when `gas` is one
@@ -1478,15 +1527,16 @@ def emergency_gas_liters(segments: Sequence[DiveSegment], gas: Gas,
     worst moment the diver spends `problem_minutes` at max depth, then follows
     the **real planned ascent + deco** — up to the next gas switch on that gas,
     or, with no switch, all the way to the surface including every deco stop —
-    all at the emergency SAC (that gas's `sac_for` × `sac_multiplier`, so a
-    deco mix reserves at the deco rate when one is set). The problem minutes
-    are billed to the gas breathed at the deepest point (the bottom gas).
+    all at `gas_plan.sac_emergency`, one stressed rate for every mix (the deco
+    SAC splits the *planned* dive, not the emergency). The problem minutes are
+    billed to the gas breathed at the deepest point (the bottom gas).
 
-    With `divers > 1` the team shares the supply (a buddy out of gas): the
-    problem minutes and the ascent up to the first planned gas switch are
-    multiplied by `divers`; from the switch on each diver is back on their own
-    cylinder, so the rest of the deco is billed once. No switch = shared all
-    the way to the surface.
+    With `divers > 1` the team shares the supply (a buddy out of gas) **for the
+    whole ascent, deco stages included**: every litre on the way up is doubled,
+    because the diver who lost their gas has no stage of their own to switch to
+    — two divers hang on one 50 % cylinder. Until 2026-08 the sharing stopped
+    at the first gas switch and the stages were billed once, which is only true
+    if the out-of-gas diver still has their own deco bottle (DECISIONS.md #28).
 
     Until 2026-08 this was taken from the *last* level only and documented as
     an approximation that "can understate the true worst case". It understated
@@ -1516,27 +1566,17 @@ def _reserve_at(segs: Sequence[DiveSegment], gas: Gas, gas_plan: GasPlan,
     candidate moment. `emergency_gas_liters` picks the worst of them."""
     be = _bottom_phase_end(segs)
     surface_p, msw_per_bar = plan.surface_p, plan.msw_per_bar
-    sac_e = gas_plan.sac_for(gas, plan.deco_gases) * gas_plan.sac_multiplier
-    asc = segs[be:]
-    total = 0.0
-    if asc:
-        n_shared = 0                   # ascent prefix before the first switch
-        for s in asc:
-            if s.gas != asc[0].gas:
-                break
-            n_shared += 1
-        total += segment_gas_liters(
-            [s for s in asc[:n_shared] if s.gas == gas],
-            sac_e * gas_plan.divers, surface_p, msw_per_bar)
-        total += segment_gas_liters(
-            [s for s in asc[n_shared:] if s.gas == gas],
-            sac_e, surface_p, msw_per_bar)
+    # One stressed rate for every mix, shared by the whole team all the way up.
+    sac_e = gas_plan.sac_emergency * gas_plan.divers
+    total = segment_gas_liters([s for s in segs[be:] if s.gas == gas],
+                               sac_e, surface_p, msw_per_bar)
     if segs[:be]:
         deepest = max(segs[:be],
                       key=lambda s: max(s.depth_start, s.depth_end))
         if deepest.gas == gas:
             d_max = max(deepest.depth_start, deepest.depth_end)
-            total += (sac_e * gas_plan.divers * gas_plan.problem_minutes
+            # sac_e already carries `divers` — do not scale it again here.
+            total += (sac_e * gas_plan.problem_minutes
                       * depth_to_p_amb(d_max, surface_p, msw_per_bar))
     return total
 
@@ -1548,8 +1588,7 @@ def rock_bottom_liters(segments: Sequence[DiveSegment], bottom_gas: Gas,
     see `emergency_gas_liters`)
     and follow the **real ascent + deco** on the bottom gas — up to the next gas
     switch if there is one, otherwise all the way to the surface through every
-    deco stop — at the emergency SAC (`sac * sac_multiplier`), the shared
-    portion multiplied by `divers`.
+    deco stop — at `gas_plan.sac_emergency`, multiplied by `divers`.
 
     This is exactly the bottom gas's `emergency_gas_liters`, so the rock-bottom
     reserve and the emergency column always agree. It deliberately follows the

@@ -8,11 +8,13 @@ import contextlib
 import io
 import json
 import os
+import tempfile
 import unittest
 from typing import ClassVar
 
 from deco import buhlmann as b
 from deco import cli
+from deco import report as rp
 
 
 def run_cli(argv):
@@ -49,12 +51,10 @@ class TestArgumentValidation(unittest.TestCase):
                                  "--sac", "18", "--divers", "0"])
         self.assertEqual(code, 2)
 
-    def test_sac_multiplier_below_one_rejected(self):
-        # validated by GasPlan, surfaced as a clean exit-2, not a traceback
-        code, _, err = run_cli(["plan", "--depth", "30", "--time", "20",
-                                "--sac", "18", "--sac-multiplier", "0.5"])
+    def test_negative_emergency_sac_rejected(self):
+        code, _, _err = run_cli(["plan", "--depth", "30", "--time", "20",
+                                 "--sac", "18", "--sac-emergency", "-5"])
         self.assertEqual(code, 2)
-        self.assertIn("multiplier", err)
 
     def test_negative_level_depth_rejected(self):
         code, _, _err = run_cli(["plan", "--level", "-30:20"])
@@ -280,6 +280,148 @@ class TestPlanReadouts(unittest.TestCase):
         self.assertIn("SurfGF", out)
         self.assertIn("Backup line:", out)
         self.assertIn("gas stack", out)
+
+
+class TestGasEstimatesAreAlwaysThere(unittest.TestCase):
+    """Gas is part of a plan, not an extra unlocked by remembering --sac.
+
+    Before this, a `deco plan` without --sac printed a schedule and no litres
+    at all — the one number a diver has to check against a cylinder was the
+    easiest one to leave out (DECISIONS.md #28).
+    """
+
+    ARGV: ClassVar[list[str]] = [
+        "plan", "--depth", "40", "--time", "25", "--gas", "air@24@232",
+        "--deco-gas", "50@11@200",
+    ]
+
+    def _json(self, *extra):
+        code, out, _ = run_cli([*self.ARGV, *extra, "--json"])
+        self.assertEqual(code, 0)
+        return json.loads(out)
+
+    def test_no_sac_still_reports_gas_at_the_default_rate(self):
+        data = self._json()
+        self.assertEqual(data["gas"]["sac_normal_l_min"], rp.DEFAULT_SAC)
+        self.assertTrue(data["gas"]["sac_assumed"])
+        self.assertTrue(all(c["liters"] > 0 for c in data["gas"]["cylinders"]))
+
+    def test_the_text_says_the_sac_was_assumed(self):
+        code, out, _ = run_cli(self.ARGV)
+        self.assertEqual(code, 0)
+        self.assertIn(f"SAC {rp.DEFAULT_SAC:g} L/min assumed", out)
+        code, given, _ = run_cli([*self.ARGV, "--sac", "18"])
+        self.assertEqual(code, 0)
+        self.assertNotIn("assumed", given)
+
+    def test_a_given_sac_is_not_flagged_as_assumed(self):
+        data = self._json("--sac", "18")
+        self.assertEqual(data["gas"]["sac_normal_l_min"], 18.0)
+        self.assertFalse(data["gas"]["sac_assumed"])
+
+
+class TestEmergencyBlock(unittest.TestCase):
+    """--emergency / --no-emergency, and what each shape prints."""
+
+    ARGV: ClassVar[list[str]] = [
+        "plan", "--depth", "40", "--time", "25", "--gas", "air@24@232",
+        "--deco-gas", "50@11@200", "--sac", "20",
+    ]
+
+    def _json(self, *extra):
+        code, out, _ = run_cli([*self.ARGV, *extra, "--json"])
+        self.assertEqual(code, 0)
+        return json.loads(out)
+
+    def test_on_by_default(self):
+        data = self._json()
+        self.assertTrue(data["gas"]["emergency"])
+        self.assertIn("rock_bottom_l", data["gas"])
+        self.assertTrue(all("liters_emergency" in c
+                            for c in data["gas"]["cylinders"]))
+
+    def test_off_removes_the_keys_rather_than_zeroing_them(self):
+        data = self._json("--no-emergency")
+        self.assertFalse(data["gas"]["emergency"])
+        self.assertNotIn("rock_bottom_l", data["gas"])
+        self.assertNotIn("sac_emergency_l_min", data["gas"])
+        for c in data["gas"]["cylinders"]:
+            self.assertNotIn("liters_emergency", c)
+            self.assertNotIn("bar_used_emergency", c)
+            self.assertGreater(c["liters"], 0)      # the baseline stays
+
+    def test_off_removes_it_from_the_text_too(self):
+        code, on, _ = run_cli(self.ARGV)
+        self.assertEqual(code, 0)
+        self.assertIn("Rock bottom:", on)
+        self.assertIn("emrg", on)
+        code, off, _ = run_cli([*self.ARGV, "--no-emergency"])
+        self.assertEqual(code, 0)
+        self.assertNotIn("Rock bottom:", off)
+        self.assertNotIn("emrg ", off)
+        self.assertIn("emergency reserve off", off)
+
+    def test_the_emergency_sac_is_absolute_and_defaults_to_twice_the_sac(self):
+        self.assertEqual(self._json()["gas"]["sac_emergency_l_min"], 40.0)
+        self.assertEqual(
+            self._json("--sac-emergency", "30")["gas"]["sac_emergency_l_min"],
+            30.0)
+
+    def test_two_divers_raise_every_reserve(self):
+        one = {c["gas"]: c for c in self._json()["gas"]["cylinders"]}
+        two = {c["gas"]: c
+               for c in self._json("--divers", "2")["gas"]["cylinders"]}
+        for gas in ("Air", "EAN50"):
+            reserve1 = one[gas]["liters_emergency"] - one[gas]["liters"]
+            reserve2 = two[gas]["liters_emergency"] - two[gas]["liters"]
+            self.assertAlmostEqual(reserve2, 2 * reserve1, delta=0.2, msg=gas)
+
+    def test_the_turn_pressure_follows_its_own_rule(self):
+        data = self._json()
+        self.assertEqual(data["gas"]["turn_rule"], "rock-bottom")
+        self.assertAlmostEqual(data["gas"]["turn_reserve_bar"],
+                               data["gas"]["rock_bottom_bar"], delta=0.2)
+        thirds = self._json("--turn-rule", "thirds")
+        self.assertEqual(thirds["gas"]["turn_rule"], "thirds")
+        self.assertAlmostEqual(thirds["gas"]["turn_pressure_bar"],
+                               232.0 * 2 / 3, delta=0.1)
+
+    def test_the_turn_pressure_can_be_dropped_on_its_own(self):
+        data = self._json("--no-turn-pressure")
+        self.assertNotIn("turn_pressure_bar", data["gas"])
+        self.assertIn("rock_bottom_bar", data["gas"])     # the reserve stays
+        code, out, _ = run_cli([*self.ARGV, "--no-turn-pressure"])
+        self.assertEqual(code, 0)
+        self.assertIn("Rock bottom:", out)
+        self.assertNotIn("turn", out)
+
+    def test_an_unknown_turn_rule_is_refused(self):
+        code, _out, _err = run_cli([*self.ARGV, "--turn-rule", "halves"])
+        self.assertEqual(code, 2)
+
+    def test_thirds_under_the_reserve_is_said_out_loud(self):
+        code, out, _ = run_cli([
+            "plan", "--depth", "45", "--time", "20", "--gas", "21/35@12@200",
+            "--deco-gas", "50@11@200", "--sac", "20", "--divers", "2",
+            "--turn-rule", "thirds"])
+        self.assertEqual(code, 0)
+        self.assertIn("under the", out)
+
+    def test_the_toggle_and_the_rate_survive_a_save_load_round_trip(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "dive.json")
+            code, _out, _err = run_cli([*self.ARGV, "--sac-emergency", "35",
+                                        "--no-emergency", "--turn-rule",
+                                        "thirds", "--save", path])
+            self.assertEqual(code, 0)
+            with open(path, encoding="utf-8") as fh:
+                cfg = json.load(fh)
+            self.assertEqual(cfg["sac_emergency"], 35.0)
+            self.assertFalse(cfg["emergency"])
+            self.assertEqual(cfg["turn_rule"], "thirds")
+            code, out, _err = run_cli(["plan", path, "--json"])
+            self.assertEqual(code, 0)
+            self.assertFalse(json.loads(out)["gas"]["emergency"])
 
 
 class TestDiveSeries(unittest.TestCase):

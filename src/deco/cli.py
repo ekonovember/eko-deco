@@ -205,8 +205,13 @@ def _build_plan(args) -> b.DivePlan:
 
 
 def _args_gas_context(args):
-    """Build (GasPlan|None, gases) from CLI args, where gases is a list of
-    (role, Gas, tank_l, pressure_bar). GasPlan is None unless --sac was supplied."""
+    """Build (GasPlan, gases) from CLI args, where gases is a list of
+    (role, Gas, tank_l, pressure_bar).
+
+    There is **always** a GasPlan: gas estimates are part of a plan, not an
+    extra unlocked by remembering a flag, so without ``--sac`` the baseline
+    falls back to `report.DEFAULT_SAC` and the output says it was assumed
+    (DECISIONS.md #28). ``--no-emergency`` drops the reserve accounting."""
     bg, bt, bp = parse_gas_spec(args.gas)
     gases = [("Bottom", bg, bt if bt is not None else float(args.tank_size or 0),
               bp if bp is not None else rp.DEFAULT_FILL_BAR)]
@@ -218,11 +223,13 @@ def _args_gas_context(args):
         g, t, pr = parse_gas_spec(spec)
         gases.append(("Deco", g, float(t or 0),
                       pr if pr is not None else rp.DEFAULT_FILL_BAR))
-    if args.sac is None:
-        return None, gases
-    gp = b.GasPlan(sac=args.sac, sac_deco=args.sac_deco,
-                   sac_multiplier=args.sac_multiplier,
-                   problem_minutes=args.problem_time, divers=args.divers)
+    gp = b.GasPlan(sac=args.sac if args.sac is not None else rp.DEFAULT_SAC,
+                   sac_deco=args.sac_deco,
+                   sac_emergency=args.sac_emergency or 0.0,
+                   problem_minutes=args.problem_time, divers=args.divers,
+                   emergency=args.emergency,
+                   turn_pressure=args.turn_pressure,
+                   turn_rule=args.turn_rule)
     return gp, gases
 
 
@@ -230,8 +237,8 @@ def _config_from_args(args) -> dict:
     """Serialise the CLI dive into a dive_config dict (for --save), using the
     canonical schema: levels are pure depth/time periods and gas is chosen
     automatically by role, so no per-level gas references are written."""
-    _gp, gases = _args_gas_context(args)
-    sac = args.sac if args.sac is not None else 20.0
+    gp, gases = _args_gas_context(args)
+    sac = gp.sac
     counts: tuple[int | None, ...] = (None, None, None, None)
     if args.contingency is not None:
         counts = parse_contingency(args.contingency)
@@ -256,7 +263,11 @@ def _config_from_args(args) -> dict:
         "repeats": repeats,
         "gf_low": round(args.gf_low * 100), "gf_high": round(args.gf_high * 100),
         "sac_normal": sac, "sac_deco": args.sac_deco,
-        "sac_multiplier": args.sac_multiplier,
+        # `gp` has already resolved "no --sac-emergency" into a real rate, so
+        # the saved file states the emergency SAC the plan was made at rather
+        # than a blank the GUI would have to re-derive.
+        "emergency": args.emergency, "sac_emergency": gp.sac_emergency,
+        "turn_pressure": args.turn_pressure, "turn_rule": args.turn_rule,
         "problem_minutes": args.problem_time, "divers": args.divers,
         "ascent_rate": args.ascent_rate,
         "descent_rate": args.descent_rate,
@@ -277,19 +288,29 @@ def _config_from_args(args) -> dict:
     }
 
 
-def _gas_output(rep, max_depth: float):
+def _gas_output(rep, max_depth: float, sac_assumed: bool = False):
     """(json_dict, text_lines) rendering a ``report.GasReport``, or (None, [])
     when no GasPlan was supplied. All figures come from the shared report
-    layer; this only formats them."""
+    layer; this only formats them.
+
+    Two shapes, one per gas plan. With the emergency block on, every cylinder
+    also carries the emergency total (need + rock-bottom reserve) and the
+    report ends on the rock-bottom/turn-pressure line. With it off, none of
+    that is printed *or* put in the JSON — an agent reading ``emergency:
+    false`` and finding no reserve keys learns the truth, where a zero would
+    read as "no reserve needed"."""
     if rep is None:
         return None, []
     gp = rep.plan
-    sac_e = gp.sac * gp.sac_multiplier
-    shared = (f" × {gp.divers} divers to the first switch"
-              if gp.divers > 1 else "")
-    lines = [f"Gas  need vs have (emrg in parens = need + rock-bottom reserve:"
-             f" problem {gp.problem_minutes:g} min @ max depth + ascent/deco to"
-             f" the next switch at {sac_e:g} L/min{shared}):"]
+    baseline = (f"Gas  need vs have (SAC {gp.sac:g} L/min"
+                + (" assumed — pass --sac" if sac_assumed else "") + ")")
+    if rep.emergency:
+        shared = f" × {gp.divers} divers" if gp.divers > 1 else ""
+        lines = [f"{baseline}  ·  emrg in parens = need + rock-bottom reserve:"
+                 f" problem {gp.problem_minutes:g} min @ max depth +"
+                 f" ascent/deco at {gp.sac_emergency:g} L/min{shared}:"]
+    else:
+        lines = [f"{baseline}  ·  emergency reserve off:"]
     if gp.sac_deco is not None:
         lines.append(f"  SAC {gp.sac:g} L/min bottom · {gp.sac_deco:g} L/min "
                      "on the deco gases")
@@ -297,33 +318,48 @@ def _gas_output(rep, max_depth: float):
     for c in rep.cylinders:
         entry = {"gas": repr(c.gas), "role": c.role,
                  "liters": round(c.liters, 1),
-                 "liters_emergency": round(c.liters_emergency, 1),
                  "tank_l": c.tank_l, "pressure_bar": c.pressure_bar}
+        # " (emrg …)" fragments, empty when no emergency was asked for.
+        emrg_l = ("" if c.liters_emergency is None
+                  else f" (emrg {c.liters_emergency:.0f})")
         if c.tank_l <= 0:
-            lines.append(f"  {c.role} {c.gas!r}: {c.liters:.0f} L (emrg"
-                         f" {c.liters_emergency:.0f}) (no tank set)")
+            if c.liters_emergency is not None:
+                entry["liters_emergency"] = round(c.liters_emergency, 1)
+            lines.append(f"  {c.role} {c.gas!r}: {c.liters:.0f} L{emrg_l}"
+                         " (no tank set)")
         else:
             used, used_e = c.bar_used, c.bar_used_emergency
             entry["bar_used"] = round(used, 1)
-            entry["bar_used_emergency"] = round(used_e, 1)
+            if c.liters_emergency is not None:
+                entry["liters_emergency"] = round(c.liters_emergency, 1)
+                entry["bar_used_emergency"] = round(used_e, 1)
             if c.pressure_bar > 0:
                 entry["bar_left"] = round(c.bar_left, 1)
-                entry["bar_left_emergency"] = round(c.bar_left_emergency, 1)
                 short = " SHORT!" if c.short else ""
-                short_e = " SHORT!" if c.short_emergency else ""
+                emrg = ""
+                if used_e is not None:
+                    entry["bar_left_emergency"] = round(c.bar_left_emergency, 1)
+                    emrg = (f" (emrg {used_e:.0f}"
+                            + (" SHORT!" if c.short_emergency else "") + ")")
                 lines.append(f"  {c.role} {c.gas!r}: {used:.0f} bar need vs "
                              f"{c.pressure_bar:.0f}"
                              f" fill{short} ({c.bar_left:.0f} left)"
-                             f" (emrg {used_e:.0f}{short_e}) / {c.tank_l:.0f} L")
+                             f"{emrg} / {c.tank_l:.0f} L")
             else:
+                emrg = "" if used_e is None else f" (emrg {used_e:.0f})"
                 lines.append(f"  {c.role} {c.gas!r}: {used:.0f} bar need / "
-                             f"{c.tank_l:.0f} L (emrg {used_e:.0f})")
+                             f"{c.tank_l:.0f} L{emrg}")
         cylinders.append(entry)
     data = {"sac_normal_l_min": gp.sac, "sac_deco_l_min": gp.sac_deco,
-            "sac_multiplier": gp.sac_multiplier,
-            "sac_emergency_l_min": sac_e,
-            "problem_minutes": gp.problem_minutes, "divers": gp.divers,
-            "cylinders": cylinders, "rock_bottom_l": round(rep.rock_bottom_l, 1)}
+            "sac_assumed": sac_assumed,
+            "emergency": rep.emergency, "cylinders": cylinders}
+    if not rep.emergency:
+        lines.append("  (cylinder litres are ideal-gas: a 232 bar fill actually "
+                     "holds ~5% less, 300 bar ~10%)")
+        return data, lines
+    data.update({"sac_emergency_l_min": gp.sac_emergency,
+                 "problem_minutes": gp.problem_minutes, "divers": gp.divers,
+                 "rock_bottom_l": round(rep.rock_bottom_l, 1)})
     rock_bar = rep.rock_bottom_bar
     if rock_bar is not None:
         data["rock_bottom_bar"] = round(rock_bar, 1)
@@ -332,9 +368,20 @@ def _gas_output(rep, max_depth: float):
             turn = rep.turn_pressure_bar
             if turn is not None:
                 data["turn_pressure_bar"] = round(turn, 1)
+                data["turn_rule"] = gp.turn_rule
+                data["turn_reserve_bar"] = round(rep.turn_reserve_bar, 1)
                 line += (f"; from {rep.back_pressure_bar:.0f} turn "
-                         f"~{turn:.0f} bar")
-            else:
+                         f"~{turn:.0f} bar ({gp.turn_rule})")
+                # A third of the fill knows nothing about the profile, so it
+                # can leave the team surfacing on less than minimum gas. That
+                # is a finding, not a formatting detail.
+                if rep.turn_below_rock_bottom:
+                    data["turn_below_rock_bottom"] = True
+                    line += (f" — leaves {rep.turn_reserve_bar:.0f} bar, under"
+                             f" the {rock_bar:.0f} bar reserve!")
+            elif gp.turn_pressure:
+                # Wanted one, could not have one: rock bottom is the whole fill
+                # (or more), so there is no usable gas to halve.
                 line += f" — over the {rep.back_pressure_bar:.0f} bar fill!"
         lines.append(line)
     else:
@@ -479,7 +526,12 @@ def cmd_plan(args) -> int:
     json_dives: list[dict] = []
     text_lines: list[str] = []
     for n, res in shown:
-        gas_data, gas_lines = _gas_output(res.gas, res.max_depth_m)
+        # A config always states its SAC; only a flagless command line assumes
+        # one, and then the output says so rather than quoting litres that
+        # nobody chose.
+        gas_data, gas_lines = _gas_output(
+            res.gas, res.max_depth_m,
+            sac_assumed=not load_path and args.sac is None)
         cont_data, cont_lines = None, []
         if res.contingency is not None:
             cont_data, cont_lines = _contingency_output(
@@ -833,20 +885,40 @@ def main(argv: list[str] | None = None) -> int:
     sp.add_argument("--gas", default="air",
                     help="bottom gas, optional @tank e.g. air@24, 21/35@24")
     sp.add_argument("--sac", type=_positive_float,
-                    help="Normal surface air consumption (L/min); enables gas planning.")
+                    help=f"Baseline surface air consumption / RMV (L/min) every"
+                         f" gas estimate is built on. Default"
+                         f" {rp.DEFAULT_SAC:g}, and the output says when it was"
+                         f" assumed.")
     sp.add_argument("--sac-deco", type=_positive_float,
                     help="Separate SAC (L/min) for gas breathed off a deco "
                          "cylinder; defaults to --sac.")
-    sp.add_argument("--sac-multiplier", type=float, default=2.0,
-                    help="Emergency SAC multiplier for rock bottom (e.g. 1.5); "
-                         "emergency SAC = --sac x this. Default 2.0.")
+    sp.add_argument("--emergency", action=argparse.BooleanOptionalAction,
+                    default=True,
+                    help="Include the emergency reserve (rock bottom and the "
+                         "(emrg) figures). --no-emergency drops it from every "
+                         "view and from the JSON.")
+    sp.add_argument("--sac-emergency", type=_positive_float,
+                    help="Stressed SAC (L/min) for the emergency ascent — an "
+                         "absolute rate, one for every mix. Default: twice "
+                         "--sac.")
+    sp.add_argument("--turn-pressure", action=argparse.BooleanOptionalAction,
+                    default=True,
+                    help="Print a turn pressure beside the reserve. "
+                         "--no-turn-pressure drops it (a deco dive usually "
+                         "turns on runtime, not on gas).")
+    sp.add_argument("--turn-rule", choices=b.TURN_RULES, default="rock-bottom",
+                    help="How the turn pressure is worked out: 'rock-bottom' "
+                         "(half the gas above minimum gas — surfaces exactly "
+                         "on the reserve) or 'thirds' (the cave rule, 2/3 of "
+                         "the fill; flagged when that leaves less than rock "
+                         "bottom). Default rock-bottom.")
     sp.add_argument("--problem-time", type=_nonneg_float, default=1.0,
                     help="Minutes solving the problem at max depth (rock bottom"
                          " and the end-of-bottom emergency gas need).")
     sp.add_argument("--divers", type=_positive_int, default=1,
                     help="Divers sharing the supply in the emergency (2 = buddy"
-                         " out of gas, shared until the first gas switch)."
-                         " Scales rock bottom too. Default 1.")
+                         " out of gas, sharing every litre of the ascent, deco"
+                         " stages included). Scales rock bottom too. Default 1.")
     sp.add_argument("--tank-size", type=_positive_float,
                     help="Bottom-gas cylinder volume (L); or use --gas mix@litres.")
     sp.add_argument("--contingency", nargs="?", const="",

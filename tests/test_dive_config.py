@@ -15,7 +15,7 @@ class TestDiveConfig(unittest.TestCase):
     def test_default_has_required_keys(self):
         cfg = dc.default_config()
         for k in ("levels", "gf_low", "gf_high",
-                  "sac_normal", "sac_multiplier", "gases"):
+                  "sac_normal", "sac_emergency", "emergency", "gases"):
             self.assertIn(k, cfg)
         self.assertTrue(any(g["role"] == "Bottom" for g in cfg["gases"]))
         self.assertTrue(cfg["levels"])
@@ -136,7 +136,7 @@ class TestDiveConfig(unittest.TestCase):
     def test_to_buhlmann_maps_roles(self):
         cfg = {
             "depth_m": 60, "bottom_time_min": 20, "gf_low": 30, "gf_high": 70,
-            "sac_normal": 20, "sac_multiplier": 2.0, "problem_minutes": 1,
+            "sac_normal": 20, "sac_emergency": 40.0, "problem_minutes": 1,
             "gases": [
                 {"role": "Bottom", "o2": 10, "he": 70, "tank_l": 24},
                 {"role": "Travel", "o2": 35, "he": 25, "tank_l": 11},
@@ -150,21 +150,40 @@ class TestDiveConfig(unittest.TestCase):
         self.assertEqual(len(plan.deco_gases), 1)
         self.assertAlmostEqual(plan.gf_low, 0.30)
         self.assertAlmostEqual(plan.gf_high, 0.70)
-        self.assertAlmostEqual(gp.sac_multiplier, 2.0)
+        self.assertAlmostEqual(gp.sac_emergency, 40.0)
         self.assertEqual(len(gases), 3)
 
-    def test_sac_multiplier_maps_to_gasplan(self):
+    def test_sac_emergency_maps_to_gasplan(self):
         cfg = dc.default_config()
-        cfg["sac_multiplier"] = 1.5
+        cfg["sac_emergency"] = 30.0
         _b, _p, gp, _g = dc.to_buhlmann(cfg)
-        self.assertAlmostEqual(gp.sac_multiplier, 1.5)
+        self.assertAlmostEqual(gp.sac_emergency, 30.0)
 
-    def test_legacy_sac_stress_migrates_to_multiplier(self):
+    def test_emergency_flag_maps_to_gasplan(self):
+        cfg = dc.default_config()
+        self.assertTrue(dc.to_buhlmann(cfg)[2].emergency)
+        cfg["emergency"] = False
+        self.assertFalse(dc.to_buhlmann(cfg)[2].emergency)
+
+    def test_legacy_sac_stress_migrates_to_an_absolute_rate(self):
         # Old configs stored an absolute distress SAC and a solo flag.
         cfg = dc._merged({"sac_normal": 20, "sac_stress": 30, "solo": True})
-        self.assertAlmostEqual(cfg["sac_multiplier"], 1.5)
+        self.assertAlmostEqual(cfg["sac_emergency"], 30.0)
         self.assertNotIn("sac_stress", cfg)
         self.assertNotIn("solo", cfg)
+
+    def test_legacy_sac_multiplier_migrates_to_an_absolute_rate(self):
+        # The middle form: a multiplier on the working SAC. Resolving it here
+        # means a file written by the previous version plans identical litres.
+        cfg = dc._merged({"sac_normal": 18, "sac_multiplier": 1.5})
+        self.assertAlmostEqual(cfg["sac_emergency"], 27.0)
+        self.assertNotIn("sac_multiplier", cfg)
+
+    def test_a_config_naming_no_emergency_rate_keeps_the_old_default(self):
+        # Twice the working SAC — what "multiplier 2.0" used to mean — rather
+        # than the schema default, which knows nothing about this file's SAC.
+        cfg = dc._merged({"sac_normal": 25})
+        self.assertAlmostEqual(cfg["sac_emergency"], 50.0)
 
     def test_disabled_gas_is_left_out_of_the_plan(self):
         cfg = dc.default_config()

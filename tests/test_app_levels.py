@@ -261,6 +261,71 @@ class TestReadoutAgreesWithTheReportLayer(unittest.TestCase):
         self.assertIn(f"{res.end_m:.0f} m (O₂ narcotic)", text)
         self.assertIn(f"{res.surface_ceiling_m:.2f} m", text)
 
+    def test_the_emergency_checkbox_clears_the_screen_and_the_card(self):
+        """Unticking the box must leave no emergency figure anywhere a diver
+        reads — not on the Results tab, not on the wetnotes card that goes in
+        the water (DECISIONS.md #28)."""
+        self.app.emergency.set(True)
+        self.app.recompute()
+        self.assertIn("(emrg)", self._readout())
+        self.assertIn("rock bottom", self._readout())
+        self.assertIn("MIN GAS", self.app.runtime_text.get("1.0", tk.END))
+
+        self.app.emergency.set(False)
+        self.app.recompute()
+        text, card = self._readout(), self.app.runtime_text.get("1.0", tk.END)
+        for gone in ("(emrg)", "rock bottom", "MIN GAS"):
+            self.assertNotIn(gone, text + card, msg=gone)
+        # …while the baseline litres are still there.
+        res = self._result()
+        assert res.gas is not None
+        for c in res.gas.cylinders:
+            if c.tank_l > 0 and c.pressure_bar > 0:
+                self.assertIn(f"{c.bar_used:.0f} bar", text)
+
+    def test_the_turn_pressure_can_be_hidden_on_its_own(self):
+        self.app.emergency.set(True)
+        self.app.turn_pressure.set(True)
+        self.app.recompute()
+        self.assertIn("turn ~", self._readout())
+        self.assertIn("TURN", self.app.runtime_text.get("1.0", tk.END))
+
+        self.app.turn_pressure.set(False)
+        self.app.recompute()
+        text, card = self._readout(), self.app.runtime_text.get("1.0", tk.END)
+        self.assertNotIn("turn ~", text)
+        self.assertNotIn("TURN", card)
+        # the reserve it was derived from stays on both surfaces
+        self.assertIn("rock bottom", text)
+        self.assertIn("MIN GAS", card)
+
+    def test_the_turn_rule_changes_the_number_on_screen(self):
+        self.app.turn_pressure.set(True)
+        self.app.turn_rule.set("rock-bottom")
+        self.app.recompute()
+        by_reserve = self._readout()
+        self.app.turn_rule.set("thirds")
+        self.app.recompute()
+        thirds = self._readout()
+        self.assertNotEqual(by_reserve, thirds)
+        self.assertIn("(thirds)", thirds)
+        res = self._result()
+        assert res.gas is not None
+        self.assertIn(f"turn ~{res.gas.turn_pressure_bar:.0f} bar", thirds)
+
+    def _emergency_disabled(self) -> list[bool]:
+        return ["disabled" in child.state()
+                for row in self.app._emergency_rows
+                for child in row.winfo_children()]
+
+    def test_the_emergency_inputs_are_greyed_out_when_it_is_off(self):
+        self.app.emergency.set(False)
+        flags = self._emergency_disabled()
+        self.assertTrue(flags)
+        self.assertTrue(all(flags), flags)
+        self.app.emergency.set(True)
+        self.assertFalse(any(self._emergency_disabled()))
+
     def test_the_gas_card_prints_the_report_layers_litres(self):
         self.app.water.set("fresh")
         self.app.altitude.set("1500")

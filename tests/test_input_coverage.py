@@ -51,9 +51,15 @@ PLAN_PROBE: dict[str, float] = {
     "ppo2_switch_tol": 0.09, "min_stop_time": 0.5,
 }
 GAS_PROBE: dict[str, float] = {
-    "sac": 17.5, "sac_deco": 13.5, "sac_multiplier": 1.75,
+    "sac": 17.5, "sac_deco": 13.5, "sac_emergency": 31.0,
     "problem_minutes": 2.5, "divers": 2,
 }
+#: Gas-plan fields that are switches rather than numbers. Probed with the
+#: NON-default value, so a front end that hardcodes "emergency on" fails here:
+#: the emergency block is a real input, not a constant (DECISIONS.md #28).
+GAS_PROBE_BOOL: dict[str, bool] = {"emergency": False, "turn_pressure": False}
+#: Gas-plan fields that are named choices.
+GAS_PROBE_STR: dict[str, str] = {"turn_rule": "thirds"}
 #: Plan fields that are not numbers. Probed by equality rather than a
 #: tolerance, but held to exactly the same standard: set it through each front
 #: end, check it arrives in the DivePlan.
@@ -74,7 +80,8 @@ def _probe_config() -> dict:
         "surface_p_bar": 0.93, "msw_per_bar": 10.25, "p_h2o_bar": 0.0567,
         "ppo2_deco": 1.55, "ppo2_bottom": 1.35, "ppo2_min": 0.19,
         "ppo2_switch_tol": 0.09, "min_stop_time": 0.5,
-        "sac_normal": 17.5, "sac_deco": 13.5, "sac_multiplier": 1.75,
+        "sac_normal": 17.5, "sac_deco": 13.5, "sac_emergency": 31.0,
+        "emergency": False, "turn_pressure": False, "turn_rule": "thirds",
         "problem_minutes": 2.5, "divers": 2,
         "gas_switch_policy": "at-first-stop",
     })
@@ -89,7 +96,8 @@ CLI_ARGV = [
     "--surface-p", "0.93", "--msw-per-bar", "10.25", "--p-h2o", "0.0567",
     "--ppo2-deco", "1.55", "--ppo2-bottom", "1.35", "--ppo2-min", "0.19",
     "--ppo2-switch-tol", "0.09", "--min-stop-time", "0.5",
-    "--sac", "17.5", "--sac-deco", "13.5", "--sac-multiplier", "1.75",
+    "--sac", "17.5", "--sac-deco", "13.5", "--sac-emergency", "31",
+    "--no-emergency", "--no-turn-pressure", "--turn-rule", "thirds",
     "--problem-time", "2.5", "--divers", "2",
     "--gas-switch", "at-first-stop",
 ]
@@ -127,7 +135,8 @@ class TestEveryFieldIsProbed(unittest.TestCase):
                          "wire them into the config, the CLI and the GUI")
 
     def test_no_gas_plan_field_is_unaccounted_for(self):
-        known = set(GAS_PROBE) | UNUSED_FIELDS
+        known = (set(GAS_PROBE) | set(GAS_PROBE_BOOL) | set(GAS_PROBE_STR)
+                 | UNUSED_FIELDS)
         fields = {f.name for f in dataclasses.fields(b.GasPlan)}
         self.assertEqual(fields - known, set(),
                          "new GasPlan field(s): add a value to GAS_PROBE and "
@@ -153,6 +162,12 @@ class TestConfigBinds(unittest.TestCase):
             with self.subTest(name):
                 self.assertAlmostEqual(getattr(self.gas_plan, name), want,
                                        places=9)
+        for name, flag in GAS_PROBE_BOOL.items():
+            with self.subTest(name):
+                self.assertEqual(getattr(self.gas_plan, name), flag)
+        for name, text in GAS_PROBE_STR.items():
+            with self.subTest(name):
+                self.assertEqual(getattr(self.gas_plan, name), text)
 
     def test_gas_stack_roles(self):
         cfg = _probe_config()
@@ -182,6 +197,12 @@ class TestConfigBinds(unittest.TestCase):
         for name, want in GAS_PROBE.items():
             with self.subTest(f"GasPlan.{name}"):
                 self.assertAlmostEqual(getattr(gp, name), want, places=9)
+        for name, flag in GAS_PROBE_BOOL.items():
+            with self.subTest(f"GasPlan.{name}"):
+                self.assertEqual(getattr(gp, name), flag)
+        for name, text in GAS_PROBE_STR.items():
+            with self.subTest(f"GasPlan.{name}"):
+                self.assertEqual(getattr(gp, name), text)
         for name, text in PLAN_PROBE_STR.items():
             with self.subTest(name):
                 self.assertEqual(getattr(plan, name), text)
@@ -209,6 +230,9 @@ class TestCliBinds(unittest.TestCase):
             with self.subTest(name):
                 self.assertAlmostEqual(getattr(self.gas_plan, name), want,
                                        places=9)
+        for name, flag in GAS_PROBE_BOOL.items():
+            with self.subTest(name):
+                self.assertEqual(getattr(self.gas_plan, name), flag)
 
     def test_gas_stack_roles(self):
         self.assertEqual(self.plan.travel_gases, (b.Gas(0.35, 0.25),))
@@ -234,6 +258,9 @@ class TestCliBinds(unittest.TestCase):
         for name, want in GAS_PROBE.items():
             with self.subTest(f"GasPlan.{name}"):
                 self.assertAlmostEqual(getattr(gp, name), want, places=9)
+        for name, flag in GAS_PROBE_BOOL.items():
+            with self.subTest(f"GasPlan.{name}"):
+                self.assertEqual(getattr(gp, name), flag)
 
 
 @unittest.skipUnless(_HAVE_GUI, "Tk/matplotlib GUI not available")
@@ -264,7 +291,7 @@ class TestGuiBinds(unittest.TestCase):
     }
     GAS_WIDGETS: ClassVar[dict[str, tuple[str, str]]] = {
         "sac": ("sac", "17.5"), "sac_deco": ("sac_deco", "13.5"),
-        "sac_multiplier": ("sac_mult", "1.75"),
+        "sac_emergency": ("sac_emergency", "31"),
         "problem_minutes": ("problem_min", "2.5"),
     }
 
@@ -284,6 +311,10 @@ class TestGuiBinds(unittest.TestCase):
         for _field, (var, value) in self.GAS_WIDGETS.items():
             getattr(self.app, var).set(value)
         self.app.two_divers.set(True)
+        for field, flag in GAS_PROBE_BOOL.items():
+            getattr(self.app, field).set(flag)
+        for field, text in GAS_PROBE_STR.items():
+            getattr(self.app, field).set(text)
 
     def test_every_plan_field_has_a_widget_that_binds(self):
         self._set_everything()
@@ -301,6 +332,12 @@ class TestGuiBinds(unittest.TestCase):
         for name, want in GAS_PROBE.items():
             with self.subTest(name):
                 self.assertAlmostEqual(getattr(gp, name), want, places=9)
+        for name, flag in GAS_PROBE_BOOL.items():
+            with self.subTest(name):
+                self.assertEqual(getattr(gp, name), flag)
+        for name, text in GAS_PROBE_STR.items():
+            with self.subTest(name):
+                self.assertEqual(getattr(gp, name), text)
 
     def test_the_widget_map_covers_every_field(self):
         """If a field gains a probe value but no GUI widget, say so here rather
@@ -308,6 +345,10 @@ class TestGuiBinds(unittest.TestCase):
         self.assertEqual(set(PLAN_PROBE) - set(self.WIDGETS), set())
         self.assertEqual(set(GAS_PROBE) - set(self.GAS_WIDGETS) - {"divers"},
                          set())
+        # the switches and choices have widgets of their own — checkbuttons
+        # and a combobox, not spinboxes — named after the field they set
+        for field in (*GAS_PROBE_BOOL, *GAS_PROBE_STR):
+            self.assertTrue(hasattr(self.app, field), field)
 
     def test_everything_round_trips_through_the_config(self):
         self._set_everything()
@@ -319,6 +360,9 @@ class TestGuiBinds(unittest.TestCase):
         for name, want in GAS_PROBE.items():
             with self.subTest(f"GasPlan.{name}"):
                 self.assertAlmostEqual(getattr(gp, name), want, places=9)
+        for name, flag in GAS_PROBE_BOOL.items():
+            with self.subTest(f"GasPlan.{name}"):
+                self.assertEqual(getattr(gp, name), flag)
         # and reloading puts the same numbers back in the boxes
         self.app._apply_config(cfg)
         again = self.app._make_plan()
