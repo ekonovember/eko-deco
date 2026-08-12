@@ -27,6 +27,7 @@ import sys
 import textwrap
 import tkinter as tk
 from dataclasses import dataclass, replace
+from tkinter import font as tkfont
 from tkinter import ttk
 from typing import Any, Literal
 
@@ -246,6 +247,25 @@ def build_profile_points(segs) -> tuple[list[float], list[float]]:
     return t, d
 
 
+#: Never wrap a card's prose narrower than this, however few columns the grid
+#: has — a two-column table with a sentence over it would otherwise become a
+#: column of single words.
+_MIN_CARD_TEXT = 40
+
+
+def _wrap_lines(lines: list[str], width: int) -> list[str]:
+    """Wrap each line to `width`, keeping blank lines and never splitting a
+    word or a hyphenated figure (``rock-bottom``, ``26m@16``) across lines."""
+    out: list[str] = []
+    for line in lines:
+        if len(line) <= width:
+            out.append(line)
+            continue
+        out += textwrap.wrap(line, width, break_long_words=False,
+                             break_on_hyphens=False) or [""]
+    return out
+
+
 def format_card(title_lines: list[str], rows: list[list[str]],
                 headers: list[str] | None = None,
                 footer_lines: list[str] | None = None,
@@ -257,9 +277,10 @@ def format_card(title_lines: list[str], rows: list[list[str]],
     to one width so columns line up in the Tk card and the exported PNG alike.
 
     ``aligns`` gives ``"<"`` / ``">"`` / ``"^"`` per grid column (default: first
-    column left, the rest right). ``widen`` is the column that absorbs any extra
-    width a long title/footer line forces: the last by default; pick a
-    left-aligned one to keep right-aligned number columns snug."""
+    column left, the rest right). Title and footer prose **wraps** to the grid
+    width rather than stretching it; ``widen`` names the column that absorbs
+    the remainder in the one case wrapping cannot help — a single token longer
+    than the whole table — and defaults to the last."""
     title_lines = list(title_lines or [])
     footer_lines = list(footer_lines or [])
     grid_rows = [[str(c) for c in row] for row in rows]
@@ -273,8 +294,19 @@ def format_card(title_lines: list[str], rows: list[list[str]],
     # Inner width spanned by the column grid: each cell is padded by a space on
     # both sides (w + 2) and columns are joined by a single divider.
     inner = sum(w + 2 for w in widths) + (cols - 1)
+
+    # A sentence in the title or footer WRAPS to the grid; it does not stretch
+    # the grid to fit itself. Stretching was adding a dozen characters to
+    # whichever column `widen` named — on the gas-usage card that was "bar
+    # left", a number column, and the figures ended up floating a finger's
+    # width away from the data they belong to. The table is the artifact; the
+    # prose around it is what gives.
+    text_width = max(inner - 2, _MIN_CARD_TEXT)
+    title_lines = _wrap_lines(title_lines, text_width)
+    footer_lines = _wrap_lines(footer_lines, text_width)
+
     longest = max((len(s) for s in title_lines + footer_lines), default=0)
-    if longest > inner - 2:                        # widen a column to fit the text
+    if longest > inner - 2:      # an unbreakable token (a long URL, a mix name)
         widths[widen] += longest - (inner - 2)
         inner = sum(w + 2 for w in widths) + (cols - 1)
 
@@ -308,15 +340,53 @@ def format_card(title_lines: list[str], rows: list[list[str]],
     return out
 
 
-# matplotlib renders the Unicode box-drawing glyphs (U+2500 family) from a
-# proportional fallback font even under family="monospace", which ragged-aligns
-# any framed card in a PNG export (the on-screen Tk Text widget is fine). Fold
-# them to ASCII so every cell stays exactly one fixed-width character wide.
-_BOX_TO_ASCII = str.maketrans({
+# Glyphs a card uses that a *fallback* font may render at a different advance
+# width than the monospace cell — box drawing (U+2500…), the arrow, the prime
+# and the delta. On a machine without the requested family, Tk and matplotlib
+# both satisfy these from another font: measured here, `─` comes back 21 px
+# against a 10 px cell, so every rule overshoots its frame and the card shears.
+#
+# Each stand-in is ONE character on purpose. A two-character replacement (`→`
+# to `->`) would change the length of an already-padded cell and move the very
+# columns this exists to keep straight.
+#
+# It maps **every** non-ASCII character a card can print, not only the ones
+# measured wide today: which glyphs a fallback font covers varies by machine,
+# so "the folded card is pure ASCII" is an invariant that can be tested (and
+# is, in tests/test_app_levels.py), where "the folded card avoids the four
+# glyphs that were wrong on the author's laptop" is a guess that ages badly.
+_CARD_ASCII = str.maketrans({
     **dict.fromkeys("─", "-"),
     **dict.fromkeys("│", "|"),
     **dict.fromkeys("┌┐└┘├┤┬┴┼", "+"),
+    **dict.fromkeys("·—–", "-"),
+    **dict.fromkeys("→", ">"),
+    **dict.fromkeys("′", "'"),
+    **dict.fromkeys("×", "x"),
+    **dict.fromkeys("≈~", "~"),
+    **dict.fromkeys("⚠", "!"),
+    **dict.fromkeys("Δ", "d"),
+    **dict.fromkeys("ρ", "p"),
+    **dict.fromkeys("₂", "2"),
+    **dict.fromkeys("Ü", "U"),
+    **dict.fromkeys("ü", "u"),
 })
+#: The glyphs to probe for width. One per fallback family the cards reach into
+#: — box drawing, arrows, punctuation, Greek — because a font that borrows one
+#: range usually borrows the lot.
+_WIDTH_PROBE = "─│┼→′Δρ"
+
+
+def _renders_fixed_width(font) -> bool:
+    """Does this font render every card glyph at the cell width?
+
+    False means the card must be folded to ASCII to line up. Asked of the
+    actual `tkinter.font.Font` rather than assumed from the family name,
+    because the family asked for is often not the family used: "Consolas" on a
+    Linux box resolves to whatever `fixed` is, which has no box drawing of its
+    own and borrows it at double width."""
+    cell = font.measure(" ")
+    return all(font.measure(ch) == cell for ch in _WIDTH_PROBE)
 
 
 class DecoApp:
@@ -601,8 +671,12 @@ class DecoApp:
         self.cfg_status.pack(side=tk.LEFT, padx=4)
 
         # --- results panel (scrollable) ---
+        # The card font, and whether it can draw a card at all: `_card_text`
+        # folds the frame to ASCII when it cannot (see `_renders_fixed_width`).
+        card_font = tkfont.Font(family="Consolas", size=10)
+        self._box_ok = _renders_fixed_width(card_font)
         self.readout = tk.Text(results, width=58, height=28, wrap="none",
-                               font=("Consolas", 10),
+                               font=card_font,
                                relief="flat", bg=self.root.cget("bg"))
         scroll = ttk.Scrollbar(results, command=self.readout.yview)
         xscroll = ttk.Scrollbar(results, orient="horizontal",
@@ -617,8 +691,8 @@ class DecoApp:
         rt_body = ttk.Frame(runtime_frame)
         rt_body.pack(fill=tk.BOTH, expand=True)
         self.runtime_text = tk.Text(rt_body, width=66, height=18, wrap="none",
-                                    font=("Consolas", 9), relief="flat",
-                                    bg=self.root.cget("bg"))
+                                    font=tkfont.Font(family="Consolas", size=9),
+                                    relief="flat", bg=self.root.cget("bg"))
         rt_scroll = ttk.Scrollbar(rt_body, command=self.runtime_text.yview)
         rt_xscroll = ttk.Scrollbar(rt_body, orient="horizontal",
                                    command=self.runtime_text.xview)
@@ -1432,7 +1506,14 @@ class DecoApp:
                 lines.append("")
             lines += card
         self.readout.delete("1.0", tk.END)
-        self.readout.insert(tk.END, "\n".join(lines))
+        self.readout.insert(tk.END, self._card_text("\n".join(lines)))
+
+    def _card_text(self, text: str) -> str:
+        """Card text as this machine's font can actually render it: unchanged
+        where the box glyphs measure one cell, folded to ASCII where they do
+        not. Applied at the one point text enters a widget, so the Copy button
+        and the PNG export carry exactly what is on screen."""
+        return text if self._box_ok else text.translate(_CARD_ASCII)
 
     def _card_header(self, res: rp.PlanResult, scenarios) -> list[str]:
         """The dive in one line, MultiDeco-style."""
@@ -1885,7 +1966,7 @@ class DecoApp:
                 grid, plan, depth, levels[-1].runtime)))
 
         self.runtime_text.delete("1.0", tk.END)
-        self.runtime_text.insert(tk.END, "\n\n".join(cards))
+        self.runtime_text.insert(tk.END, self._card_text("\n\n".join(cards)))
 
     @staticmethod
     def _cut_table_card(grid, plan, planned_depth: float,
@@ -1915,7 +1996,9 @@ class DecoApp:
         from matplotlib.backends.backend_agg import FigureCanvasAgg
         from matplotlib.figure import Figure
         body = self.runtime_text.get("1.0", tk.END).rstrip("\n")
-        body = body.translate(_BOX_TO_ASCII)   # keep the frame aligned in the PNG
+        # Unconditional here: matplotlib's monospace family is not the widget's
+        # and satisfies these glyphs from a proportional fallback of its own.
+        body = body.translate(_CARD_ASCII)
         n = body.count("\n") + 2  # body lines + the eko-deco brand line
         fig = Figure(figsize=(4.6, max(2.0, 0.24 * n + 0.5)), dpi=150)
         FigureCanvasAgg(fig)

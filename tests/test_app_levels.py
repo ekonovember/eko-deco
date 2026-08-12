@@ -258,7 +258,11 @@ class TestReadoutAgreesWithTheReportLayer(unittest.TestCase):
         res, text = self._result(), self._readout()
         self.assertIn(f"{res.density_g_l:.1f} g/L", text)
         self.assertIn(f"{res.cns_pct:.0f}% / {res.otu:.0f}", text)
-        self.assertIn(f"{res.end_m:.0f} m (O₂ narcotic)", text)
+        # Through the app's own fold: on a machine whose font cannot render
+        # the subscript at cell width the card says "O2", and the test has to
+        # ask the same question the widget answered.
+        self.assertIn(self.app._card_text(f"{res.end_m:.0f} m (O₂ narcotic)"),
+                      text)
         self.assertIn(f"{res.surface_ceiling_m:.2f} m", text)
 
     def test_the_emergency_checkbox_clears_the_screen_and_the_card(self):
@@ -282,6 +286,66 @@ class TestReadoutAgreesWithTheReportLayer(unittest.TestCase):
         for c in res.gas.cylinders:
             if c.tank_l > 0 and c.pressure_bar > 0:
                 self.assertIn(f"{c.bar_used:.0f} bar", text)
+
+    def test_a_folded_card_is_pure_ascii(self):
+        """The fold exists because a fallback font renders `─` at twice the
+        cell width, shearing every frame on screen. It can only work if it
+        covers *every* non-ASCII glyph a card prints — which glyphs a given
+        machine's fallback covers is not knowable here, so the invariant is
+        "folded means ASCII", checkable anywhere.
+
+        Asserted on the folded text directly rather than on `_box_ok`, so it
+        holds on a machine whose font is fine and never folds in practice."""
+        self.app.recompute()
+        raw = (self.app.readout.get("1.0", tk.END)
+               + self.app.runtime_text.get("1.0", tk.END))
+        folded = raw.translate(app._CARD_ASCII)
+        leftover = sorted({c for c in folded if not c.isascii()})
+        self.assertEqual(leftover, [],
+                         f"add these to app._CARD_ASCII: {leftover}")
+
+    def test_every_line_of_a_card_is_the_same_width(self):
+        """The frame is only a frame if the rows agree on where it ends. Runs
+        on the folded text, which is what a widget with a fallback font shows —
+        the shear this catches was invisible in the string and obvious on
+        screen only because the glyphs were wider than the cells."""
+        self.app.recompute()
+        for pane in (self.app.readout, self.app.runtime_text):
+            lines = [ln.translate(app._CARD_ASCII)
+                     for ln in pane.get("1.0", tk.END).splitlines()]
+            card: list[str] = []
+            for line in [*lines, ""]:
+                if line.startswith(("+", "|")):
+                    card.append(line)
+                    continue
+                if card:
+                    widths = {len(ln) for ln in card}
+                    self.assertEqual(len(widths), 1,
+                                     f"ragged card, widths {sorted(widths)}:\n"
+                                     + "\n".join(card))
+                card = []
+
+    def test_a_long_title_wraps_instead_of_stretching_a_column(self):
+        """A sentence over a table used to add its overflow to one column —
+        on the gas-usage card, to 'bar left', which pushed the figures a
+        finger's width from the data. The prose gives, not the grid."""
+        # A grid wider than `_MIN_CARD_TEXT`, like the real gas-usage card:
+        # below that floor a card is allowed to stretch to 40 columns rather
+        # than wrap prose one word per line.
+        heads = ["scenario", "gas", "have", "need", "(emrg)", "bar left"]
+        rows = [["OK", "EAN30", "5280", "2798", "(3248)", "103 / 85"],
+                ["lost", "EAN30", "5280", "3511", "(5031)", "74 / 10"]]
+        aligns = ["<", "<", ">", ">", ">", ">"]
+        wide = app.format_card(
+            ["A title line long enough to be a sentence about the gas plan, "
+             "wrapping rather than stretching the table under it"],
+            rows, headers=heads, aligns=aligns)
+        snug = app.format_card(["short"], rows, headers=heads, aligns=aligns)
+        # the grid rows are identical; only the number of prose lines differs
+        self.assertEqual([ln for ln in wide if ln.startswith("│ OK")],
+                         [ln for ln in snug if ln.startswith("│ OK")])
+        self.assertEqual(len(wide[0]), len(snug[0]))
+        self.assertGreater(len(wide), len(snug))
 
     def test_the_turn_pressure_can_be_hidden_on_its_own(self):
         self.app.emergency.set(True)
