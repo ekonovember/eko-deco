@@ -30,6 +30,8 @@ dependencies = []
 dynamic = ["version"]
 
 [project.optional-dependencies]
+# matplotlib backs both the GUI (deco.app) and the printed runtime card
+# (deco.cards). The core, the CLI and the config layer stay stdlib-only.
 gui = ["matplotlib>=3.5"]
 # decotengu / decodaitengu are third-party decompression libraries used as
 # TEST ORACLES only (tests/python_oracles.py). Both are GPL-3: they are pip
@@ -92,12 +94,13 @@ ignore = [
 ]
 
 [tool.ruff.lint.per-file-ignores]
-# The GUI must call matplotlib.use() before the backend imports; the oracle
-# wrappers may only be imported after a compiler probe has succeeded, so the
-# cross-checks can skip instead of erroring on a machine with no g++/gfortran.
+# The GUI and the card engine must call matplotlib.use() before the backend
+# imports; the oracle wrappers may only be imported after a compiler probe has
+# succeeded, so the cross-checks can skip instead of erroring on a machine with
+# no g++/gfortran.
 "src/deco/app.py" = ["E402"]
-# Same reason: the card generator must select the headless backend before pyplot.
-"cards/make_cards.py" = ["E402"]
+# Same reason: the card engine must select the headless backend before pyplot.
+"src/deco/cards.py" = ["E402"]
 "tests/test_baker_crosscheck.py" = ["E402"]
 "tests/test_subsurface_crosscheck.py" = [
   "E402",
@@ -125,8 +128,8 @@ no_implicit_optional = true
 # its stubs pull in numpy's, which use `type` statements — 3.12+ syntax that
 # `python_version = "3.10"` above (correctly) rejects. `ignore_missing_imports`
 # is not enough: mypy still parses stubs it finds, so the imports have to be
-# skipped outright. deco.app only ever calls into matplotlib; nothing of ours
-# depends on its types.
+# skipped outright. deco.app and deco.cards only ever call into matplotlib;
+# nothing of ours depends on its types.
 [[tool.mypy.overrides]]
 module = ["matplotlib.*", "numpy.*"]
 ignore_missing_imports = true

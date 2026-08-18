@@ -6,6 +6,20 @@ pre-1.0, so anything may still move.
 
 ## [Unreleased]
 
+### Changed — the runtime card ships with the package
+
+- **`cards/make_cards.py` is now `deco.cards`**, so `pip install eko-deco[gui]`
+  gives you a planner that can print the card it plans. `deco.app` and
+  `deco.cards` are the two modules allowed to import matplotlib; the model, the
+  report layer, the config layer and the CLI stay standard library only.
+  `python -m deco.cards` renders the example into the current directory (it
+  used to write next to the module). `cards/` remains the workspace — the
+  format reference, the vendor citation, and the `make_scenario.py` driver.
+  DECISIONS #31.
+- **Fixed: `cards/make_scenario.py` could not run.** It still passed
+  `--sac-multiplier`, removed when the emergency SAC became an absolute rate,
+  so every invocation exited 2.
+
 ### Changed — the GUI stops re-planning the dive on every keystroke
 
 - **Typing in a settings box costs one recompute, not one per character.**

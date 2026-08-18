@@ -12,13 +12,23 @@ Sizes are millimetres, origin bottom-left. TTS is rounded UP, RUN truncated
 
 Usage: build a card spec (see EXAMPLE at the bottom for the shape), then
 
-    save_card(spec, Path("mycard.pdf"))       # one card, exact size, + .png
-    save_sheet([spec, spec2], Path("a4.pdf")) # 4x each on A4 with crop marks
+    from deco import cards
+    cards.save_card(spec, Path("mycard.pdf"))       # one card, exact size, + .png
+    cards.save_sheet([spec, spec2], Path("a4.pdf")) # 4x each on A4 with crop marks
+
+``python -m deco.cards`` renders EXAMPLE into the current directory.
+
+This is the second module allowed to import matplotlib, after ``deco.app``:
+the printed card is a product surface, not a development script, so it ships
+in the wheel under the ``[gui]`` extra rather than living beside the repo.
+``cards/`` remains the workspace — ``cards/README.md`` is the reference for the
+printed format, and ``cards/make_scenario.py`` is a driver that feeds this
+engine one particular pair of dives.
 
 Generate the numbers with e.g.
 
     python -m deco.cli plan --depth D --time T --gas GAS --deco-gas GAS \
-        --gf-low LO --gf-high HI --sac 20 --sac-multiplier 1.5 --problem-time 2
+        --gf-low LO --gf-high HI --sac 20 --sac-emergency 30 --problem-time 2
 
 re-running per contingency column, and again with `--deco-gas` dropped for the
 LOST table and `--divers 2` for the team min-gas / turn figures.
@@ -41,7 +51,10 @@ GREY = "#555555"
 RULE = "#9a9a9a"
 RED = "#a3101a"
 LEFT, RIGHT = 2.0, 45.0    # x of the two contingency tables
-OUT = Path(__file__).resolve().parent
+# Where the demo below writes. The **current directory**, not the module's own:
+# this ships inside the wheel now, and an installed package directory is the
+# wrong place for output even when it happens to be writable.
+OUT = Path.cwd()
 
 
 class Pen:

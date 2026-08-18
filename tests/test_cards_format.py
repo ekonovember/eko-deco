@@ -1,9 +1,9 @@
 """The printed card carries the same numbers as the planner.
 
-`cards/make_cards.py` is a layout engine outside the package: it computes
-nothing and is fed numbers. That is exactly where a notation drifts — someone
-reads the CLI's segment table, copies the *hold* into a cell, and the card is
-quietly one ascent per stop out of step with the schedule it claims to be.
+`deco.cards` is a layout engine: it computes nothing and is fed numbers. That
+is exactly where a notation drifts — someone reads the CLI's segment table,
+copies the *hold* into a cell, and the card is quietly one ascent per stop out
+of step with the schedule it claims to be.
 
 `rows_from_scenarios` removes the transcription step by building the rows from
 `deco plan --json`, and these tests pin that what lands in a cell is what
@@ -15,21 +15,16 @@ Skips without matplotlib, like the other rendering suites.
 from __future__ import annotations
 
 import json
-import os
-import sys
 import unittest
 
 from deco import buhlmann as b
 from deco import cli
 from deco import report as rp
 
-_CARDS = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
-                      "cards")
 try:
-    sys.path.insert(0, _CARDS)
-    import make_cards as mc
+    from deco import cards as mc
     _HAVE_CARDS = True
-except Exception:                      # no matplotlib, or cards/ not present
+except Exception:                      # no matplotlib
     _HAVE_CARDS = False
 
 

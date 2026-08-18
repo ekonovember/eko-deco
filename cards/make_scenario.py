@@ -8,7 +8,7 @@ that lands on MultiDeco's runtime (`tests/test_multideco_scenarios.py`).
 Every number comes from `deco.cli plan --json`, so a cell cannot drift from the
 schedule — the warnings included: scenario 1 breathes EAN36 at 32 m, which is
 ppO2 1.52 at these constants, and the card says so (DECISIONS.md #4).
-`make_cards.py` is the layout engine; this file is the dives.
+`deco.cards` is the layout engine; this file is the dives.
 
     python cards/make_scenario.py        # both
     python cards/make_scenario.py 1      # just scenario 1
@@ -30,7 +30,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
-from make_cards import (
+from deco.cards import (
     BAND,
     GREY,
     INK,
@@ -61,7 +61,10 @@ SCENARIOS = {
 }
 #: The export states both rates; SAC/multiplier/problem time are the planner's.
 RATES = ["--descent-rate", "8", "--ascent-rate", "9"]
-GAS_PLAN = ["--sac", "20", "--sac-multiplier", "1.5", "--problem-time", "2"]
+# 30 L/min is the old "--sac-multiplier 1.5" against a 20 L/min working SAC.
+# The emergency rate is an absolute figure everywhere now (DECISIONS.md #28),
+# and this file went on passing the removed flag — every run exited 2.
+GAS_PLAN = ["--sac", "20", "--sac-emergency", "30", "--problem-time", "2"]
 #: Bottom-time contingency columns, on the 3 min grid. `*` marks the plan.
 BOTTOM_TIMES = (34, 37, 40, 43)
 
@@ -266,8 +269,8 @@ def _switch_rows(plan_json):
 
 
 def _save_two_table_sheet(spec, path):
-    """The A4 imposition of card B — same geometry as `make_cards.save_sheet`."""
-    from make_cards import A4_H, A4_W, COLS, GUTTER, MARK, ROWS, VGAP, Rectangle
+    """The A4 imposition of card B — same geometry as `deco.cards.save_sheet`."""
+    from deco.cards import A4_H, A4_W, COLS, GUTTER, MARK, ROWS, VGAP, Rectangle
 
     fig = plt.figure(figsize=(A4_W / 25.4, A4_H / 25.4), dpi=300)
     ax = fig.add_axes((0, 0, 1, 1))

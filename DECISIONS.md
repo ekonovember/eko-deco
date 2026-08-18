@@ -1024,3 +1024,36 @@ cancels its predecessors and leaves exactly one job standing — rather than on
 output. It drives the scheduling directly instead of spinning up an event loop,
 which would also let matplotlib's queued idle-draws fire at canvases earlier
 tests had already destroyed.
+
+## #31 — The card engine ships in the package; `cards/` stays the workspace
+
+The 90 × 64 mm wetnotes runtime card is what a diver actually carries into the
+water. It is not a development script, and it was living outside the package as
+`cards/make_cards.py` — so `pip install eko-deco[gui]` gave you a planner that
+could not print one, and the test that pins the card's numbers had to reach it
+by `sys.path.insert`.
+
+It is now `src/deco/cards.py`. That makes **`deco.app` and `deco.cards`** the
+two modules allowed to import matplotlib, where the rule used to name only the
+GUI. The rule that matters is unchanged and is not weakened by this: the model,
+the report layer, the config layer and the CLI stay standard library only
+(#1). What widened is which *optional* module may sit behind the `[gui]` extra,
+and the answer is "the ones that draw" — a window and a printed card are the
+same kind of thing.
+
+`cards/` remains, as the workspace rather than the engine:
+`cards/README.md` is still the reference for the printed format,
+`cards/reference/` still cites the vendor manual by URL + hash, and
+`make_scenario.py` is still a driver for two specific dives — the sort of file
+the directory exists to hold and the package exists not to.
+
+Two things fell out of the move, both worth recording because neither was the
+point of it:
+
+* `make_scenario.py` was **broken**, and had been since the emergency SAC became
+  an absolute rate (#28). It still passed `--sac-multiplier`, so every run
+  exited 2. Nothing caught it because a driver for two named dives has no test —
+  which is the argument for keeping drivers out of the package, not against it.
+* The engine wrote its demo output next to itself (`Path(__file__).parent`).
+  Inside a wheel that is the wrong directory even when it is writable, so
+  `python -m deco.cards` now renders into the current one.
