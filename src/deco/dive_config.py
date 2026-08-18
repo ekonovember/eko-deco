@@ -99,6 +99,7 @@ deltas are migrated on load (delta → round(delta/3) steps; depth only deeper).
 from __future__ import annotations
 
 import contextlib
+import difflib
 import json
 import os
 
@@ -242,6 +243,13 @@ def normalize(cfg: dict) -> dict:
 
 def _merged(cfg: dict) -> dict:
     base = default_config()
+    # Same rule as levels, gases and repeats (#9, #24) — now applied to the
+    # object that carries the GF, the SAC, the ppO2 window, the rates and the
+    # environment, which is where a typo costs the most. `{"gf_hi": 95}` used to
+    # leave gf_high at its default AND survive `save()`, so the file went on
+    # saying 95 while every plan used 70: a wrong dive that hid its own cause
+    # and exited 0 (DECISIONS.md #29).
+    _reject_unknown(cfg, tuple(base), LEGACY_KEYS, "config")
     # "gases", "levels" and "contingency" are merged entry-by-entry below: a
     # partial hand-edited block must fill in defaults, not clobber them wholesale.
     base.update({k: v for k, v in cfg.items()
@@ -335,11 +343,20 @@ GAS_LEGACY = ("id",)
 def _reject_unknown(d: dict, known: tuple[str, ...], legacy: tuple[str, ...],
                     what: str) -> None:
     unknown = sorted(set(d) - set(known) - set(legacy))
-    if unknown:
-        raise ValueError(
-            f"{what} has unknown key(s) {', '.join(unknown)} — expected "
-            f"{', '.join(known)}. A mistyped key would otherwise be filled in "
-            f"with a default and plan a different dive")
+    if not unknown:
+        return
+    # Name the near miss where there is one. The config object has 27 valid
+    # keys, so "expected <27 names>" alone buries the answer the reader needs:
+    # `gf_hi` is a typo for `gf_high`, and saying so is the difference between
+    # a fixed file and a hunt through the schema.
+    guesses = {k: difflib.get_close_matches(k, known, n=1, cutoff=0.7)
+               for k in unknown}
+    named = ", ".join(f"{k} (did you mean {guesses[k][0]}?)" if guesses[k]
+                      else k for k in unknown)
+    raise ValueError(
+        f"{what} has unknown key(s) {named} — expected "
+        f"{', '.join(known)}. A mistyped key would otherwise be filled in "
+        f"with a default and plan a different dive")
 
 
 def _merge_level(l: dict) -> dict:

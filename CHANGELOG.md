@@ -6,6 +6,18 @@ pre-1.0, so anything may still move.
 
 ## [Unreleased]
 
+### Fixed — a mistyped config key is refused instead of planning a different dive
+
+- **Unknown top-level keys in `dive_plan.json` are now an error.** Levels, gases
+  and repeats already refused them (DECISIONS #9, #24); the object carrying the
+  gradient factors, the SAC, the ppO₂ window, the rates and the environment did
+  not. `{"gf_hi": 95}` planned at GF-high 70, exited 0, and `save()` wrote the
+  typo back out — so the file kept advertising a setting nothing honoured. The
+  message names the near miss (`gf_hi (did you mean gf_high?)`). DECISIONS #29.
+- **`deco plan` no longer calls a valid-JSON config "not readable JSON".** A
+  mistyped key, an out-of-range mix or a level missing its runtime now report
+  themselves, instead of sending you looking for a missing comma.
+
 ### Changed — gas estimates on every plan; the emergency reserve is a block you switch
 
 - **The baseline SAC/RMV is always in force.** Every plan reports gas now —

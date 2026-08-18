@@ -957,3 +957,35 @@ back-gas reserve is the entire ascent; with the stack intact an 11 L stage at
 a real rig and not a rounding difference. It is deliberately the pessimistic
 reading of a shared ascent — see #7 on why this particular number is allowed
 only to err upward.
+
+## #29 — The config object is as strict about typos as the blocks inside it
+
+`dive_config` refused an unknown key inside a level, a gas and a repeat, each
+for the reason #9 and #24 set out: a mistyped key is simply *absent*, so the
+default fills in and the file plans a dive nobody described. That rule was
+never applied to the top-level object — the one holding the gradient factors,
+the SAC, the whole ppO₂ window, the rates and the environment.
+
+So `{"gf_hi": 95}` planned at GF-high 70 and exited 0. Worse, `save()` copied
+the unknown key straight back out, so the file went on advertising 95 while
+every schedule it produced used 70. The evidence agreed with the mistake, which
+is the failure mode that outlives the mistake.
+
+`_merged` now runs the same `_reject_unknown` check on the config itself. Three
+consequences worth stating:
+
+* **The near miss is named.** With 27 valid keys, `expected <27 names>` buries
+  the answer, so the message adds `gf_hi (did you mean gf_high?)` via
+  `difflib`. An error nobody can act on is a log line, not a guard.
+* **The lenient load is unaffected in practice.** Both front ends already load
+  `strict=True` (the CLI exits 2, the GUI shows "⚠ config unreadable —
+  defaults"), so the strict path is the only one a user meets.
+* **It constrains us, not just the user.** Everything the CLI's `--save` and
+  the GUI's `_collect_config` write must be a key `default_config()` declares,
+  or the app would refuse its own output on the next load.
+  `test_every_key_the_front_ends_write_is_a_known_key` pins that direction; it
+  is the price of the guard and worth paying.
+
+The CLI's error text was conflating the two failures it can hit — a file that
+is not JSON, and JSON that is not a dive. Only the first says "not readable
+JSON" now; a mistyped key sends the reader to the key, not to a missing comma.

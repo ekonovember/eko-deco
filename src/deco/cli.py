@@ -446,9 +446,15 @@ def cmd_plan(args) -> int:
         except FileNotFoundError:
             print(f"plan: config '{load_path}' not found.", file=sys.stderr)
             return 2
-        except (OSError, ValueError) as e:
+        except json.JSONDecodeError as e:
             print(f"plan: config '{load_path}' is not readable JSON: {e}",
                   file=sys.stderr)
+            return 2
+        except (OSError, ValueError) as e:
+            # Valid JSON, invalid dive: a mistyped key, an out-of-range mix, a
+            # level missing its runtime. Saying "not readable JSON" here sent
+            # the reader looking for a comma that was never the problem.
+            print(f"plan: config '{load_path}': {e}", file=sys.stderr)
             return 2
         print(f"plan: dive loaded from '{load_path}' — CLI profile/gas/GF "
               "flags are ignored (edit the config instead).", file=sys.stderr)

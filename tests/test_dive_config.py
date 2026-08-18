@@ -278,6 +278,47 @@ class TestDiveConfig(unittest.TestCase):
         with self.assertRaises(ValueError):
             dc.normalize({"levels": [{"depth_m": 40}]})       # missing runtime
 
+    def test_a_mistyped_top_level_key_is_refused(self):
+        """The same rule as levels, gases and repeats — applied to the object
+        that holds the GF, the SAC, the ppO2 window and the environment.
+
+        `{"gf_hi": 95}` used to leave gf_high at 70 and plan a different dive,
+        exit 0 (DECISIONS.md #29). The near-miss suggestion is part of the
+        contract: with 27 valid keys, naming the one that was meant is what
+        makes the error actionable."""
+        with self.assertRaises(ValueError) as e:
+            dc.normalize({"gf_hi": 95})
+        self.assertIn("gf_hi", str(e.exception))
+        self.assertIn("did you mean gf_high?", str(e.exception))
+        # …and the strict load the CLI and the GUI both use refuses the file
+        with tempfile.TemporaryDirectory() as d:
+            path = os.path.join(d, "c.json")
+            with open(path, "w") as f:
+                json.dump({"levels": [{"depth_m": 40, "runtime_min": 25}],
+                           "ppo2_botom": 1.6}, f)
+            with self.assertRaises(ValueError):
+                dc.load(path, strict=True)
+
+    def test_a_mistyped_key_cannot_be_laundered_through_a_save(self):
+        """The worst part of the old behaviour was not the wrong plan, it was
+        that `save()` wrote the typo back out: the file kept advertising a
+        setting nothing honoured, so the evidence agreed with the mistake."""
+        with self.assertRaises(ValueError):
+            dc.save({"levels": [{"depth_m": 40, "runtime_min": 25}],
+                     "gf_hi": 95}, os.devnull)
+
+    def test_every_key_the_front_ends_write_is_a_known_key(self):
+        """The strictness above is only safe because nothing we write trips it.
+        A new config key added to one front end and not to `default_config()`
+        would make the app refuse its own output on the next load."""
+        known = set(dc.default_config()) | set(dc.LEGACY_KEYS)
+        self.assertEqual(set(dc.default_config()) - known, set())
+        # a saved round trip of the richest config we can build
+        cfg = dc.default_config()
+        cfg["repeats"] = [{"surface_interval_min": 45,
+                           "levels": [{"depth_m": 22, "runtime_min": 35}]}]
+        self.assertEqual(set(dc.normalize(cfg)) - known, set())
+
     def test_a_fraction_where_a_percentage_belongs_is_refused(self):
         """o2 0.32 is EAN32 typed as a fraction; taken literally it is a
         0.32 % hypoxic mix, and the planner would happily schedule it."""
