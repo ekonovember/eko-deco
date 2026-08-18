@@ -6,6 +6,19 @@ pre-1.0, so anything may still move.
 
 ## [Unreleased]
 
+### Changed — the GUI stops re-planning the dive on every keystroke
+
+- **Typing in a settings box costs one recompute, not one per character.**
+  Continuous inputs (entries, the cut-table sliders) now coalesce into a single
+  recompute 150 ms after you stop; discrete actions — adding a level, switching
+  dive, toggling dark mode — are immediate as before. Typing `232` into a fill
+  pressure used to run the whole model, chart and both cards three times.
+  DECISIONS #30.
+- **The worst-moment reserve scan runs once per plan instead of once per
+  cylinder.** A three-level dive with three mixes re-planned the same truncated
+  dives six times over; `report.compute_plan_result` is ~2.4× faster on that
+  profile. Every printed and JSON figure is unchanged, byte for byte.
+
 ### Fixed — a mistyped config key is refused instead of planning a different dive
 
 - **Unknown top-level keys in `dive_plan.json` are now an error.** Levels, gases

@@ -989,3 +989,38 @@ consequences worth stating:
 The CLI's error text was conflating the two failures it can hit — a file that
 is not JSON, and JSON that is not a dive. Only the first says "not readable
 JSON" now; a mistyped key sends the reader to the key, not to a missing comma.
+
+## #30 — Widget traces schedule a recompute; they do not run one
+
+Every settings widget in the GUI traced straight into `recompute()`. That
+looks like the simple thing and reads as a direct line from input to output,
+which is why it survived so long — but `recompute()` is not a small function.
+It is the whole model run for the day (the series, one re-plan per lost-gas
+scenario, the ceiling profile), then the chart, then both cards. Typing `232`
+into a fill-pressure box ran all of it three times, for `2`, `23` and `232`,
+and only the last answer was ever seen. Dragging a cut-table slider was worse:
+each step re-plans the entire contingency grid, not just the dive.
+
+So the traces now call `_schedule_recompute()`, which cancels any pending job
+and re-arms a 150 ms `after`. The line is drawn at the **kind of input**, not
+at the widget:
+
+* **Continuous** — typing in an entry, dragging a slider — is debounced. The
+  intermediate values are not dives anybody asked to plan.
+* **Discrete** — adding a level, removing a gas row, switching dive, toggling
+  the theme, the initial build — calls `recompute()` directly. One event, one
+  answer, and no burst to coalesce.
+
+`recompute()` itself stays synchronous and public. It is the entry point for
+anything that wants the answer *now*, and that includes the test suite, which
+deliberately runs without a mainloop — a scheduled callback would never fire
+there. Any pending job is cancelled in `_on_close`, because the last keystroke
+before closing the window is the ordinary way to leave one queued.
+
+This is a change nothing user-visible would reveal if it regressed: the numbers
+are identical either way, only the count of times they are computed differs.
+`TestRecomputeIsDebounced` therefore asserts on the machinery — that a burst
+cancels its predecessors and leaves exactly one job standing — rather than on
+output. It drives the scheduling directly instead of spinning up an event loop,
+which would also let matplotlib's queued idle-draws fire at canvases earlier
+tests had already destroyed.

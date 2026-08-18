@@ -479,3 +479,84 @@ class TestDiveSeries(unittest.TestCase):
         self.app._add_dive()
         self.app.recompute()
         self.assertIn("DIVE SERIES", self.app.readout.get("1.0", tk.END))
+
+
+@unittest.skipUnless(_HAVE_GUI, "Tk/matplotlib GUI not available")
+class TestRecomputeIsDebounced(unittest.TestCase):
+    """Typing a number must cost one recompute, not one per keystroke.
+
+    A recompute is the whole model run — the series, one re-plan per lost-gas
+    scenario, the ceiling profile — plus the chart and both cards. Every
+    settings widget traced straight into it, so typing "232" into a fill
+    pressure ran all of that three times and only the last result was ever
+    seen. The indirection is invisible in the output, which is exactly why it
+    needs a test: nothing would look wrong if it regressed.
+
+    Driven through the scheduling machinery rather than a real event loop.
+    These tests have no mainloop by design (every other GUI suite here relies
+    on that), and spinning one up would also let matplotlib's queued idle-draws
+    fire at canvases earlier tests have already destroyed.
+    """
+
+    def setUp(self):
+        self.root = tk.Tk()
+        self.root.withdraw()
+        self.app = app.DecoApp(self.root)
+        self.calls = []
+        self._real = self.app.recompute
+        self.app.recompute = lambda: self.calls.append(1)
+        self.cancelled = []
+        self._real_cancel = self.root.after_cancel
+        self.root.after_cancel = lambda i: (self.cancelled.append(i),
+                                            self._real_cancel(i))[1]
+
+    def tearDown(self):
+        self.root.after_cancel = self._real_cancel
+        self.app.recompute = self._real
+        self.root.destroy()
+
+    def test_a_burst_of_keystrokes_recomputes_once(self):
+        pressure = self.app.gas_rows[0]["pressure"]
+        pressure.set("")
+        for ch in "232":                       # as typed, one trace per digit
+            pressure.set(pressure.get() + ch)
+        # nothing has run yet: the whole point is that the intermediate values
+        # ("2", "23") never cost a plan
+        self.assertEqual(self.calls, [])
+        # …because each keystroke cancelled the one before it: 4 schedules
+        # (the blanking counts), 3 cancellations, 1 job left standing
+        self.assertEqual(len(self.cancelled), 3)
+        self.assertIsNotNone(self.app._recompute_job)
+        self.app._run_scheduled_recompute()    # what the timer would call
+        self.assertEqual(len(self.calls), 1)
+        self.assertIsNone(self.app._recompute_job)
+
+    def test_a_direct_call_is_still_synchronous(self):
+        """`recompute()` is the entry point for anything that wants the answer
+        now — the initial build, the theme switch, and every test above."""
+        self.app.recompute()
+        self.assertEqual(len(self.calls), 1)
+
+    def test_the_slider_is_debounced_too(self):
+        """A cut-table slider re-plans the whole grid per step of a drag, which
+        makes it the most expensive continuous input in the window."""
+        # A tk.Scale calls its `command` on drag, not when the bound variable
+        # is assigned — so drive the callback the way the widget does.
+        scale = self.app._cont_scales[1]
+        cmd = scale.cget("command")
+        for step in ("2", "3", "4"):
+            self.app.root.call(cmd, step)
+        self.assertEqual(self.calls, [])
+        self.assertEqual(len(self.cancelled), 2)
+        self.assertIsNotNone(self.app._recompute_job)
+
+    def test_a_pending_recompute_is_cancelled_on_close(self):
+        """The last keystroke before closing is the normal way to leave one
+        queued; it must not fire into a destroyed widget tree."""
+        self.app.sac.set("21")
+        self.assertIsNotNone(self.app._recompute_job)
+        self.app._on_close()                   # destroys the root
+        self.assertIsNone(self.app._recompute_job)
+        self.root = tk.Tk()                    # tearDown needs something live
+        self.root.withdraw()
+        self.root.after_cancel = self._real_cancel

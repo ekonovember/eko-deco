@@ -406,6 +406,7 @@ class DecoApp:
         self._building = True
         self._base_cfg = dc.default_config()
         self._plan_ok = False        # True only when a valid plan is on screen
+        self._recompute_job: str | None = None   # pending debounce, see below
         self._build_layout()
         self._apply_theme()
         # A missing config is a normal first launch; a *broken* one must not
@@ -518,7 +519,7 @@ class DecoApp:
                                     textvariable=self.surface_interval)
         self.si_unit = ttk.Label(series, text="min before")
         self.surface_interval.trace_add(
-            "write", lambda *_: None if self._building else self.recompute())
+            "write", lambda *_: None if self._building else self._schedule_recompute())
         #: Profiles of every dive in the day. Index 0 is the one on screen at
         #: start; each entry is {"surface_interval_min": float, "levels": [...]}
         #: in the config's own shape, so stashing and saving are the same act.
@@ -623,7 +624,7 @@ class DecoApp:
         for var in (self.two_divers, self.emergency, self.turn_pressure,
                     self.turn_rule):
             var.trace_add("write",
-                          lambda *_: None if self._building else self.recompute())
+                          lambda *_: None if self._building else self._schedule_recompute())
         self.emergency.trace_add("write", lambda *_: self._sync_emergency_state())
         self._sync_emergency_state()
 
@@ -646,8 +647,10 @@ class DecoApp:
                                ("− depth (×3 m)", self.cont_db),
                                ("+ depth (×3 m)", self.cont_da)))
         for i, scale in enumerate(self._cont_scales):
+            # The other continuous input, and the most expensive: every step of
+            # a drag re-plans the whole cut-table grid, not just the dive.
             scale.configure(command=lambda _v: None if self._building
-                            else self.recompute())
+                            else self._schedule_recompute())
             scale.grid(row=i // 2, column=i % 2, sticky="ew", padx=2)
         cont.columnconfigure(0, weight=1)
         cont.columnconfigure(1, weight=1)
@@ -779,6 +782,13 @@ class DecoApp:
                 save_ui_settings(self._ui_settings)
         except ValueError:
             pass
+        # A debounced recompute still in the queue would fire into a destroyed
+        # widget tree: the last keystroke before closing is the normal way to
+        # get one.
+        if self._recompute_job is not None:
+            with contextlib.suppress(tk.TclError):
+                self.root.after_cancel(self._recompute_job)
+            self._recompute_job = None
         self.root.destroy()
 
     def _on_dark_toggle(self, *_) -> None:
@@ -816,7 +826,7 @@ class DecoApp:
         # Recompute from a variable trace, not the Spinbox command, so a
         # programmatic var.set() (loading dive_plan.json) refreshes too.
         var.trace_add("write",
-                      lambda *_: None if self._building else self.recompute())
+                      lambda *_: None if self._building else self._schedule_recompute())
         return var
 
     def _num(self, var, default: float, lo: float | None = None) -> float:
@@ -843,7 +853,8 @@ class DecoApp:
         ttk.Checkbutton(row, text="Last stop 6 m",
                         variable=self.last_stop6).pack(side=tk.LEFT, padx=(10, 0))
         for v in (self.gf_lo, self.gf_hi, self.last_stop6):
-            v.trace_add("write", lambda *_: None if self._building else self.recompute())
+            v.trace_add("write", lambda *_: None if self._building
+                        else self._schedule_recompute())
         self._add_water_row(parent)
 
     def _add_water_row(self, parent) -> None:
@@ -948,7 +959,8 @@ class DecoApp:
         ttk.Label(sw, text="at-first-stop holds the switch until you stop"
                   ).pack(side=tk.LEFT, padx=(6, 0))
         self.gas_switch_policy.trace_add(
-            "write", lambda *_: self.recompute())
+            "write",
+            lambda *_: None if self._building else self._schedule_recompute())
         grid = ttk.Frame(body)
         grid.pack(fill=tk.X, pady=2)
         self.min_stop_time = self._add_spin(grid, "Stop grid", 0.1, 10.0, 0.1,
@@ -1006,7 +1018,7 @@ class DecoApp:
                                   command=lambda: self._remove_level_row(row)))
         for var in (depth_var, run_var):
             var.trace_add(
-                "write", lambda *_: None if self._building else self.recompute())
+                "write", lambda *_: None if self._building else self._schedule_recompute())
         self.level_rows.append(row)
         self._regrid_level_rows()
         if recompute and not self._building:
@@ -1167,7 +1179,7 @@ class DecoApp:
                                   command=lambda: self._remove_gas_row(row)))
         for var in (role_var, fo2_var, fhe_var, tank_var, press_var, use_var):
             var.trace_add("write",
-                          lambda *_: None if self._building else self.recompute())
+                          lambda *_: None if self._building else self._schedule_recompute())
         self.gas_rows.append(row)
         self._regrid_gas_rows()
         if recompute and not self._building:
@@ -1311,6 +1323,36 @@ class DecoApp:
             deco_gases=tuple(deco),
             travel_gases=tuple(travel),
         )
+
+    #: How long a keystroke waits for the next one before the plan is redone
+    #: (ms). Short enough that pausing on a value feels immediate, long enough
+    #: to swallow a typed number.
+    RECOMPUTE_DELAY_MS = 150
+
+    def _schedule_recompute(self, delay: int | None = None) -> None:
+        """Coalesce a burst of keystrokes into one recompute.
+
+        Every settings widget traces into here rather than into `recompute`.
+        One recompute is the whole model run — the series, one re-plan per
+        lost-gas scenario, the ceiling profile — plus the chart and both cards,
+        so typing "232" into a fill-pressure box used to run all of it three
+        times, and the last two results were the only ones anybody saw.
+
+        `recompute` itself stays synchronous and is still the entry point for
+        anything that wants the answer *now*: the initial build, the theme
+        switch, and the tests (which never run a mainloop, so a scheduled
+        callback would never fire for them).
+        """
+        if self._recompute_job is not None:
+            with contextlib.suppress(tk.TclError):   # already fired/destroyed
+                self.root.after_cancel(self._recompute_job)
+        self._recompute_job = self.root.after(
+            self.RECOMPUTE_DELAY_MS if delay is None else delay,
+            self._run_scheduled_recompute)
+
+    def _run_scheduled_recompute(self) -> None:
+        self._recompute_job = None
+        self.recompute()
 
     def recompute(self) -> None:
         series = self._series()
