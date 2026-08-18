@@ -6,9 +6,10 @@ applyTo: "**/*.py"
 
 - Target Python 3.10+ (verified on 3.14). src layout: the package is `src/deco/`,
   imported as `from deco import buhlmann as b`.
-- **Keep `deco.buhlmann`, `deco.report`, `deco.dive_config` and `deco.cli`
-  dependency-free** (stdlib only). Only `deco.app` may import `matplotlib` /
-  `tkinter`. See `DECISIONS.md` #1.
+- **Keep `deco.buhlmann`, `deco.toxicity`, `deco.contingency`, `deco.report`,
+  `deco.dive_config` and `deco.cli` dependency-free** (stdlib only). Only
+  `deco.app` and `deco.cards` — the two that draw — may import `matplotlib` /
+  `tkinter`, and both sit behind the `[gui]` extra. See `DECISIONS.md` #1, #31.
 - Use `from __future__ import annotations`, type hints, and `@dataclass`. Match the
   existing concise style; comment only non-obvious math (cite the equation/source).
   Modern annotations only — `list[str]`, `X | None`, never `typing.List`/`Optional`.

@@ -30,7 +30,11 @@ has `deco` on PATH).
 
 ## Files
 
-- `src/deco/buhlmann.py` — library: `Gas` (incl. `end`/`density`), `Tissues`, `Level`/`plan_multilevel` (multi-level; `plan_dive` = one level; a `Level` is depth + cumulative runtime only — levels are contiguous, the transit is billed to the level's runtime, and a runtime too short to cover it is an error), `ndl`, `ceiling`, `ceiling_profile`, `time_to_surface`, `max_depth`/`average_depth`, `GasPlan`/`rock_bottom_liters`, `ppo2_violations`/`worst_ppo2_violations` (segments outside the ppO2 window — always surface these), `cns_otu` (NOAA CNS% + OTU), `contingency_schedules` (cut-table matrix, square @ max depth)
+- `src/deco/buhlmann.py` — library: `Gas` (incl. `end`/`density`), `Tissues`, `Level`/`plan_multilevel` (multi-level; `plan_dive` = one level; a `Level` is depth + cumulative runtime only — levels are contiguous, the transit is billed to the level's runtime, and a runtime too short to cover it is an error), `ndl`, `ceiling`, `ceiling_profile`, `time_to_surface`, `max_depth`/`average_depth`, `GasPlan`/`rock_bottom_liters`, `ppo2_violations`/`worst_ppo2_violations` (segments outside the ppO2 window — always surface these)
+- `src/deco/toxicity.py` — `cns_otu` (NOAA CNS% + Repex OTU). A downstream analysis of a planned dive, not part of the model — `from deco import toxicity`, not `buhlmann.cns_otu`
+- `src/deco/contingency.py` — `contingency_schedules` / `ContingencyCell` (the cut-table matrix, square @ max depth on a 3 min × 3 m grid)
+- `src/deco/report.py` — the shared layer both front ends render: `compute_plan_result` / `PlanResult`, warnings, per-cylinder gas, the wetnotes rows. Compute here, never in a front end
+- `src/deco/cards.py` — the printed 90 × 64 mm runtime card (needs matplotlib); it computes nothing, you feed it `deco plan --json`
 - `src/deco/cli.py` — `python -m deco.cli {plan|ndl|tissues} …` (`--json` for machine output)
 - `src/deco/dive_config.py` / `dive_plan.json` — shared JSON dive config (`levels` + gases + GF); `plan --save` writes it, the GUI reads it
 - `tests/` — `python -m unittest discover -s tests -t .` (the `-t .` is required); includes cross-checks against

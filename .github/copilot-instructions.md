@@ -17,9 +17,10 @@ changing model math, output, or the dependency policy.
   **warnings** are the safety surface instead (DECISIONS #4), so every
   schedule/NDL/ceiling path must show them.
 - Python 3.10+ (works on 3.14). src layout: the package is `src/deco/`.
-  The core (`deco.buhlmann`, `deco.report`, `deco.dive_config`, `deco.cli`) is
-  dependency-free; only `deco.app` needs matplotlib/tkinter. Don't add deps to
-  the core (DECISIONS #1).
+  The core (`deco.buhlmann`, `deco.toxicity`, `deco.contingency`,
+  `deco.report`, `deco.dive_config`, `deco.cli`) is dependency-free; only
+  `deco.app` and `deco.cards` need matplotlib/tkinter, both behind the `[gui]`
+  extra. Don't add deps to the core (DECISIONS #1, #31).
 - CLI: `deco {plan|ndl|tissues} … [--json]` (or `python -m deco.cli …`).
   GUI: `deco-gui`.
 - Run the suite after any model-math change:

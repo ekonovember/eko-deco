@@ -1,4 +1,5 @@
-# Generated cards - regenerate with make_cards.py, never commit.
+# Generated cards - regenerate with `python -m deco.cards` or
+# make_scenario.py, never commit.
 *.pdf
 *.png
 

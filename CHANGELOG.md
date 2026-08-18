@@ -6,6 +6,26 @@ pre-1.0, so anything may still move.
 
 ## [Unreleased]
 
+### Fixed — documentation caught up with the code
+
+- **The README's two screenshots were 25 commits stale** — they predated the
+  Emergency gas frame, the turn pressure and the cut-table sliders that both
+  the README and `CLAUDE.md` describe, and still showed the removed
+  `Emergency × 1.50` multiplier. Regenerated from a fixed, reproducible dive.
+- **Test counts corrected everywhere** (README said 174/258/284, CONTRIBUTING
+  said 200; it is 442) and re-framed: the count is always `Ran 442 tests`, and
+  it is the *skip* line that tells you what your machine lacks.
+- **Repetitive dives** and the **printable card PDF** were missing from the
+  README's feature list entirely.
+- Module lists in `CONTRIBUTING.md`, `.github/copilot-instructions.md`,
+  `.github/instructions/python.instructions.md`, `.claude/agents/dive-planner.md`
+  and the `deco-buhlmann` skill now name `deco.toxicity`, `deco.contingency`
+  and `deco.cards`.
+- **CI proves two more claims.** The GUI job now also runs the input-coverage
+  suite's widget arm — the thing that makes DECISIONS #19's "every input binds"
+  checkable — and the wheel check asserts `cards.py`, `toxicity.py` and
+  `contingency.py` really ship.
+
 ### Changed — oxygen clocks and the cut table move out of the model
 
 - **`deco.toxicity`** (`cns_otu`) and **`deco.contingency`**

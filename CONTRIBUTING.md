@@ -24,7 +24,7 @@ and `[dev]` adds ruff and mypy.
 ## The checks CI runs
 
 ```bash
-python -m unittest discover -s tests -t .   # 200 tests
+python -m unittest discover -s tests -t .   # 442 tests
 ruff check .
 mypy
 ```
@@ -32,18 +32,22 @@ mypy
 Optionally `pip install pre-commit && pre-commit install` to run the first two
 on every commit.
 
-Two of those 200 test modules compile the reference implementations —
-Subsurface's `deco.cpp` with **g++**, Erik Baker's `GFDECO` with **gfortran** —
-and skip themselves when the compiler is absent. `Ran 174 tests` on a machine
-without them is expected. On Windows, install MSYS2/MinGW-w64 or run the suite
-under WSL to get all 200.
+The count is always `Ran 442 tests`; the **skip** line is what varies, and a
+skip means this machine lacks something, never that data is missing. Two
+modules compile the reference implementations — Subsurface's `deco.cpp` with
+**g++**, Erik Baker's `GFDECO` with **gfortran** — and two more want the
+`[dev]` extra's Python oracles; the GUI and card-rendering tests want Tk and
+matplotlib. Expect 1 skip with everything installed, 45 without a display, and
+38 more without the compilers and extras. On Windows, install MSYS2/MinGW-w64
+or run the suite under WSL.
 
 ## House rules
 
-**Zero dependencies in the core.** `deco.buhlmann`, `deco.report`,
-`deco.dive_config` and `deco.cli` are standard library only. Only `deco.app`
-may import matplotlib and tkinter. This is [DECISIONS.md #1](DECISIONS.md) and
-it is not negotiable.
+**Zero dependencies in the core.** `deco.buhlmann`, `deco.toxicity`,
+`deco.contingency`, `deco.report`, `deco.dive_config` and `deco.cli` are
+standard library only. Only `deco.app` and `deco.cards` — the two that draw —
+may import matplotlib and tkinter, and both sit behind the `[gui]` extra. This
+is [DECISIONS.md #1](DECISIONS.md) (and #31) and it is not negotiable.
 
 **Warnings are load-bearing.** The planner deliberately plans bad profiles and
 flags them rather than refusing (#4). Any new output path must carry
@@ -74,8 +78,9 @@ fractions 0–1.
 
 ## When you add a CLI flag
 
-Update, in the same commit: `src/deco/cli.py`, `README.md`, and the Commands
-block in `CLAUDE.md`. The agent instructions are documentation with a job — a
+Update, in the same commit: `src/deco/cli.py`, `README.md`, the Commands block
+in `CLAUDE.md`, and the skill (`.claude/skills/deco-buhlmann/SKILL.md`) if the
+flag is one an agent would reach for. The agent instructions are documentation with a job — a
 stale module map is a bug.
 
 ## Decisions

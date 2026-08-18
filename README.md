@@ -101,8 +101,16 @@ Erik Baker's gradient factors — a zero-dependency core, plus a CLI and a Tkint
   Levels are pure depth/time periods; gas is chosen **automatically by role**
   (bottom gas while breathable, travel gas where not, deco gases on the ascent),
   so there is one source of truth and no per-level gas overrides to reconcile.
+- **Repetitive dives** — a whole day, not one dive: `--dive
+  DEPTH:RUNTIME[:SURFACE_INTERVAL]` per dive (or a `repeats` block in the
+  config, and a dive picker in the GUI). Residual loading is carried through the
+  surface intervals by the compartments themselves — no tables, no pressure
+  groups — so dive 2 owes more deco than dive 1 for the same profile.
 - Printable **runtime** (wetnotes card) in the GUI — depth / stop / runtime / gas
-  plus TTS and minimum-gas / turn pressure — exportable to PNG to take in the water.
+  / bar plus TTS and minimum-gas / turn pressure — exportable to PNG to take in
+  the water. The same card is available as a **print-ready 90 × 64 mm PDF**
+  (`deco.cards`, imposed 4× on A4 with crop marks) built straight from
+  `deco plan --json`, so a printed cell cannot drift from the schedule.
 - NDL calculator and tissue-loading report.
 
 ## Install
@@ -300,22 +308,33 @@ python -m unittest discover -s tests -t . -v
 ```
 
 No install and no third-party packages needed — `tests/__init__.py` puts `src/`
-on the path. The suite has two tiers:
+on the path. **442 tests** in three tiers:
 
-- **174 core tests** — constant counts, surface saturation, Haldane equivalence,
+- **404 core tests** — constant counts, surface saturation, Haldane equivalence,
   NDLs against published Bühlmann values (±5 min), multi-level profiles,
   gas-switch and travel-gas behaviour, ppO₂-violation and oxygen-toxicity
   (CNS/OTU) checks, END/density, the last-stop option, TTS / rock-bottom
   gas, the contingency cut-table matrix, the ceiling profile and config
   round-trips. Pure standard library: these run everywhere, including a bare
-  Windows Python.
-- **26 cross-check tests** — these compile the reference implementations
+  Windows Python. (Some of them draw, and so need Tk + matplotlib.)
+- **26 compiled cross-checks** — these build the reference implementations
   (Subsurface's `deco.cpp` with **g++**, Baker's `GFDECO` with **gfortran**) and
-  run eko-deco against them. Without those compilers the two modules skip
-  themselves and you see `Ran 258 tests` — that is a *missing compiler*, not
-  missing data; the skip message says so and tells you what to install. On
-  Windows, install MSYS2/MinGW-w64 (or just run the suite under WSL) to get all
-  284.
+  run eko-deco against them. On Windows, install MSYS2/MinGW-w64 or run the
+  suite under WSL to get them.
+- **12 third-party-oracle cross-checks** — `decotengu` and `decodaitengu` from
+  the `[dev]` extra, so "who is wrong" has more than two votes.
+
+The count you see is always `Ran 442 tests`; what varies is the **skip** line,
+and a skip here means *this machine lacks something*, never *this data is
+missing*:
+
+| Skipped | On a machine with |
+|---:|---|
+| 1 | everything — that one is a Shearwater Cloud fixture waiting to be filled |
+| 45 | no display (the GUI and card-rendering tests need Tk + matplotlib) |
+| +38 | no `g++`/`gfortran` and no `[dev]` extra |
+
+Each skip message says what to install.
 
 Every input the model takes is settable from all three front ends — the config
 file, the CLI and the GUI — and `tests/test_input_coverage.py` enumerates
@@ -381,18 +400,26 @@ listed in [`DECISIONS.md`](DECISIONS.md) #3.
 
 ```
 src/deco/          the package
-  buhlmann.py      the model — tissues, Schreiner, GF ceilings, gas planning
+  buhlmann.py      the model — tissues, Schreiner, GF ceilings, the planner, gas planning
+  toxicity.py      the oxygen clocks: NOAA CNS % and Repex OTU
+  contingency.py   the bottom-timer cut table
   report.py        everything user-facing that is computed, shared by both front ends
   dive_config.py   the dive_plan.json schema: load / save / normalize
   cli.py           the `deco` console front end
   app.py           the `deco-gui` Tkinter + matplotlib app
+  cards.py         the printed wetnotes runtime-card layout engine
   assets/          window/taskbar icons (packaged)
 tests/             unittest suites + the two compiled reference oracles
-examples/          ready-to-run command snippets
+cards/             the card workspace — the printed-format reference and a driver
+examples/          ready-to-run command snippets + the real planner exports
 pictures/          logo, screenshots, social preview, gen_assets.py
 dive_plan.json     the shared dive — agent- and hand-editable
 DECISIONS.md       why the planner does what it does, numbered and cited from code
 ```
+
+`buhlmann`, `toxicity`, `contingency`, `report`, `dive_config` and `cli` are
+standard library only; `app` and `cards` are the two that draw, and both live
+behind the `[gui]` extra.
 
 ## Contributing
 

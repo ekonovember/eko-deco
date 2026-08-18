@@ -36,6 +36,7 @@ ZHL-16C + Erik Baker gradient factors) in this repository.
 - Rock bottom and the emergency column are two different figures: rock bottom is
   the bottom gas's reserve; the `(emrg)` column is `need + reserve`
   (`DECISIONS.md` #7).
-- Keep the core (`deco.buhlmann`, `deco.report`, `deco.dive_config`,
-  `deco.cli`) dependency-free if you edit it, and run
+- Keep the core (`deco.buhlmann`, `deco.toxicity`, `deco.contingency`,
+  `deco.report`, `deco.dive_config`, `deco.cli`) dependency-free if you edit it,
+  and run
   `python -m unittest discover -s tests -t . -v` after any model change.
