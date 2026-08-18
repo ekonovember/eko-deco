@@ -22,6 +22,8 @@ from dataclasses import dataclass, field
 from typing import overload
 
 from deco import buhlmann as b
+from deco import contingency as ct
+from deco import toxicity as tox
 
 #: One cylinder as a front end hands it over: ``(role, mix, litres, fill bar)``.
 #:
@@ -581,7 +583,7 @@ class PlanResult:
     bailout: list[b.DiveSegment] | None = None
     warnings: list[str] = field(default_factory=list)
     gas: GasReport | None = None
-    contingency: list[list[b.ContingencyCell]] | None = None
+    contingency: list[list[ct.ContingencyCell]] | None = None
 
 
 def compute_series_result(
@@ -645,7 +647,7 @@ def compute_plan_result(levels: Sequence[b.Level], bottom_gas: b.Gas,
         density_g_l=bottom_gas.density(depth, plan.surface_p,
                                        plan.msw_per_bar),
     )
-    result.cns_pct, result.otu = b.cns_otu(segments, plan.surface_p,
+    result.cns_pct, result.otu = tox.cns_otu(segments, plan.surface_p,
                                            plan.msw_per_bar)
     result.surf_gf = b.surface_gf(tissues, plan.surface_p)
     result.gas_stack = gas_stack_table(plan, bottom_gas)
@@ -660,7 +662,7 @@ def compute_plan_result(levels: Sequence[b.Level], bottom_gas: b.Gas,
     result.gas = gas_report(segments, bottom_gas, gas_plan, gases, plan)
     if contingency is not None:
         tb, ta, db, da = contingency
-        result.contingency = b.contingency_schedules(
+        result.contingency = ct.contingency_schedules(
             list(levels), bottom_gas, plan, time_before=tb, time_after=ta,
             depth_before=db, depth_after=da)
     return result

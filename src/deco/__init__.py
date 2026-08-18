@@ -6,6 +6,11 @@ The package is layered so the model can be used without dragging a UI along:
     The model itself — 16 tissue compartments, the Schreiner equation, GF
     ceilings, multi-level planning, gas planning, ppO₂/CNS/OTU/END checks.
     Standard library only.
+``deco.toxicity``, ``deco.contingency``
+    Downstream analyses of a *planned* dive rather than parts of the model —
+    the NOAA/Repex oxygen clocks, and the bottom-timer cut table. Split out of
+    ``buhlmann`` because nothing in the planner calls them. Standard library
+    only.
 ``deco.report``
     Everything user-facing that is *computed* (warnings, cylinder accounting,
     ``PlanResult``), shared by both front ends so they cannot drift apart.
@@ -36,7 +41,8 @@ reports what is wrong with it rather than refusing.
 
 from __future__ import annotations
 
-__all__ = ["__version__", "buhlmann", "dive_config", "report"]
+__all__ = ["__version__", "buhlmann", "contingency", "dive_config",
+           "report", "toxicity"]
 
 __version__ = "0.1.0"
 
@@ -48,7 +54,8 @@ def __getattr__(name: str):  # pragma: no cover - thin lazy-import shim
     modules' matplotlib/tkinter imports) while still letting ``deco.buhlmann`` work
     after a bare ``import deco``.
     """
-    if name in ("buhlmann", "dive_config", "report", "cli", "app", "cards"):
+    if name in ("buhlmann", "toxicity", "contingency", "dive_config",
+                "report", "cli", "app", "cards"):
         import importlib
 
         return importlib.import_module(f".{name}", __name__)

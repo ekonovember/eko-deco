@@ -6,6 +6,19 @@ pre-1.0, so anything may still move.
 
 ## [Unreleased]
 
+### Changed — oxygen clocks and the cut table move out of the model
+
+- **`deco.toxicity`** (`cns_otu`) and **`deco.contingency`**
+  (`contingency_schedules`, `ContingencyCell`) are now their own stdlib-only
+  modules. Both are downstream analyses of a *planned* dive rather than parts
+  of the model — nothing in the planner calls either — and `buhlmann.py` drops
+  from 1,644 to 1,502 lines. `b.cns_otu` / `b.contingency_schedules` are no
+  longer attributes of `deco.buhlmann`; import the new modules instead. Every
+  printed and JSON figure is unchanged. DECISIONS #32.
+- **The constant registry follows them.** `planner_diff` walks all three
+  modules, so a new constant in either cannot escape the "everything is
+  enumerated" guard.
+
 ### Changed — the runtime card ships with the package
 
 - **`cards/make_cards.py` is now `deco.cards`**, so `pip install eko-deco[gui]`

@@ -16,6 +16,7 @@ import json
 import sys
 
 from deco import buhlmann as b
+from deco import contingency as ct
 from deco import dive_config as dc
 from deco import report as rp
 
@@ -399,8 +400,8 @@ def _contingency_output(grid, planned_depth: float, planned_time: float):
     TTS rounded up to whole minutes, the wetnotes way ('no deco' when clean,
     'n/a' when unplannable); '*' marks the planned row and column."""
     rows: list[dict] = []
-    data: dict = {"time_step_min": b.CONTINGENCY_TIME_STEP,
-                  "depth_step_m": b.CONTINGENCY_DEPTH_STEP,
+    data: dict = {"time_step_min": ct.CONTINGENCY_TIME_STEP,
+                  "depth_step_m": ct.CONTINGENCY_DEPTH_STEP,
                   "depths_m": [c.depth for c in grid[0]], "rows": rows}
     for row in grid:
         cells = []
@@ -416,7 +417,7 @@ def _contingency_output(grid, planned_depth: float, planned_time: float):
         rows.append({"bottom_time_min": row[0].bottom_time, "cells": cells})
 
     lines = ["", "Contingency cut table (square profile at max depth, steps "
-                 f"{b.CONTINGENCY_TIME_STEP:g} min × {b.CONTINGENCY_DEPTH_STEP:g}"
+                 f"{ct.CONTINGENCY_TIME_STEP:g} min × {ct.CONTINGENCY_DEPTH_STEP:g}"
                  " m, * = planned; cell: stop depth:min · TTS rounded UP):"]
     heads = [f"{c.depth:g} m" + ("*" if abs(c.depth - planned_depth) < 1e-9
                                  else "") for c in grid[0]]

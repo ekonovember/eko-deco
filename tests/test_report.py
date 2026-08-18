@@ -6,6 +6,7 @@ import unittest
 from typing import ClassVar
 
 from deco import buhlmann as b
+from deco import contingency as ct
 from deco import report as rp
 
 
@@ -375,7 +376,7 @@ class TestOneNotationEverywhere(unittest.TestCase):
 
     def test_cut_table_cell_uses_the_same_legs(self):
         segs = self._dive()
-        cell = b.ContingencyCell(32.0, 40.0, segs).text()
+        cell = ct.ContingencyCell(32.0, 40.0, segs).text()
         for leg in b.stop_legs(segs):
             self.assertIn(f"{leg.depth:g}:{leg.leg:g}", cell)
 
@@ -391,7 +392,7 @@ class TestOneNotationEverywhere(unittest.TestCase):
         TTS is a budget you must not underestimate."""
         segs = self._dive()
         tts = b.time_to_surface(segs)
-        cell = b.ContingencyCell(32.0, 40.0, segs).text()
+        cell = ct.ContingencyCell(32.0, 40.0, segs).text()
         self.assertIn(f"{math.ceil(tts - 1e-9):g}′", cell)
         self.assertLess(rp.runtime_min(b.total_runtime(segs)),
                         b.total_runtime(segs))

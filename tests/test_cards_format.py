@@ -19,6 +19,7 @@ import unittest
 
 from deco import buhlmann as b
 from deco import cli
+from deco import contingency as ct
 from deco import report as rp
 
 try:
@@ -90,7 +91,7 @@ class TestCardMatchesThePlanner(unittest.TestCase):
                for r in rp.wetnotes_rows(self.segs)
                if r[1] not in ("-", "gas")}
         self.assertEqual(card, wet)
-        cell = b.ContingencyCell(45.0, 25.0, self.segs).text()
+        cell = ct.ContingencyCell(45.0, 25.0, self.segs).text()
         for depth, (leg, _run) in card.items():
             self.assertIn(f"{depth:g}:{leg:g}", cell)
 

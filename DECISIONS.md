@@ -1057,3 +1057,46 @@ point of it:
 * The engine wrote its demo output next to itself (`Path(__file__).parent`).
   Inside a wheel that is the wrong directory even when it is writable, so
   `python -m deco.cards` now renders into the current one.
+
+## #32 — Two leaves out of `buhlmann`, and no further
+
+`buhlmann.py` was 1,644 lines carrying five concerns — tissue physics, a
+scheduling algorithm, a printed notation, oxygen clocks and cylinder arithmetic
+— and its row in CLAUDE.md's module map had grown to a 746-word paragraph. The
+obvious response is to split it into a subpackage along its own section
+banners. **Don't.** The banners are a table of contents, not a dependency
+partition, and tracing the private helpers says so:
+
+    _bottom_phase_end   used in the planner, the notation, average_depth,
+                        ceiling_profile/TTS and gas management — five sections
+    _round_up_to_stop   used in the planner and in ceiling_profile
+
+A full split cannot just move code: it has to promote those to a shared
+internal module that four of the new modules import, which is a hub, and
+arguably worse than one flat file. Against that, the benefit is navigation in a
+file that already has good signposting — and the numerics are pinned to machine
+precision against three external oracles, so churn there is not free.
+
+What *is* clean is the two **leaves**: `cns_otu` and the contingency cut table
+are referenced nowhere earlier in the file. They are downstream analyses of a
+planned dive rather than parts of the model — they read a segment list, and
+`contingency_schedules` calls `plan_dive` once per cell — so they belong above
+the planner, not inside it. They are now `deco.toxicity` and
+`deco.contingency`, sibling stdlib-only modules, and `buhlmann.py` is 1,502
+lines. That is the whole of the split that was worth doing.
+
+Two consequences:
+
+* **The constant registry had to follow them.** `planner_diff.registry_gaps()`
+  walked `dir(buhlmann)`, so moving `_CNS_RATE`, the OTU constants and the
+  contingency grid pitch out would have silently exempted them from the guard
+  whose entire purpose is that "a constant nobody enumerated is a difference
+  nobody can detect". It now walks `CONSTANT_MODULES` — all three — and `_v`
+  resolves a registered name across them. The guard got stronger, not weaker:
+  a new constant in either new module fails the suite exactly as one in
+  `buhlmann` does.
+* **The module map is a table now.** The paragraph was unreadable, and that was
+  a *documentation* problem, not a code problem — it did not need the split to
+  fix and it would not have been fixed by it. `buhlmann` keeps a one-line row
+  and gets a "The model module" section below the map: one row per section,
+  with the part that bites in its own column.

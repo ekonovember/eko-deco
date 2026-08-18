@@ -37,6 +37,8 @@ from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 
 from deco import buhlmann as b
+from deco import contingency as ct
+from deco import toxicity as tox
 
 # ---------------------------------------------------------------------------
 # 1. What could possibly differ
@@ -81,8 +83,22 @@ class Tunable:
         return bool(set(self.pinned_by) - {SCHEDULE})
 
 
+#: The modules a model constant may live in. `buhlmann` is the model; the
+#: oxygen clocks and the cut-table grid were split out of it (DECISIONS.md #32)
+#: and their constants are every bit as much tunables, so the registry and its
+#: gap check walk all three. A constant that moves house must not thereby stop
+#: being enumerated — that is precisely the "difference nobody can detect" this
+#: module exists to prevent.
+CONSTANT_MODULES = (b, tox, ct)
+
+
 def _v(name: str) -> object:
-    return getattr(b, name)
+    for mod in CONSTANT_MODULES:
+        if hasattr(mod, name):
+            return getattr(mod, name)
+    raise AttributeError(
+        f"{name} is registered as a tunable but lives in none of "
+        f"{', '.join(m.__name__ for m in CONSTANT_MODULES)}")
 
 
 def registry() -> list[Tunable]:
@@ -215,19 +231,23 @@ def registry_gaps() -> list[str]:
     """Names the registry is missing — the guard that makes "all possible
     differences" a checkable claim rather than a hope.
 
-    Walks the module for constants (UPPER_CASE names bound to numbers, tuples,
-    dicts or `Gas` values) and every `DivePlan` / `GasPlan` field, and returns
-    whatever is not registered. A test asserts this is empty, so adding a
-    constant without registering it fails the suite."""
+    Walks every module in `CONSTANT_MODULES` for constants (UPPER_CASE names
+    bound to numbers, tuples, dicts or `Gas` values) and every `DivePlan` /
+    `GasPlan` field, and returns whatever is not registered. A test asserts
+    this is empty, so adding a constant without registering it fails the
+    suite — in any of the three modules, so moving one house does not exempt
+    it."""
     known = {t.name for t in registry()}
     gaps = []
-    for name in dir(b):
-        if name.startswith("__") or name.upper() != name:
-            continue
-        val = getattr(b, name)
-        if (isinstance(val, (int, float, tuple, dict, b.Gas))
-                and not callable(val) and name not in known):
-            gaps.append(name)
+    for mod in CONSTANT_MODULES:
+        for name in dir(mod):
+            if name.startswith("__") or name.upper() != name:
+                continue
+            val = getattr(mod, name)
+            if (isinstance(val, (int, float, tuple, dict, b.Gas))
+                    and not callable(val) and name not in known
+                    and name not in gaps):
+                gaps.append(name)
     for cls in (b.DivePlan, b.GasPlan):
         for f in dataclasses.fields(cls):
             if f"{cls.__name__}.{f.name}" not in known:
@@ -637,7 +657,7 @@ def multideco_evidence(scenario: int, *, surface_p: float, msw_per_bar: float,
     ppo2 = tuple((g, d, p) for g, d, p in md.PRINTED_PPO2[scenario])
     ead = tuple((g, d, float(p), False) for g, d, p in md.PRINTED_EAD[scenario])
     segs = md._plan(scenario, surface_p=surface_p, msw_per_bar=msw_per_bar)
-    cns, otu = b.cns_otu(segs, surface_p, msw_per_bar)
+    cns, otu = tox.cns_otu(segs, surface_p, msw_per_bar)
     _l, _g, _gf, otu_t, cns_t, dens_t = md.SCENARIOS[scenario]
     vols = []
     for label, want in md.MD_LITERS[scenario]["OK"].items():

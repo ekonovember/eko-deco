@@ -776,98 +776,6 @@ class TestCeilingProfile(unittest.TestCase):
                             for _t, c in prof))
 
 
-class TestContingency(unittest.TestCase):
-    PLAN = b.DivePlan(deco_gases=(b.EAN50,))
-
-    def _stops(self, segs):
-        return [(s.depth_start, s.duration) for s in segs if s.kind == "stop"]
-
-    def test_grid_shape_and_variants(self):
-        # Rows = bottom-time variants, columns = depth variants, 3 min x 3 m.
-        grid = b.contingency_schedules([b.Level(40, 20)], b.AIR, self.PLAN)
-        self.assertEqual([len(row) for row in grid], [3, 3, 3])
-        self.assertEqual([[(c.depth, c.bottom_time) for c in row]
-                          for row in grid],
-                         [[(37, 17), (40, 17), (43, 17)],
-                          [(37, 20), (40, 20), (43, 20)],
-                          [(37, 23), (40, 23), (43, 23)]])
-
-    def test_step_counts_extend_the_grid(self):
-        grid = b.contingency_schedules([b.Level(40, 20)], b.AIR, self.PLAN,
-                                       time_before=0, time_after=2,
-                                       depth_before=0, depth_after=1)
-        self.assertEqual([c.bottom_time for row in grid for c in row[:1]],
-                         [20, 23, 26])
-        self.assertEqual([c.depth for c in grid[0]], [40, 43])
-
-    def test_plan_cell_matches_plan_dive(self):
-        grid = b.contingency_schedules([b.Level(40, 20)], b.AIR, self.PLAN)
-        segs, _ = b.plan_dive(40, 20, b.AIR, self.PLAN)
-        cell = grid[1][1]                      # planned time x planned depth
-        self.assertEqual(self._stops(cell.segments), self._stops(segs))
-        self.assertAlmostEqual(b.time_to_surface(cell.segments),
-                               b.time_to_surface(segs))
-
-    def test_tts_monotone_in_time_and_depth(self):
-        grid = b.contingency_schedules([b.Level(40, 25)], b.AIR, self.PLAN)
-        for row in grid:                       # deeper column -> more deco
-            tts = [b.time_to_surface(c.segments) for c in row]
-            self.assertEqual(tts, sorted(tts))
-        for col in range(3):                   # longer row -> more deco
-            tts = [b.time_to_surface(row[col].segments) for row in grid]
-            self.assertEqual(tts, sorted(tts))
-
-    def test_no_deco_variant_is_a_normal_cell(self):
-        grid = b.contingency_schedules([b.Level(18, 20)], b.AIR)
-        short = grid[0][0]                     # shortest x shallowest
-        self.assertIsNotNone(short.segments)
-        self.assertFalse(any(s.kind == "stop" for s in short.segments))
-        self.assertIn("no deco", short.text())
-
-    def test_unplannable_cell_keeps_its_place(self):
-        # T - 3 = 1 min < the descent to 45 m: the whole shortened row is
-        # unplannable, but the grid stays rectangular (3x3) with n/a cells.
-        grid = b.contingency_schedules([b.Level(45, 4)], b.AIR)
-        self.assertEqual([len(row) for row in grid], [3, 3, 3])
-        self.assertIsNone(grid[0][1].segments)
-        self.assertEqual(grid[0][1].text(), "n/a")
-        self.assertIsNotNone(grid[1][1].segments)
-
-    def test_zero_counts_disable_directions(self):
-        grid = b.contingency_schedules([b.Level(40, 20)], b.AIR,
-                                       time_before=0, time_after=0,
-                                       depth_before=0, depth_after=0)
-        self.assertEqual([len(row) for row in grid], [1])
-        self.assertEqual((grid[0][0].depth, grid[0][0].bottom_time), (40, 20))
-
-    def test_nonpositive_variants_are_dropped(self):
-        # 2 min - 3 min and 3 m - 3 m would be <= 0: those rows/columns vanish
-        # instead of appearing as unplannable cells.
-        grid = b.contingency_schedules([b.Level(3, 2)], b.AIR)
-        self.assertEqual([c.bottom_time for row in grid for c in row[:1]],
-                         [2, 5])
-        self.assertEqual([c.depth for c in grid[0]], [3, 6])
-
-    def test_cell_text_lists_stops_and_tts(self):
-        import re
-        grid = b.contingency_schedules([b.Level(40, 25)], b.AIR, self.PLAN)
-        cell = grid[1][1]
-        self.assertTrue(any(s.kind == "stop" for s in cell.segments))
-        self.assertRegex(cell.text(), r"^(\d+:\d+ )*\d+:\d+ · \d+′$")
-        tts = int(re.search(r"· (\d+)′$", cell.text()).group(1))
-        self.assertEqual(tts, math.ceil(b.time_to_surface(cell.segments) - 1e-9))
-
-    def test_multilevel_flattens_to_conservative_square(self):
-        levels = [b.Level(45, 20), b.Level(30, 35), b.Level(18, 50)]
-        grid = b.contingency_schedules(levels, b.AIR, self.PLAN)
-        cell = grid[1][1]
-        self.assertEqual(cell.depth, b.max_depth(levels))
-        self.assertEqual(cell.bottom_time, levels[-1].runtime)
-        real, _ = b.plan_multilevel(levels, b.AIR, self.PLAN)
-        self.assertGreaterEqual(b.time_to_surface(cell.segments),
-                                b.time_to_surface(real))
-
-
 class TestDivePlanValidation(unittest.TestCase):
     def test_gf_low_over_gf_high_rejected(self):
         with self.assertRaises(ValueError):
@@ -910,33 +818,6 @@ class TestPpO2Violations(unittest.TestCase):
         worst = b.worst_ppo2_violations(segs)
         self.assertEqual(len(worst), 1)
         self.assertAlmostEqual(worst[0].ppo2, b.AIR.ppo2(70), places=6)
-
-
-class TestOxygenToxicity(unittest.TestCase):
-    @staticmethod
-    def _flat(depth, minutes, gas):
-        return [b.DiveSegment("bottom", depth, depth, minutes, gas)]
-
-    def test_cns_100pct_after_45min_at_1_6_bar(self):
-        depth = (1.6 - b.P_ATM) * 10.0                # ppO2 exactly 1.6 on O2
-        cns, _ = b.cns_otu(self._flat(depth, 45, b.O2))
-        self.assertAlmostEqual(cns, 100.0, places=6)
-
-    def test_cns_and_otu_at_1_bar(self):
-        depth = (2.0 - b.P_ATM) * 10.0                # ppO2 1.0 on EAN50
-        cns, otu = b.cns_otu(self._flat(depth, 60, b.EAN50))
-        self.assertAlmostEqual(cns, 20.0, places=6)   # 60 / 300 NOAA minutes
-        self.assertAlmostEqual(otu, 60.0, places=6)   # rate is exactly 1 /min
-
-    def test_no_dose_below_half_bar(self):
-        cns, otu = b.cns_otu(self._flat(10, 60, b.Gas(0.21, 0.60)))
-        self.assertEqual((cns, otu), (0.0, 0.0))      # ppO2 0.42 < 0.5
-
-    def test_deeper_is_worse(self):
-        shallow = b.cns_otu(self._flat(30, 30, b.EAN32))
-        deep = b.cns_otu(self._flat(40, 30, b.EAN32))
-        self.assertGreater(deep[0], shallow[0])
-        self.assertGreater(deep[1], shallow[1])
 
 
 class TestGasEndDensity(unittest.TestCase):

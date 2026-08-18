@@ -38,6 +38,7 @@ from matplotlib.backends.backend_tkagg import FigureCanvasTkAgg
 from matplotlib.figure import Figure
 
 from deco import buhlmann as b
+from deco import contingency as ct
 from deco import dive_config as dc
 from deco import report as rp
 
@@ -2001,7 +2002,7 @@ class DecoApp:
         tb, ta = int(self.cont_tb.get()), int(self.cont_ta.get())
         db, da = int(self.cont_db.get()), int(self.cont_da.get())
         if (tb or ta or db or da) and levels:
-            grid = b.contingency_schedules(levels, gas, plan,
+            grid = ct.contingency_schedules(levels, gas, plan,
                                            time_before=tb, time_after=ta,
                                            depth_before=db, depth_after=da)
             cards.append("\n".join(self._cut_table_card(

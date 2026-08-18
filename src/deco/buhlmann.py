@@ -1169,68 +1169,8 @@ def worst_ppo2_violations(segments: Iterable[DiveSegment],
 
 
 # -----------------------------------------------------------------------------
-# Oxygen toxicity: CNS% (NOAA single-exposure clock) and OTU (Repex)
+# Ceiling profile and TTS
 # -----------------------------------------------------------------------------
-
-# NOAA single-exposure oxygen limits (ppO2 bar -> minutes), NOAA Diving Manual.
-# Stored as (ppO2, CNS fraction per minute); linear between points, zero below
-# 0.5 bar. Above 1.6 bar the last slope extrapolates — there is no published
-# limit up there, only a steeply growing hazard.
-_CNS_RATE = (
-    (0.5, 0.0),
-    (0.6, 1.0 / 720.0), (0.7, 1.0 / 570.0), (0.8, 1.0 / 450.0),
-    (0.9, 1.0 / 360.0), (1.0, 1.0 / 300.0), (1.1, 1.0 / 240.0),
-    (1.2, 1.0 / 210.0), (1.3, 1.0 / 180.0), (1.4, 1.0 / 150.0),
-    (1.5, 1.0 / 120.0), (1.6, 1.0 / 45.0),
-)
-
-
-# Repex / Hamilton pulmonary oxygen dose (OTU): rate = ((ppO2 - THRESH)/THRESH)
-# ^ EXP per minute above the threshold. Named rather than inlined so the
-# constant registry in tests/planner_diff.py can enumerate them — a model
-# constant that only exists as a literal cannot be compared against a
-# reference planner.
-OTU_THRESHOLD_PPO2 = 0.5
-OTU_EXPONENT = 0.83
-
-
-def _cns_rate(po2: float) -> float:
-    """CNS clock fraction per minute at a ppO2 (bar)."""
-    if po2 <= _CNS_RATE[0][0]:
-        return 0.0
-    for (p0, r0), (p1, r1) in pairwise(_CNS_RATE):
-        if po2 <= p1:
-            return r0 + (r1 - r0) * (po2 - p0) / (p1 - p0)
-    (p0, r0), (p1, r1) = _CNS_RATE[-2], _CNS_RATE[-1]
-    return r1 + (r1 - r0) * (po2 - p1) / (p1 - p0)
-
-
-def cns_otu(segments: Iterable[DiveSegment], surface_p: float = P_ATM,
-            msw_per_bar: float = MSW_PER_BAR,
-            step: float = 0.5) -> tuple[float, float]:
-    """(CNS %, OTU) accumulated over the planned segments.
-
-    CNS integrates the NOAA single-exposure clock (`_CNS_RATE`); OTU uses the
-    Repex / Hamilton pulmonary dose (`OTU_THRESHOLD_PPO2`, `OTU_EXPONENT`),
-    rate = ((ppO2 - 0.5) / 0.5)^0.83 per minute for ppO2 > 0.5 bar.
-    Depth-changing segments are integrated in sub-steps of `step` minutes at
-    the midpoint ppO2."""
-    cns = otu = 0.0
-    for s in segments:
-        if s.duration <= 0:
-            continue
-        n = max(1, math.ceil(s.duration / step - 1e-9))
-        dt = s.duration / n
-        for k in range(n):
-            frac = (k + 0.5) / n
-            depth = s.depth_start + (s.depth_end - s.depth_start) * frac
-            po2 = s.gas.ppo2(depth, surface_p, msw_per_bar)
-            cns += _cns_rate(po2) * dt
-            if po2 > OTU_THRESHOLD_PPO2:
-                otu += dt * ((po2 - OTU_THRESHOLD_PPO2)
-                             / OTU_THRESHOLD_PPO2) ** OTU_EXPONENT
-    return cns * 100.0, otu
-
 
 def ceiling_profile(segments: Sequence[DiveSegment],
                     plan: DivePlan | None = None,
@@ -1296,90 +1236,8 @@ def time_to_surface(segments: Iterable[DiveSegment]) -> float:
                if s.kind in ("ascent", "stop"))
 
 
-# Cut-table grid pitch: 3 m matches the stop interval, 3 min keeps the
-# round-up penalty small — the diver rounds the gauge UP to the next cell.
-CONTINGENCY_TIME_STEP = 3.0    # min per time step
-CONTINGENCY_DEPTH_STEP = 3.0   # m per depth step
-
-
-@dataclass
-class ContingencyCell:
-    """One cell of a contingency ("cut table") matrix: a square-profile dive at
-    `depth` msw leaving the bottom at `bottom_time` min runtime. `segments` is
-    None when the variant cannot be planned (e.g. the shortened time is less
-    than the descent takes)."""
-    depth: float
-    bottom_time: float
-    segments: list[DiveSegment] | None
-
-    def text(self) -> str:
-        """Wetnotes cell text: stops deep→shallow as 'depth:min', then the TTS
-        rounded UP ('· N′'); 'no deco' when clean, 'n/a' when unplannable.
-
-        'min' is the `StopLeg` leg — ascent to the stop plus the hold — the
-        same notation as the runtime card and the GUI's stop table, so a cut
-        table and a plan for the same profile never print different numbers.
-        That holds for the FIRST stop too: its 'min' is the leg from leaving
-        the bottom, ascent included, not the hold — the same number the card
-        prints, which is the point of sharing the notation (DECISIONS.md #17).
-        TTS is rounded UP, unlike a runtime: it is a budget, not a clock."""
-        if self.segments is None:
-            return "n/a"
-        stops = [f"{leg.depth:g}:{leg.leg:g}" for leg in stop_legs(self.segments)]
-        tts = math.ceil(time_to_surface(self.segments) - 1e-9)
-        return f"{' '.join(stops) if stops else 'no deco'} · {tts:g}′"
-
-
-def contingency_schedules(levels: Sequence[Level], bottom_gas: Gas,
-                          plan: DivePlan | None = None, *,
-                          time_before: int = 1, time_after: int = 1,
-                          depth_before: int = 1, depth_after: int = 1,
-                          time_step: float = CONTINGENCY_TIME_STEP,
-                          depth_step: float = CONTINGENCY_DEPTH_STEP
-                          ) -> list[list[ContingencyCell]]:
-    """Backup "cut table" matrix for a bottom-timer (gauge) diver: schedules for
-    the planned dive and its neighbours on a fixed grid.
-
-    The profile is flattened to a square dive at max depth x total bottom time
-    — deliberately more conservative than the real multilevel schedule, because
-    max depth and dive time are what a gauge shows (average depth is not live
-    on a bottom timer). Rows are bottom-time variants (`time_before` steps
-    shorter … planned … `time_after` steps longer), columns depth variants
-    (`depth_before` shallower … `depth_after` deeper), both on the fixed
-    `time_step` × `depth_step` pitch (3 min × 3 m: round the gauge UP to the
-    next row/column). Zero counts disable a direction; variants at or below
-    zero are dropped. The full gas stack stays available — the table covers
-    computer failure, not gas loss.
-
-    Unlike the lost-gas scenarios (which drop unplannable variants), the grid
-    stays rectangular: an unplannable cell keeps its place with segments=None,
-    so renderers can align columns across rows. Tissues start fresh per cell.
-    """
-    d0 = max_depth(levels)
-    if plan is None:
-        plan = DivePlan()
-    t0 = levels[-1].runtime
-    times = [t0 + i * time_step for i in range(-int(time_before),
-                                               int(time_after) + 1) if
-             t0 + i * time_step > 0]
-    depths = [d0 + j * depth_step for j in range(-int(depth_before),
-                                                 int(depth_after) + 1) if
-              d0 + j * depth_step > 0]
-    grid: list[list[ContingencyCell]] = []
-    for t in times:
-        row = []
-        for d in depths:
-            try:
-                segs, _ = plan_dive(d, t, bottom_gas, plan)
-            except (ValueError, RuntimeError):
-                segs = None
-            row.append(ContingencyCell(d, t, segs))
-        grid.append(row)
-    return grid
-
-
 # -----------------------------------------------------------------------------
-# Gas management: consumption, TTS and "rock bottom" (minimum) gas
+# Gas management: consumption and "rock bottom" (minimum) gas
 # -----------------------------------------------------------------------------
 
 #: Emergency SAC when none is given: twice the working SAC, the rule of thumb

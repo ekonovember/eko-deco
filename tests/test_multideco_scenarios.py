@@ -24,6 +24,7 @@ import unittest
 
 from deco import buhlmann as b
 from deco import report as rp
+from deco import toxicity as tox
 
 # The environment the exports print in ("Wysokość = 150m (s)" — (s) = słodka,
 # fresh water). Backed out of the printed ppO2/ead: surface 0.9986..1.0059 bar
@@ -144,7 +145,7 @@ class TestPrintedTotals(unittest.TestCase):
             with self.subTest(scenario=n):
                 segs = _plan(n, surface_p=MD_SURFACE_P,
                              msw_per_bar=MD_MSW_PER_BAR)
-                got_cns, got_otu = b.cns_otu(segs, MD_SURFACE_P, MD_MSW_PER_BAR)
+                got_cns, got_otu = tox.cns_otu(segs, MD_SURFACE_P, MD_MSW_PER_BAR)
                 self.assertLess(abs(got_cns - cns) / cns, 0.10)
                 self.assertLess(abs(got_otu - otu) / otu, 0.10)
 
