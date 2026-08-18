@@ -71,6 +71,16 @@ GAS_STACK_FIELDS = {"travel_gases", "deco_gases"}
 #: prevent, so prefer deleting the field to listing it.
 UNUSED_FIELDS: set[str] = set()
 
+#: Defaults that deliberately differ between the library and the front ends.
+#: GF-high is the only one: the library keeps Bühlmann's 0.80, while the config,
+#: the CLI and the GUI agree with each other on 30/**70** (CLAUDE.md,
+#: "Defaults"). Anything else that has to be listed here is drift, not a
+#: decision — write the entry only after deciding it, never to make the test
+#: pass.
+DEFAULT_EXCEPTIONS: dict[str, dict[str, float]] = {
+    "gf_high": {"library": 0.80, "front_ends": 0.70},
+}
+
 
 def _probe_config() -> dict:
     cfg = dc.default_config()
@@ -103,8 +113,8 @@ CLI_ARGV = [
 ]
 
 
-def _cli_plans():
-    """Run the real parser, then build the plan exactly as `cmd_plan` does."""
+def _cli_args(argv: list[str]):
+    """The parsed args for `argv`, captured out of the real parser."""
     captured = {}
     original = cli.cmd_plan
 
@@ -116,10 +126,15 @@ def _cli_plans():
     try:
         with contextlib.redirect_stdout(io.StringIO()), \
                 contextlib.redirect_stderr(io.StringIO()):
-            cli.main(CLI_ARGV)
+            cli.main(argv)
     finally:
         cli.cmd_plan = original
-    args = captured["args"]
+    return captured["args"]
+
+
+def _cli_plans():
+    """Run the real parser, then build the plan exactly as `cmd_plan` does."""
+    args = _cli_args(CLI_ARGV)
     return cli._build_plan(args), cli._args_gas_context(args)[0]
 
 
@@ -141,6 +156,74 @@ class TestEveryFieldIsProbed(unittest.TestCase):
         self.assertEqual(fields - known, set(),
                          "new GasPlan field(s): add a value to GAS_PROBE and "
                          "wire them into the config, the CLI and the GUI")
+
+
+def _default_plans():
+    """The three no-input defaults: library, config, bare command line."""
+    args = _cli_args(["plan", "--depth", "30", "--time", "20"])
+    return (b.DivePlan(),
+            dc.to_buhlmann(dc.default_config())[1],
+            cli._build_plan(args))
+
+
+class TestDefaultsAgree(unittest.TestCase):
+    """The probes above prove a knob **binds**; this proves the knobs agree
+    when nobody touches them.
+
+    `PLAN_PROBE` deliberately uses values *different from the default* so an
+    ignored knob cannot pass by coincidence — which makes it blind, by
+    construction, to the defaults themselves. And every default is written out
+    five to eight separate times: `DivePlan`'s field, `default_config()`,
+    `to_buhlmann`'s `cfg.get(..., 1.4)` fallback, the argparse default, and the
+    GUI's `_make_plan` / `_apply_config` / `_collect_config`. One copy drifting
+    changes what gets planned with every flag left off, which is the common
+    case and the hardest to notice.
+
+    Only `DEFAULT_SAC` vs `sac_normal` was pinned before this
+    (`test_report.py`). This is that check for the whole surface.
+    """
+
+    def test_plan_defaults_agree(self):
+        lib, cfg, cmdline = _default_plans()
+        for f in dataclasses.fields(b.DivePlan):
+            if f.name in GAS_STACK_FIELDS:
+                continue
+            with self.subTest(f.name):
+                if f.name in DEFAULT_EXCEPTIONS:
+                    want = DEFAULT_EXCEPTIONS[f.name]
+                    self.assertEqual(getattr(lib, f.name), want["library"])
+                    self.assertEqual(getattr(cfg, f.name), want["front_ends"])
+                    self.assertEqual(getattr(cmdline, f.name),
+                                     want["front_ends"])
+                    continue
+                self.assertEqual(getattr(cfg, f.name), getattr(lib, f.name),
+                                 "config default differs from the library's")
+                self.assertEqual(getattr(cmdline, f.name), getattr(lib, f.name),
+                                 "CLI default differs from the library's")
+
+    def test_gas_plan_defaults_agree(self):
+        """`GasPlan.sac` is required, so there is no library default to compare
+        against — the config and the CLI are checked against each other, and
+        `sac` itself against `report.DEFAULT_SAC` as before."""
+        cfg_gp = dc.to_buhlmann(dc.default_config())[2]
+        cli_gp = cli._args_gas_context(
+            _cli_args(["plan", "--depth", "30", "--time", "20"]))[0]
+        for f in dataclasses.fields(b.GasPlan):
+            with self.subTest(f.name):
+                self.assertEqual(getattr(cli_gp, f.name),
+                                 getattr(cfg_gp, f.name))
+
+    def test_the_exception_list_is_only_the_ones_we_chose(self):
+        """A field may be listed as an exception only while it really differs.
+        Left behind after the two are reconciled, an entry here would silently
+        stop checking a field forever."""
+        lib, cfg, _cmdline = _default_plans()
+        for name in DEFAULT_EXCEPTIONS:
+            with self.subTest(name):
+                self.assertNotEqual(
+                    getattr(lib, name), getattr(cfg, name),
+                    f"{name} no longer differs — drop it from "
+                    f"DEFAULT_EXCEPTIONS so it is checked like the rest")
 
 
 class TestConfigBinds(unittest.TestCase):
@@ -369,6 +452,36 @@ class TestGuiBinds(unittest.TestCase):
         for name, want in PLAN_PROBE.items():
             with self.subTest(f"reload {name}"):
                 self.assertAlmostEqual(getattr(again, name), want, places=9)
+
+    def test_gui_defaults_agree_with_the_config_and_the_cli(self):
+        """The third copy of every default lives in the GUI — in the spinbox
+        inits, in `_apply_config`'s `cfg.get(..., 1.4)` fallbacks and again in
+        `_collect_config`.
+
+        Fed `default_config()` directly rather than started from disk: a
+        `DecoApp` built in a checkout loads the repo's real `dive_plan.json`,
+        and a test that reads whatever dive the owner happens to be planning is
+        a test of nothing.
+        """
+        self.app._apply_config(dc.default_config())
+        cfg_plan = dc.to_buhlmann(dc.default_config())[1]
+        gui_plan = self.app._make_plan()
+        for f in dataclasses.fields(b.DivePlan):
+            if f.name in GAS_STACK_FIELDS:
+                continue
+            with self.subTest(f.name):
+                self.assertAlmostEqual(
+                    float(getattr(gui_plan, f.name)),
+                    float(getattr(cfg_plan, f.name)), places=6) \
+                    if isinstance(getattr(cfg_plan, f.name), (int, float)) \
+                    else self.assertEqual(getattr(gui_plan, f.name),
+                                          getattr(cfg_plan, f.name))
+        cfg_gp = dc.to_buhlmann(dc.default_config())[2]
+        gui_gp = self.app._gas_plan()
+        for f in dataclasses.fields(b.GasPlan):
+            with self.subTest(f"GasPlan.{f.name}"):
+                self.assertEqual(getattr(gui_gp, f.name),
+                                 getattr(cfg_gp, f.name))
 
     def test_last_stop_switch_and_field_stay_in_step(self):
         """The '6 m' shorthand writes the free field, so the two can't disagree
