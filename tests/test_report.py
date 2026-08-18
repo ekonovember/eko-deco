@@ -69,6 +69,35 @@ class TestGasReport(unittest.TestCase):
             reserve = b.emergency_gas_liters(segs, c.gas, gp, res.plan)
             self.assertAlmostEqual(c.liters_emergency, need + reserve, places=6)
 
+    def test_the_worst_moment_scan_runs_once_for_the_whole_report(self):
+        """The candidate profiles depend only on the dive, never on the gas
+        being costed, so `gas_report` builds them once and hands them to every
+        cylinder.
+
+        Derived per gas — which is what it used to do — a three-level dive with
+        three mixes re-planned the same two truncated dives six times over,
+        about three quarters of the cost of a whole `PlanResult`. This pins the
+        arithmetic that makes it cheap, because nothing user-visible would
+        change if it silently went back: it is a performance contract, and the
+        GUI recomputes on every keystroke.
+        """
+        levels = [b.Level(45, 25), b.Level(30, 40), b.Level(18, 55)]
+        plan = b.DivePlan(deco_gases=(b.EAN50, b.O2))
+        gases = [("Bottom", b.AIR, 24.0, 232.0), ("Deco", b.EAN50, 11.0, 200.0),
+                 ("Deco", b.O2, 11.0, 200.0)]
+        calls = []
+        original = b.plan_multilevel
+        b.plan_multilevel = lambda *a, **k: (calls.append(1),
+                                             original(*a, **k))[1]
+        try:
+            rp.compute_plan_result(levels, b.AIR, plan, b.GasPlan(sac=20),
+                                   gases)
+        finally:
+            b.plan_multilevel = original
+        # 1 for the dive itself + 2 truncated candidates, whatever the number
+        # of cylinders. Three gases used to cost 9.
+        self.assertEqual(len(calls), 3)
+
     def test_the_baseline_sac_default_matches_the_config_schema(self):
         """One baseline rate across the front ends: a CLI run with no --sac and
         a first-launch GUI must plan the same litres."""

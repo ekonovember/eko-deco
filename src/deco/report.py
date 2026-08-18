@@ -449,6 +449,13 @@ def gas_report(segments: Sequence[b.DiveSegment],
     surface_p, msw_per_bar = plan.surface_p, plan.msw_per_bar
     deco_gases = plan.deco_gases
     banks = {bk.gas: bk for bk in aggregate_banks(gases)}
+    # The "worst moment" profiles the reserve is a maximum over depend only on
+    # the dive, never on the gas being costed, so they are built ONCE here and
+    # handed to every cylinder. Derived per gas — which is what happened before
+    # — a three-level dive with three mixes re-planned the same two truncated
+    # dives six times, three quarters of the cost of this whole function.
+    candidates = (b.reserve_candidates(segments, plan, bottom_gas)
+                  if gas_plan.emergency else None)
     cylinders: list[CylinderNeed] = []
     seen: list[b.Gas] = []
     for s in segments:
@@ -465,7 +472,8 @@ def gas_report(segments: Sequence[b.DiveSegment],
         # `emergency_gas_liters` is the expensive part of this function, and a
         # figure nobody will print should not be paid for.
         liters_e = (liters + b.emergency_gas_liters(segments, s.gas, gas_plan,
-                                                    plan)
+                                                    plan,
+                                                    candidates=candidates)
                     if gas_plan.emergency else None)
         bank = banks.get(s.gas)
         role = (bank.role if bank
@@ -475,7 +483,12 @@ def gas_report(segments: Sequence[b.DiveSegment],
             tank_l=bank.tank_l if bank else 0.0,
             pressure_bar=bank.pressure_bar if bank else 0.0))
     back = banks.get(bottom_gas)
-    rock = (b.rock_bottom_liters(segments, bottom_gas, gas_plan, plan)
+    # Deliberately a second call rather than reusing the bottom gas's cylinder
+    # figure above: `cylinders` covers the mixes actually breathed, and a
+    # bottom gas that is never breathable at depth is not among them. Sharing
+    # `candidates` already removes the expensive half.
+    rock = (b.rock_bottom_liters(segments, bottom_gas, gas_plan, plan,
+                                 candidates=candidates)
             if gas_plan.emergency else None)
     return GasReport(plan=gas_plan, cylinders=cylinders, rock_bottom_l=rock,
                      back_tank_l=back.tank_l if back else 0.0,

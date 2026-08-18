@@ -1505,8 +1505,46 @@ def levels_of(segments: Sequence[DiveSegment]) -> list[Level]:
     return levels
 
 
+def reserve_candidates(segments: Sequence[DiveSegment], plan: DivePlan,
+                       bottom_gas: Gas | None = None
+                       ) -> list[list[DiveSegment]]:
+    """The candidate "worst moment" profiles a reserve is the maximum over —
+    one per level end, each the dive re-planned as if it had ended there.
+
+    Split out of `emergency_gas_liters` because the candidates depend only on
+    the profile and the plan, **never on the gas being costed**. Computed
+    inside that function they were re-derived once per cylinder, so a
+    three-level dive with three mixes re-planned the same two truncated dives
+    six times over — about three quarters of the cost of a whole
+    `report.PlanResult`. `report.gas_report` now builds them once and passes
+    them to every gas.
+
+    A square dive has exactly one candidate — the dive itself — and never
+    re-plans anything.
+
+    `bottom_gas` is the mix the truncated dives are re-flown on. Left None it
+    is taken from the deepest bottom-phase segment, which is what the gas
+    actually breathed down there is; callers that know the declared bottom gas
+    (`report.gas_report` does) should pass it rather than have it inferred.
+    """
+    segs = list(segments)
+    levels = levels_of(segs)
+    if len(levels) <= 1:
+        return [segs]
+    if bottom_gas is None:
+        bottom_gas = max(segs[:_bottom_phase_end(segs)],
+                         key=lambda s: max(s.depth_start, s.depth_end)).gas
+    # Re-planning the truncated dive is exact: levels are contiguous, so
+    # cutting the profile short cannot change the tissue history before the cut.
+    return [segs if k == len(levels)
+            else plan_multilevel(levels[:k], bottom_gas, plan)[0]
+            for k in range(1, len(levels) + 1)]
+
+
 def emergency_gas_liters(segments: Sequence[DiveSegment], gas: Gas,
-                         gas_plan: GasPlan, plan: DivePlan) -> float:
+                         gas_plan: GasPlan, plan: DivePlan, *,
+                         candidates: Sequence[Sequence[DiveSegment]] | None
+                         = None) -> float:
     """Litres of `gas` that must be held in reserve ("rock bottom" logic) for a
     problem striking at **the worst moment of the dive** — evaluated at the end
     of every level, not only the last one, and the largest reserve returned.
@@ -1542,22 +1580,16 @@ def emergency_gas_liters(segments: Sequence[DiveSegment], gas: Gas,
     an approximation that "can understate the true worst case". It understated
     it by 48 % on a 45 m → 18 m profile — 14 bar of minimum gas where the deep
     level needs 27 — which is not a rounding difference on the one number whose
-    whole job is to be the pessimistic one (DECISIONS.md #7)."""
-    segs = list(segments)
-    levels = levels_of(segs)
-    if len(levels) > 1:
-        # Each level end is a moment the problem could strike. Re-planning the
-        # truncated dive is exact: levels are contiguous, so cutting the profile
-        # short cannot change the tissue history before the cut.
-        bottom_gas = max(segs[:_bottom_phase_end(segs)],
-                         key=lambda s: max(s.depth_start, s.depth_end)).gas
-        worst = 0.0
-        for k in range(1, len(levels) + 1):
-            cut = (segs if k == len(levels)
-                   else plan_multilevel(levels[:k], bottom_gas, plan)[0])
-            worst = max(worst, _reserve_at(cut, gas, gas_plan, plan))
-        return worst
-    return _reserve_at(segs, gas, gas_plan, plan)
+    whole job is to be the pessimistic one (DECISIONS.md #7).
+
+    `candidates` is the list `reserve_candidates` returns, for a caller costing
+    several gases against one profile; None recomputes it. It is a keyword and
+    it is optional because the candidates are an optimisation, never an input:
+    the answer for a given gas must not depend on who else was asked.
+    """
+    cands = (reserve_candidates(segments, plan) if candidates is None
+             else candidates)
+    return max(_reserve_at(c, gas, gas_plan, plan) for c in cands)
 
 
 def _reserve_at(segs: Sequence[DiveSegment], gas: Gas, gas_plan: GasPlan,
@@ -1571,6 +1603,14 @@ def _reserve_at(segs: Sequence[DiveSegment], gas: Gas, gas_plan: GasPlan,
     total = segment_gas_liters([s for s in segs[be:] if s.gas == gas],
                                sac_e, surface_p, msw_per_bar)
     if segs[:be]:
+        # The gas the problem is billed to is the one being BREATHED at the
+        # deepest point, which is not necessarily the declared bottom gas — a
+        # bottom mix over its ppO2 ceiling down there is planned on a travel
+        # mix, and the reserve has to follow the regulator, not the label. So
+        # this is inferred on purpose rather than taken as a parameter, unlike
+        # `reserve_candidates`' re-planning gas. The descent/bottom tie at the
+        # same depth is harmless: `plan_multilevel` chooses both with the same
+        # `descent_gas()` call, so they are always the same mix.
         deepest = max(segs[:be],
                       key=lambda s: max(s.depth_start, s.depth_end))
         if deepest.gas == gas:
@@ -1582,7 +1622,9 @@ def _reserve_at(segs: Sequence[DiveSegment], gas: Gas, gas_plan: GasPlan,
 
 
 def rock_bottom_liters(segments: Sequence[DiveSegment], bottom_gas: Gas,
-                       gas_plan: GasPlan, plan: DivePlan) -> float:
+                       gas_plan: GasPlan, plan: DivePlan, *,
+                       candidates: Sequence[Sequence[DiveSegment]] | None
+                       = None) -> float:
     """Minimum gas ("rock bottom") in litres of the back/bottom gas: the reserve
     needed to survive a problem at the worst moment (the end of the worst level,
     see `emergency_gas_liters`)
@@ -1595,5 +1637,8 @@ def rock_bottom_liters(segments: Sequence[DiveSegment], bottom_gas: Gas,
     planned profile only until the first deco-gas switch (standard minimum-gas
     practice — the diver is on the deco gas after that), so the figure stays a
     realistic back-gas reserve rather than the whole schedule billed to back
-    gas."""
-    return emergency_gas_liters(segments, bottom_gas, gas_plan, plan)
+    gas.
+
+    `candidates` is passed straight through — see `emergency_gas_liters`."""
+    return emergency_gas_liters(segments, bottom_gas, gas_plan, plan,
+                                candidates=candidates)

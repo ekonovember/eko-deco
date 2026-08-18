@@ -503,6 +503,46 @@ class TestReserveWorstMoment(unittest.TestCase):
         self.assertEqual([(l.depth, l.runtime) for l in got],
                          [(l.depth, l.runtime) for l in self.DEEP_FIRST])
 
+    def test_passing_the_candidates_in_changes_no_answer(self):
+        """`candidates` is an optimisation, never an input: what a gas needs
+        must not depend on whether someone else was costed first."""
+        plan = self._plan()
+        segs, _ = b.plan_multilevel(list(self.DEEP_FIRST), b.AIR, plan)
+        gp = b.GasPlan(sac=20, sac_emergency=30.0, problem_minutes=2.0)
+        cands = b.reserve_candidates(segs, plan, b.AIR)
+        for gas in (b.AIR, b.EAN50):
+            with self.subTest(repr(gas)):
+                self.assertAlmostEqual(
+                    b.emergency_gas_liters(segs, gas, gp, plan),
+                    b.emergency_gas_liters(segs, gas, gp, plan,
+                                           candidates=cands), places=9)
+
+    def test_one_candidate_per_level_and_the_last_is_the_dive_itself(self):
+        plan = self._plan()
+        segs, _ = b.plan_multilevel(list(self.DEEP_FIRST), b.AIR, plan)
+        cands = b.reserve_candidates(segs, plan, b.AIR)
+        self.assertEqual(len(cands), len(self.DEEP_FIRST))
+        self.assertIs(cands[-1][0], segs[0])      # the real dive, not a re-plan
+        # each candidate is the dive truncated at that level
+        self.assertEqual([b.levels_of(c)[-1].depth for c in cands],
+                         [l.depth for l in self.DEEP_FIRST])
+
+    def test_a_square_dive_never_replans(self):
+        """One level is one candidate — the dive itself — so a square profile
+        pays nothing at all for the worst-moment scan."""
+        plan = self._plan()
+        segs, _ = b.plan_dive(40.0, 25.0, b.AIR, plan)
+        calls = []
+        original = b.plan_multilevel
+        b.plan_multilevel = lambda *a, **k: (calls.append(1),
+                                             original(*a, **k))[1]
+        try:
+            cands = b.reserve_candidates(segs, plan, b.AIR)
+        finally:
+            b.plan_multilevel = original
+        self.assertEqual(calls, [])
+        self.assertEqual(len(cands), 1)
+
 
 class TestMultilevel(unittest.TestCase):
     """Multi-level profiles. `Level.runtime` is the runtime at the END of the
