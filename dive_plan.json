@@ -1,17 +1,14 @@
 {
   "levels": [
     {
-      "depth_m": 26.0,
-      "runtime_min": 16.0
-    },
-    {
-      "depth_m": 36.0,
-      "runtime_min": 33.0
+      "depth_m": 30.0,
+      "runtime_min": 40.0
     }
   ],
   "gf_low": 30,
   "gf_high": 70,
   "sac_normal": 20.0,
+  "sac_deco": null,
   "emergency": true,
   "sac_emergency": 30.0,
   "turn_pressure": true,
@@ -25,6 +22,13 @@
   "ppo2_bottom": 1.4,
   "ppo2_deco": 1.6,
   "ppo2_min": 0.18,
+  "ppo2_switch_tol": 0.05,
+  "min_stop_time": 1.0,
+  "gas_switch_policy": "at-mod",
+  "repeats": [],
+  "surface_p_bar": 1.01325,
+  "msw_per_bar": 10.0,
+  "p_h2o_bar": 0.0567,
   "contingency": {
     "time_before": 4,
     "time_after": 3,
@@ -45,6 +49,14 @@
       "o2": 50,
       "he": 0,
       "tank_l": 11.0,
+      "pressure_bar": 200.0,
+      "enabled": true
+    },
+    {
+      "role": "Deco",
+      "o2": 100,
+      "he": 0,
+      "tank_l": 7.0,
       "pressure_bar": 200.0,
       "enabled": true
     }
