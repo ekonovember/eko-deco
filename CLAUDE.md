@@ -113,12 +113,15 @@ python -m deco.cli plan --depth 40 --time 25 --gas air --deco-gas 50 --sac 20 --
 # grid, time rows −TB/+TA steps × depth columns −DB/+DA steps
 python -m deco.cli plan --depth 40 --time 25 --gas air --deco-gas 50 --contingency          # counts from config (1:1:1:1)
 python -m deco.cli plan --depth 40 --time 25 --gas air --deco-gas 50 --contingency 0:2:0:1  # explicit TB[:TA[:DB[:DA]]]
-# Tests: 394 total = core (stdlib only) + 26 compiled cross-checks
-#        + 12 python-oracle cross-checks (pip, skip when absent).
-# The cross-checks COMPILE the reference implementations (g++ for Subsurface's
-# deco.cpp, gfortran for Baker's GFDECO) and skip when those are absent — so
-# "Ran 394 tests" with 39 skipped on a bare machine is expected, not a data
-# problem (26 + 12 oracles + the one unfilled Shearwater Cloud fixture).
+# Tests: 442 total. Skips are environment, not failure — count them before
+# assuming something is wrong:
+#   1  everything installed, with a display (the unfilled Shearwater Cloud
+#      fixture, which is a fixture waiting to be filled)
+#  45  headless: + the 44 GUI / card-rendering tests (Tk + matplotlib)
+#  +38 with no toolchain: 26 compiled cross-checks (19 Subsurface via g++,
+#      7 Baker GFDECO via gfortran) and 12 python-oracle ones (pip extras).
+# The compiled cross-checks BUILD the reference implementations, so they skip
+# rather than error where there is no compiler.
 python -m unittest discover -s tests -t . -v
 # Individual oracles: native Subsurface deco.cpp / Baker's GFDECO Fortran
 python -m unittest tests.test_subsurface_crosscheck -v

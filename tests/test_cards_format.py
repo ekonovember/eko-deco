@@ -43,7 +43,7 @@ def _plan_json(*extra: str) -> dict:
     return json.loads(out.getvalue())
 
 
-@unittest.skipUnless(_HAVE_CARDS, "cards/make_cards.py (matplotlib) unavailable")
+@unittest.skipUnless(_HAVE_CARDS, "deco.cards (matplotlib) unavailable")
 class TestCardMatchesThePlanner(unittest.TestCase):
     """The card carries the planner's own numbers, in MultiDeco's compressed
     layout (`examples/scenario_2` — depth rows, scenario columns, `min (run)`
