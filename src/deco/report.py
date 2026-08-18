@@ -23,6 +23,16 @@ from typing import overload
 
 from deco import buhlmann as b
 
+#: One cylinder as a front end hands it over: ``(role, mix, litres, fill bar)``.
+#:
+#: Named because it is the seam every front end crosses — the CLI builds these
+#: from `mix@tank@bar`, the GUI from its gas rows, `dive_config.to_buhlmann`
+#: from the JSON — and it was spelled out seven times and left as a bare
+#: ``list[tuple]`` in the eighth, which is the one place mypy could have caught
+#: a mismatch. Role is a `dive_config.ROLES` value; the mix is the frozen `Gas`
+#: itself, never its rounded label (DECISIONS.md #8).
+GasRow = tuple[str, b.Gas, float, float]
+
 #: Default cylinder fill pressure (bar) when none is given.
 DEFAULT_FILL_BAR = 232.0
 
@@ -258,7 +268,7 @@ class Bank:
     pressure_bar: float
 
 
-def aggregate_banks(gases: Sequence[tuple[str, b.Gas, float, float]]
+def aggregate_banks(gases: Sequence[GasRow]
                     ) -> list[Bank]:
     """Aggregate ``(role, Gas, tank_l, pressure_bar)`` rows by exact mix
     (``Gas`` equality, not display label), preserving first-seen order."""
@@ -413,20 +423,20 @@ class GasReport:
 @overload
 def gas_report(segments: Sequence[b.DiveSegment],
                bottom_gas: b.Gas, gas_plan: b.GasPlan,
-               gases: Sequence[tuple[str, b.Gas, float, float]],
+               gases: Sequence[GasRow],
                plan: b.DivePlan) -> GasReport: ...
 
 
 @overload
 def gas_report(segments: Sequence[b.DiveSegment],
                bottom_gas: b.Gas, gas_plan: None,
-               gases: Sequence[tuple[str, b.Gas, float, float]],
+               gases: Sequence[GasRow],
                plan: b.DivePlan) -> None: ...
 
 
 def gas_report(segments: Sequence[b.DiveSegment],
                bottom_gas: b.Gas, gas_plan: b.GasPlan | None,
-               gases: Sequence[tuple[str, b.Gas, float, float]],
+               gases: Sequence[GasRow],
                plan: b.DivePlan) -> GasReport | None:
     """Per-mix need/have accounting for a planned dive, or None without a
     ``GasPlan``. Mixes appear in the order they are first breathed; same-mix
@@ -496,7 +506,7 @@ def gas_report(segments: Sequence[b.DiveSegment],
 
 
 def leg_pressures(segments: Sequence[b.DiveSegment], gas_plan: b.GasPlan | None,
-                  gases: Sequence[tuple[str, b.Gas, float, float]],
+                  gases: Sequence[GasRow],
                   plan: b.DivePlan) -> list[float | None]:
     """Cylinder pressure (bar) as the diver **leaves** each stop — one entry per
     `buhlmann.stop_legs` row, aligned with it position for position.
@@ -578,7 +588,7 @@ def compute_series_result(
         series: Sequence[tuple[float, Sequence[b.Level]]],
         bottom_gas: b.Gas, plan: b.DivePlan,
         gas_plan: b.GasPlan | None = None,
-        gases: Sequence[tuple[str, b.Gas, float, float]] = (),
+        gases: Sequence[GasRow] = (),
         contingency: tuple[int, int, int, int] | None = None
         ) -> list[PlanResult]:
     """One `PlanResult` per dive in a day, tissues carried through.
@@ -607,7 +617,7 @@ def compute_series_result(
 def compute_plan_result(levels: Sequence[b.Level], bottom_gas: b.Gas,
                         plan: b.DivePlan,
                         gas_plan: b.GasPlan | None = None,
-                        gases: Sequence[tuple[str, b.Gas, float, float]] = (),
+                        gases: Sequence[GasRow] = (),
                         contingency: tuple[int, int, int, int] | None = None,
                         start_tissues: b.Tissues | None = None) -> PlanResult:
     """Plan the dive and derive every shared figure: schedule, warnings,

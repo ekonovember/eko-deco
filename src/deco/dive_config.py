@@ -453,9 +453,12 @@ def series_of(cfg: dict) -> list[tuple[float, list[b.Level]]]:
     return out
 
 
-def to_buhlmann(cfg: dict) -> tuple[b.Gas, b.DivePlan, b.GasPlan, list[tuple]]:
+def to_buhlmann(cfg: dict) -> tuple[b.Gas, b.DivePlan, b.GasPlan,
+                                    list[tuple[str, b.Gas, float, float]]]:
     """Return ``(bottom_gas, DivePlan, GasPlan, gases)`` where ``gases`` is a list
-    of ``(role, Gas, tank_l, pressure_bar)`` tuples. Gas selection is automatic
+    of ``(role, Gas, tank_l, pressure_bar)`` tuples — `report.GasRow`, spelled
+    out here because the config layer sits below `report` and must not import
+    it. Gas selection is automatic
     by role: ``Bottom`` on the bottom phase, ``Travel`` swapped in on descent
     where the bottom mix is hypoxic, ``Deco`` switched to on ascent."""
     cfg = _merged(cfg)

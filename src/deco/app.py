@@ -1233,7 +1233,7 @@ class DecoApp:
         except (ValueError, tk.TclError):
             return default
 
-    def _gas_rows_raw(self) -> list[tuple[str, b.Gas, float, float]]:
+    def _gas_rows_raw(self) -> list[rp.GasRow]:
         """(role, Gas, tank_l, pressure_bar) for every valid gas row — the raw
         input the shared report layer (`rp.gas_report` / `rp.aggregate_banks`)
         consumes. Keyed downstream by the frozen ``Gas`` value, never its rounded
