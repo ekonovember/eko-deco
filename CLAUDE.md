@@ -140,7 +140,7 @@ python -m deco.cli plan --depth 40 --time 25 --gas air --deco-gas 50 --sac 20 --
 # grid, time rows −TB/+TA steps × depth columns −DB/+DA steps
 python -m deco.cli plan --depth 40 --time 25 --gas air --deco-gas 50 --contingency          # counts from config (1:1:1:1)
 python -m deco.cli plan --depth 40 --time 25 --gas air --deco-gas 50 --contingency 0:2:0:1  # explicit TB[:TA[:DB[:DA]]]
-# Tests: 480 total. Skips are environment, not failure — count them before
+# Tests: 500 total. Skips are environment, not failure — count them before
 # assuming something is wrong:
 #   1  everything installed, with a display (the unfilled Shearwater Cloud
 #      fixture, which is a fixture waiting to be filled)

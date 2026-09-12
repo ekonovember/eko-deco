@@ -775,3 +775,57 @@ class TestSeriesTotals(unittest.TestCase):
         for w in totals.warnings:
             self.assertNotIn(w.removeprefix("day total: "),
                              [x for r in results for x in r.warnings])
+
+
+class TestHypoxicWarningRenders(unittest.TestCase):
+    """The hypoxic half of the ppO2 warning. It survives into a *planned* dive
+    only when there is genuinely nothing to travel on — give the planner any
+    deco or travel mix and it descends on that instead (and says so, via
+    `plan_notices`) — which is why the rendered string had no test until a
+    coverage pass found it. It is live code, not dead: reachable, and the only
+    thing that tells a diver their bottom mix will not keep them conscious on
+    the surface."""
+
+    HYPOXIC = b.Gas(0.10, 0.70)
+
+    def test_a_hypoxic_mix_with_nothing_to_travel_on(self):
+        res = rp.compute_plan_result([b.Level(60.0, 20.0)], self.HYPOXIC,
+                                     b.DivePlan())
+        hypoxic = [w for w in res.warnings if "hypoxic" in w]
+        self.assertEqual(len(hypoxic), 1)
+        self.assertIn("0.10 bar", hypoxic[0])
+        self.assertIn("at 0 m", hypoxic[0])
+        self.assertIn("min 0.18", hypoxic[0])
+
+    def test_a_travel_gas_removes_it(self):
+        plan = b.DivePlan(travel_gases=(b.Gas(0.35, 0.25),),
+                          deco_gases=(b.EAN50,))
+        res = rp.compute_plan_result([b.Level(60.0, 20.0)], self.HYPOXIC, plan)
+        self.assertEqual([w for w in res.warnings if "hypoxic" in w], [])
+
+
+class TestBailoutFailureIsAResult(unittest.TestCase):
+    """An unplannable bailout is a finding, not a crash — `compute_plan_result`
+    swallows the planner's errors and leaves `bailout` None."""
+
+    def _with_bailout_raising(self, exc):
+        real = b.bailout_schedule
+
+        def boom(*a, **kw):
+            raise exc
+
+        b.bailout_schedule = boom
+        try:
+            return rp.compute_plan_result([b.Level(30.0, 25.0)], b.EAN32,
+                                          b.DivePlan(deco_gases=(b.EAN50,)))
+        finally:
+            b.bailout_schedule = real
+
+    def test_a_value_error_leaves_no_bailout(self):
+        self.assertIsNone(self._with_bailout_raising(ValueError("nope")).bailout)
+
+    def test_a_runtime_error_leaves_no_bailout(self):
+        res = self._with_bailout_raising(RuntimeError("nope"))
+        self.assertIsNone(res.bailout)
+        # and the rest of the plan is intact
+        self.assertGreater(res.total_runtime_min, 25.0)

@@ -197,8 +197,15 @@ class Gas:
             raise ValueError(f"fO2 out of range: {self.fO2}")
         if not (0.0 <= self.fHe < 1.0):
             raise ValueError(f"fHe out of range: {self.fHe}")
-        if self.fN2 < -1e-9:
-            raise ValueError("fO2 + fHe > 1")
+        # Checked on the RAW sum, never on `fN2`: that property clamps at zero
+        # to keep float slop (21/79 sums to 1 + 1e-9 in binary) out of the
+        # molar-mass and Schreiner math, and the clamp made this guard
+        # unreachable — `Gas(0.50, 0.60)` built a "Trimix 50/60" with fN2 0.0
+        # and went on to quote a density, a MOD and an END for it. The 1e-9 is
+        # the same slop tolerance the clamp exists for (DECISIONS.md #34).
+        if self.fO2 + self.fHe > 1.0 + 1e-9:
+            raise ValueError(
+                f"fO2 + fHe > 1: {self.fO2:g} + {self.fHe:g} is not a gas")
 
     def mod(self, ppo2_max: float = 1.4, surface_p: float = P_ATM,
             msw_per_bar: float = MSW_PER_BAR) -> float:

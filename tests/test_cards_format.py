@@ -14,7 +14,11 @@ Skips without matplotlib, like the other rendering suites.
 
 from __future__ import annotations
 
+import contextlib
+import io
 import json
+import pathlib
+import tempfile
 import unittest
 
 from deco import buhlmann as b
@@ -170,3 +174,111 @@ class TestCardMatchesThePlanner(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+@unittest.skipUnless(_HAVE_CARDS, "matplotlib not installed")
+class TestGasLine(unittest.TestCase):
+    """`gas_line` — the card's one-line gas plan, built from the plan JSON so
+    it cannot disagree with the schedule printed above it."""
+
+    def test_it_names_the_bottom_mix_then_every_switch_with_its_depth(self):
+        plan = _plan_json()
+        line = mc.gas_line(plan)
+        self.assertTrue(line.startswith("Trimix 21/35"))
+        self.assertIn("EAN50@", line)
+        self.assertIn("O2@", line)
+
+    def test_the_switch_depths_are_the_schedules_own(self):
+        plan = _plan_json()
+        switches = {p.split("@")[0]: float(p.split("@")[1])
+                    for p in mc.gas_line(plan).split()[2:]}
+        # every switch depth appears as an ascent/stop depth in the segments
+        depths = {s["depth_start_m"] for s in plan["segments"]}
+        for mix, d in switches.items():
+            self.assertIn(d, depths, mix)
+
+    def test_a_single_gas_dive_is_just_the_bottom_mix(self):
+        out = io.StringIO()
+        with contextlib.redirect_stdout(out):
+            cli.main(["plan", "--json", "--depth", "30", "--time", "20",
+                      "--gas", "air"])
+        self.assertEqual(mc.gas_line(json.loads(out.getvalue())), "Air")
+
+
+@unittest.skipUnless(_HAVE_CARDS, "matplotlib not installed")
+class TestBarsFromPlan(unittest.TestCase):
+    """`bars_from_plan` — the optional grey `bar` column, aligned to the rows."""
+
+    def test_one_entry_per_row_with_the_bottom_row_blank(self):
+        plan = _plan_json("--gas", "21/35@24@232", "--deco-gas", "50@11@200",
+                          "--deco-gas", "100@11@200", "--sac", "18")
+        rows = mc.rows_from_scenarios([plan])
+        bars = mc.bars_from_plan(plan, rows)
+        self.assertEqual(len(bars), len(rows))
+        self.assertEqual(bars[0], "")          # the bottom row has no gauge read
+
+    def test_the_figures_are_the_plans_own_end_bar(self):
+        plan = _plan_json("--gas", "21/35@24@232", "--deco-gas", "50@11@200",
+                          "--deco-gas", "100@11@200", "--sac", "18")
+        rows = mc.rows_from_scenarios([plan])
+        bars = mc.bars_from_plan(plan, rows)
+        by_depth = {s["depth_m"]: s.get("end_bar") for s in plan["stops"]}
+        for (label, _cells, _sw), bar in zip(rows[1:], bars[1:], strict=True):
+            want = by_depth.get(float(label))
+            self.assertEqual(bar, "" if want is None else f"{want:.0f}")
+
+    def test_no_cylinders_means_a_blank_column(self):
+        plan = _plan_json()                    # no tank/fill given
+        rows = mc.rows_from_scenarios([plan])
+        self.assertEqual(set(mc.bars_from_plan(plan, rows)), {""})
+
+
+@unittest.skipUnless(_HAVE_CARDS, "matplotlib not installed")
+class TestCardCarriesItsWarnings(unittest.TestCase):
+    """The card is what goes underwater and it carries no printed disclaimer,
+    so `draw_card` refuses a spec with no `warnings` key (DECISIONS #4) — and
+    when there ARE warnings it must actually render them."""
+
+    def _spec(self, warnings):
+        spec = dict(mc.EXAMPLE)
+        spec["warnings"] = warnings
+        return spec
+
+    def test_a_spec_with_no_warnings_key_is_refused(self):
+        spec = dict(mc.EXAMPLE)
+        del spec["warnings"]
+        with tempfile.TemporaryDirectory() as d, self.assertRaises(KeyError):
+            mc.save_card(spec, pathlib.Path(d) / "card.pdf")
+
+    def test_warnings_are_drawn_onto_the_card(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = pathlib.Path(d) / "card.pdf"
+            mc.save_card(self._spec(["ppO2 1.61 bar on O2 at 6 m",
+                                     "gas density 5.4 g/L at 32 m"]), path)
+            self.assertTrue(path.exists())
+            self.assertGreater(path.stat().st_size, 1000)
+
+    def test_a_clean_plan_renders_with_an_empty_list(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = pathlib.Path(d) / "card.pdf"
+            mc.save_card(self._spec([]), path)
+            self.assertTrue(path.exists())
+
+
+@unittest.skipUnless(_HAVE_CARDS, "matplotlib not installed")
+class TestA4Imposition(unittest.TestCase):
+    """`save_sheet` — four cards per A4 with crop marks. This is the file that
+    actually reaches the printer."""
+
+    def test_it_writes_a_sheet(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = pathlib.Path(d) / "sheet.pdf"
+            mc.save_sheet([mc.EXAMPLE], path)
+            self.assertTrue(path.exists())
+            self.assertGreater(path.stat().st_size, 1000)
+
+    def test_several_cards_impose_onto_one_sheet(self):
+        with tempfile.TemporaryDirectory() as d:
+            path = pathlib.Path(d) / "sheet.pdf"
+            mc.save_sheet([mc.EXAMPLE] * 4, path)
+            self.assertTrue(path.exists())

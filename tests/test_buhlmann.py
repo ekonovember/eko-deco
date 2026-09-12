@@ -1238,3 +1238,43 @@ class TestWorstPpO2KeyedByValue(unittest.TestCase):
         worst = b.worst_ppo2_violations(segs, plan)
         self.assertEqual(len(worst), 1)
         self.assertAlmostEqual(worst[0].depth, 60.0)
+
+
+class TestGasValidation(unittest.TestCase):
+    """`Gas.__post_init__` is the gate on the type every other number hangs
+    off — an impossible mix must not reach the Schreiner equation, the density
+    formula or a printed MOD. The guards existed and nothing exercised them."""
+
+    def test_fo2_must_be_a_real_fraction(self):
+        for bad in (0.0, -0.1, 1.5):
+            with self.assertRaises(ValueError) as cm:
+                b.Gas(bad)
+            self.assertIn("fO2 out of range", str(cm.exception))
+
+    def test_fhe_must_be_a_real_fraction(self):
+        for bad in (-0.01, 1.0, 2.0):
+            with self.assertRaises(ValueError) as cm:
+                b.Gas(0.21, bad)
+            self.assertIn("fHe out of range", str(cm.exception))
+
+    def test_the_fractions_cannot_exceed_one(self):
+        with self.assertRaises(ValueError) as cm:
+            b.Gas(0.50, 0.60)
+        self.assertIn("fO2 + fHe > 1", str(cm.exception))
+
+    def test_float_slop_at_exactly_one_is_tolerated(self):
+        # 21/79 trimix: the fractions sum to 1 + 1e-9 in binary. fN2 clamps to
+        # zero rather than leaking a negative into the molar-mass math.
+        gas = b.Gas(0.21, 0.79)
+        self.assertGreaterEqual(gas.fN2, 0.0)
+        self.assertGreater(gas.density(40.0), 0.0)
+
+
+class TestCompartmentABDegenerate(unittest.TestCase):
+    """`compartment_ab` with no inert gas loaded at all — the total-zero guard
+    that keeps a division out of the coefficient blend."""
+
+    def test_zero_inert_loading_falls_back_to_the_nitrogen_table(self):
+        for idx in (0, 7, 15):
+            a, bb = b.compartment_ab(0.0, 0.0, idx)
+            self.assertEqual((a, bb), (b.N2_A[idx], b.N2_B[idx]))

@@ -46,6 +46,32 @@ outside the safety surface however prominently it is printed.
   on the diver's behalf, kept separate from hazards so the warnings stay worth
   reading.
 
+### Fixed — an impossible gas mix constructed silently (DECISIONS #34)
+
+- **`Gas(0.50, 0.60)` — 110 % of a gas — passed validation.** The guard
+  (`if self.fN2 < -1e-9`) read the `fN2` property, which clamps at zero to
+  absorb float slop, so the clamp made the guard unreachable. The mix built as
+  "Trimix 50/60" and went on to quote a density, a MOD and an END, all derived
+  from a molar mass summing 110 % of a mole; `deco plan --gas 50/60` planned
+  the dive. Validation now asserts on the raw sum, keeping the same slop
+  tolerance. Found by reading the uncovered lines in a coverage pass — the line
+  was uncovered because it was dead, which a coverage *number* cannot tell you.
+
+### Added — tests for the paths a coverage pass showed were unexercised
+
+- The **hypoxic** half of the ppO2 warning: live code (it fires when a hypoxic
+  bottom mix is given with nothing to travel on) that had never been rendered
+  by a test.
+- `Gas` validation — all three raises, plus the float slop the clamp exists for,
+  so the tolerance and the guard are pinned against each other.
+- `cards.gas_line`, `cards.bars_from_plan`, `save_sheet` (the A4 imposition that
+  reaches the printer) and the path that renders warnings **onto** the card.
+  `cards.py` coverage 69% -> 93%.
+- The bailout-unplannable handler, and `compartment_ab`'s zero-loading guard.
+
+Core modules now sit at 94-100 % branch coverage (`buhlmann` and `report` 98 %,
+`contingency` 100 %); 500 tests.
+
 ### Fixed
 
 - `worst_ppo2_violations` keyed its reduction by `repr(gas)` — the one thing

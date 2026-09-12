@@ -324,7 +324,7 @@ python -m unittest discover -s tests -t . -v
 ```
 
 No install and no third-party packages needed — `tests/__init__.py` puts `src/`
-on the path. **480 tests** in three tiers:
+on the path. **500 tests** in three tiers:
 
 - **404 core tests** — constant counts, surface saturation, Haldane equivalence,
   NDLs against published Bühlmann values (±5 min), multi-level profiles,
@@ -340,7 +340,7 @@ on the path. **480 tests** in three tiers:
 - **12 third-party-oracle cross-checks** — `decotengu` and `decodaitengu` from
   the `[dev]` extra, so "who is wrong" has more than two votes.
 
-The count you see is always `Ran 480 tests`; what varies is the **skip** line,
+The count you see is always `Ran 500 tests`; what varies is the **skip** line,
 and a skip here means *this machine lacks something*, never *this data is
 missing*:
 

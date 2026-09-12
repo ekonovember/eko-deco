@@ -1196,3 +1196,56 @@ team-sharing standard the name implies. That is the repo owner's call and it is
 already documented in #28; a solo or CCR diver wants 1, and changing the
 default would silently move the reserve figure on every plan and every saved
 config. It is a setting, prominently in both front ends, not a defect.
+
+
+## #34 — A clamp that read like a safety measure and disabled one
+
+`Gas.__post_init__` has always ended with a guard against an impossible mix:
+
+```python
+if self.fN2 < -1e-9:
+    raise ValueError("fO2 + fHe > 1")
+```
+
+It never fired. `fN2` is a property returning `max(0.0, 1.0 - fO2 - fHe)`, and
+that clamp exists for a good reason — a 21/79 trimix sums to 1 + 1e-9 in
+binary, and a tiny negative nitrogen fraction must not leak into the molar-mass,
+narcotic or Schreiner math. But the guard *read the clamped value*, so the
+clamp's floor of 0.0 made `< -1e-9` unreachable. `Gas(0.50, 0.60)` — 110 % of a
+gas — constructed silently as "Trimix 50/60" with `fN2` 0.0, and then quoted a
+density of 4.06 g/L, a MOD of 17.9 m and an END of 9.9 m for it. `deco plan
+--gas 50/60` planned the dive. Every one of those numbers is derived from a
+molar mass that sums 110 % of a mole.
+
+The fix is one line — check the **raw sum**, keeping the same 1e-9 slop the
+clamp exists to absorb — and it is not the interesting part. Two things about
+how it was found are:
+
+**Coverage found it, and could only have found it by being read.** The line was
+reported uncovered. The obvious conclusion is "write a test for it"; the actual
+conclusion, once the test was written and *did not raise*, was that the line was
+uncovered because it was **unreachable**. A coverage number would have said 97 %
+either way. This is the argument for reading the uncovered lines rather than
+chasing the percentage: an untested line and a dead line look identical in the
+report, and only one of them is a bug.
+
+**Two correct-looking pieces of code composed into a wrong one.** The clamp is
+right. The guard is right. Neither is wrong in isolation and neither would fail
+a review of itself; the defect lives in the fact that one reads the other's
+output. Nothing about `Gas` is complicated enough for that to feel possible,
+which is exactly why it survived — and it sits on the type every other number in
+the tool hangs off.
+
+Validation now asserts on inputs, never on a derived and sanitised property.
+`tests/test_buhlmann.TestGasValidation` covers all three raises plus the float
+slop the clamp protects, so the tolerance and the guard are pinned against each
+other rather than one quietly cancelling the other.
+
+The same coverage pass found `report.warning_lines`' **hypoxic** branch
+untested — live code, not dead: it fires when a hypoxic bottom mix is given with
+nothing at all to travel on, which is the one case the planner cannot paper over
+by descending on a deco bottle. It is the only thing that tells a diver their
+bottom mix will not keep them conscious at the surface, and it now has a test.
+So do `cards.gas_line`, `cards.bars_from_plan`, the render path that puts
+warnings **onto** the card that goes underwater, and `save_sheet`, the A4
+imposition that is the file actually reaching the printer.
