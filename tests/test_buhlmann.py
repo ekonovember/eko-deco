@@ -1213,3 +1213,28 @@ class TestSurfaceInterval(unittest.TestCase):
         on_air = b.surface_interval(t, 30.0, plan, b.AIR)
         on_o2 = b.surface_interval(t, 30.0, plan, b.O2)
         self.assertLess(sum(on_o2.pN2), sum(on_air.pN2))
+
+
+class TestWorstPpO2KeyedByValue(unittest.TestCase):
+    """`worst_ppo2_violations` reduces per (gas, kind) — and the key is the
+    frozen `Gas` value, never its rounded label (DECISIONS.md #8). EAN20.6 and
+    EAN21.4 both print "EAN21"; collapsing them attributes one mix's ppO2 to
+    the other's name on the warning banner."""
+
+    def test_two_mixes_that_print_the_same_stay_separate(self):
+        lean, rich = b.Gas(0.206), b.Gas(0.214)
+        self.assertEqual(repr(lean), repr(rich))       # the trap
+        plan = b.DivePlan(ppo2_bottom=1.0, ppo2_switch_tol=0.0)
+        segs = [b.DiveSegment("bottom", 60.0, 60.0, 5.0, lean),
+                b.DiveSegment("bottom", 60.0, 60.0, 5.0, rich)]
+        worst = b.worst_ppo2_violations(segs, plan)
+        self.assertEqual(len(worst), 2)
+        self.assertEqual({v.segment.gas for v in worst}, {lean, rich})
+
+    def test_one_mix_still_reduces_to_its_worst(self):
+        plan = b.DivePlan(ppo2_bottom=1.0, ppo2_switch_tol=0.0)
+        segs = [b.DiveSegment("descent", 0.0, 60.0, 3.0, b.AIR),
+                b.DiveSegment("bottom", 60.0, 60.0, 5.0, b.AIR)]
+        worst = b.worst_ppo2_violations(segs, plan)
+        self.assertEqual(len(worst), 1)
+        self.assertAlmostEqual(worst[0].depth, 60.0)

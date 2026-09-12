@@ -24,7 +24,7 @@ and `[dev]` adds ruff and mypy.
 ## The checks CI runs
 
 ```bash
-python -m unittest discover -s tests -t .   # 442 tests
+python -m unittest discover -s tests -t .   # 480 tests
 ruff check .
 mypy
 ```
@@ -32,7 +32,7 @@ mypy
 Optionally `pip install pre-commit && pre-commit install` to run the first two
 on every commit.
 
-The count is always `Ran 442 tests`; the **skip** line is what varies, and a
+The count is always `Ran 480 tests`; the **skip** line is what varies, and a
 skip means this machine lacks something, never that data is missing. Two
 modules compile the reference implementations — Subsurface's `deco.cpp` with
 **g++**, Erik Baker's `GFDECO` with **gfortran** — and two more want the

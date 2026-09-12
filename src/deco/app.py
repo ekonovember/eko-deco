@@ -1576,6 +1576,7 @@ class DecoApp:
         papered over. One ⚠ card each, in the report layer's own wording so the
         two front ends can never phrase a warning differently."""
         cards = [[f"⚠  {w}"] for w in res.warnings]
+        cards.extend([f"·  {n}"] for n in res.notices)
         if not any(r["role"].get() == "Bottom" and self._row_gas(r) is not None
                    for r in self.gas_rows):
             cards.append([f"⚠  no Bottom gas in the list — planning on "

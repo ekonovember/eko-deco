@@ -42,3 +42,34 @@ class TestOxygenToxicity(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+class TestSurfaceDecay(unittest.TestCase):
+    """`cns_after_interval` — the CNS clock across a surface interval."""
+
+    def test_one_halftime_halves_it(self):
+        self.assertAlmostEqual(
+            tox.cns_after_interval(80.0, tox.CNS_HALFTIME_MIN), 40.0, places=9)
+
+    def test_no_interval_changes_nothing(self):
+        for t in (0.0, -5.0):
+            self.assertEqual(tox.cns_after_interval(42.0, t), 42.0)
+
+    def test_decays_monotonically_and_never_below_zero(self):
+        prev = 100.0
+        for t in (10, 30, 60, 120, 600):
+            now = tox.cns_after_interval(100.0, t)
+            self.assertLess(now, prev)
+            self.assertGreater(now, 0.0)
+            prev = now
+
+
+class TestReportingThresholds(unittest.TestCase):
+    """The warning tiers are ordered and are the published limits."""
+
+    def test_tiers_are_ordered(self):
+        self.assertLess(tox.CNS_WARN_PCT, tox.CNS_LIMIT_PCT)
+
+    def test_published_limits(self):
+        self.assertEqual(tox.CNS_LIMIT_PCT, 100.0)   # NOAA single exposure
+        self.assertEqual(tox.OTU_DAILY_LIMIT, 300.0)  # Repex daily dose

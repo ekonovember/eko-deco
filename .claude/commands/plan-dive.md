@@ -6,7 +6,8 @@ allowed-tools: Bash(python:*)
 
 Run the deco planner with the user's arguments, then summarize the schedule
 (stops, total runtime, gas switches, surface ceiling). Always relay the
-ppO2/density/ceiling warnings — they are the only caveat in the output
+warnings — ppO2, gas density (both tiers), ceiling, the surfacing check and the
+CNS/OTU clocks — they are the only caveat in the output
 (DECISIONS.md #4/#5).
 
 !`python -m deco.cli plan $ARGUMENTS`

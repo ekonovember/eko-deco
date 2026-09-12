@@ -86,16 +86,31 @@ so, and that flag is worth quoting (DECISIONS #28). Every algorithm input is set
 from the CLI, `dive_plan.json` and the GUI alike (DECISIONS #19) — including
 `--p-h2o` (0.0627 Bühlmann / 0.0567 Schreiner) and `--ppo2-switch-tol`. Deco-gas switches snap to standard stop depths (O2 at
 the 6 m stop, EAN50 at 21 m). On Windows set `PYTHONUTF8=1` for clean output.
-Every plan prints ppO2/density/ceiling warnings (`warnings` in `--json`),
-CNS%/OTU, END + gas density — quote the warnings when relaying a schedule; with
-no disclaimer in the output they are the only caveat the user sees. It also
+Every plan prints its warnings (`warnings` in `--json`) — **ppO2, gas density
+(two tiers: the 5.2 g/L recommended maximum and the 6.2 g/L hard ceiling),
+ceiling violations, the surfacing check (SurfGF vs GF-High and any ceiling left
+at the surface) and the oxygen clocks (CNS past 80 % / the NOAA 100 % limit,
+OTU past the 300 Repex daily dose)** — plus CNS%/OTU, END and gas density as
+figures. Quote the warnings when relaying a schedule; with no disclaimer in the
+output they are the only caveat the user sees (DECISIONS #33). Separate from
+them, `·` **notices** (`notices` in `--json`) say what the planner chose on the
+diver's behalf — e.g. a deco gas used as travel gas on a hypoxic descent;
+mention them, but do not present them as hazards. It also
 prints **SurfGF** (the GF actually surfaced at, against the GF-High allowed —
 `surf_gf`), the **gas stack** (MOD/END/EAD/density per mix, each at its own MOD
 — `gas_stack`), the cylinder pressure **leaving each stop** (`stops[].end_bar`),
 a one-line schedule for a slate (`backup_line`), and whether losing the
-**bottom** gas is survivable on the remaining stack (`bailout_bottom_gas`,
-`null` = not survivable; on a deep dive that is the usual and correct answer —
-relay it as such, never as a missing feature).
+**bottom** gas can be bailed out from depth on the remaining stack
+(`bailout_bottom_gas`, `null` = no schedule can be planned *from depth* because
+nothing else carried is breathable down there; on a deep dive that is the usual
+and correct answer — relay it as a finding about the stack, never as a missing
+feature and never as a verdict that the diver would die: you ascend to the
+shallowest mix's MOD and switch).
+
+A repetitive series also prints a **Day total** block (`day_totals` in
+`--json`): OTU summed — it is a daily dose by definition — and CNS carried
+across the surface intervals with a 90 min half-time. Relay the day figure, not
+just the last dive's.
 
 **Repetitive dives:** `--dive DEPTH:RUNTIME[:SURFACE_INTERVAL]`, repeatable, one
 per dive; the interval is surface minutes BEFORE that dive and the first dive

@@ -38,6 +38,37 @@ _CNS_RATE = (
 OTU_THRESHOLD_PPO2 = 0.5
 OTU_EXPONENT = 0.83
 
+# --- Reporting thresholds -----------------------------------------------
+# Not model constants: these are where a front end must stop printing a number
+# and start printing a warning. With the disclaimer gone, the warnings are the
+# whole safety surface (DECISIONS.md #4), and an oxygen clock that only ever
+# renders as a statistic is outside it (DECISIONS.md #33).
+
+#: CNS % at which the exposure stops being routine. NOAA's single-exposure
+#: table runs to 100 %; the agencies teach planning to 80 % so the contingency
+#: that lengthens the deco does not push you past the limit.
+CNS_WARN_PCT = 80.0
+#: CNS % that IS the NOAA single-exposure limit.
+CNS_LIMIT_PCT = 100.0
+#: Repex daily pulmonary dose limit (OTU). Unlike CNS this is a *day* figure,
+#: which is why the series report sums it (`report.SeriesTotals`).
+OTU_DAILY_LIMIT = 300.0
+#: CNS half-time on the surface (minutes). Off-gassing the CNS clock is not
+#: part of any NOAA table — the 90 min half-time is the convention Shearwater
+#: and MultiDeco both use for repetitive dives, and it is what makes a day's
+#: CNS a sum rather than a running maximum.
+CNS_HALFTIME_MIN = 90.0
+
+
+def cns_after_interval(cns_pct: float, interval_min: float) -> float:
+    """CNS % left after `interval_min` on the surface, decaying with
+    `CNS_HALFTIME_MIN`. Used to carry the clock across a repetitive series the
+    way the tissues are carried — a day of deco dives accumulates CNS, and
+    reporting each dive's own figure in isolation understates the day."""
+    if interval_min <= 0:
+        return cns_pct
+    return cns_pct * 0.5 ** (interval_min / CNS_HALFTIME_MIN)
+
 
 def _cns_rate(po2: float) -> float:
     """CNS clock fraction per minute at a ppO2 (bar)."""

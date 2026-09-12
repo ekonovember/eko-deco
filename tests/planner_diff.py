@@ -147,6 +147,10 @@ def registry() -> list[Tunable]:
         Tunable("M_HE", _v("M_HE"), "module", "hardcoded", (DENSITY,)),
         Tunable("DENSITY_MAX_G_L", _v("DENSITY_MAX_G_L"), "module", "hardcoded",
                 (), "our warning threshold; a planner need not have one"),
+        Tunable("DENSITY_WORKING_G_L", _v("DENSITY_WORKING_G_L"), "module",
+                "hardcoded", (),
+                "Anthony & Mitchell's recommended max; advisory tier only — "
+                "it changes no schedule, so no export can pin it"),
 
         # --- oxygen toxicity
         Tunable("_CNS_RATE", _v("_CNS_RATE"), "module", "hardcoded", (OXTOX,),
@@ -155,6 +159,22 @@ def registry() -> list[Tunable]:
                 "hardcoded", (OXTOX,)),
         Tunable("OTU_EXPONENT", _v("OTU_EXPONENT"), "module", "hardcoded",
                 (OXTOX,), "Repex / Hamilton"),
+        # Reporting thresholds, not dose curves: they decide when a number
+        # becomes a warning and never enter a schedule or a CNS/OTU figure, so
+        # no reference export can pin them however much evidence we gather.
+        Tunable("CNS_WARN_PCT", _v("CNS_WARN_PCT"), "module", "hardcoded",
+                (), "warning tier only; changes no computed value"),
+        Tunable("CNS_LIMIT_PCT", _v("CNS_LIMIT_PCT"), "module", "hardcoded",
+                (), "NOAA single-exposure limit, as a warning tier"),
+        Tunable("OTU_DAILY_LIMIT", _v("OTU_DAILY_LIMIT"), "module",
+                "hardcoded", (), "Repex daily dose, as a warning tier"),
+        # This one DOES change a reported number — the day's accumulated CNS
+        # across a repetitive series — but only ours: no export in the corpus
+        # prints a day total to compare against.
+        Tunable("CNS_HALFTIME_MIN", _v("CNS_HALFTIME_MIN"), "module",
+                "hardcoded", (),
+                "surface CNS decay; Shearwater/MultiDeco convention, but no "
+                "export prints a day total that could pin it"),
 
         # --- emergency gas: ours alone. No reference planner prints a
         # reserve we could compare against, so nothing here is pinnable.

@@ -504,3 +504,91 @@ class TestDiveSeries(unittest.TestCase):
             back = json.loads(out)["dives"]
         self.assertEqual([d["tts_min"] for d in back],
                          [d["tts_min"] for d in direct])
+
+
+_DAY = ["plan", "--dive", "30:25", "--dive", "30:25:60",
+        "--dive", "24:30:30", "--gas", "air", "--deco-gas", "50"]
+
+
+class TestDayTotals(unittest.TestCase):
+    """A repetitive series accumulates the oxygen clocks (DECISIONS.md #33)."""
+
+    SERIES = _DAY
+
+    def test_text_prints_a_day_total(self):
+        code, out, _ = run_cli(self.SERIES)
+        self.assertEqual(code, 0)
+        self.assertIn("Day total over 3 dives", out)
+        self.assertIn("daily", out)
+
+    def test_json_carries_day_totals(self):
+        code, out, _ = run_cli([*self.SERIES, "--json"])
+        self.assertEqual(code, 0)
+        data = json.loads(out)
+        totals = data["day_totals"]
+        self.assertAlmostEqual(totals["otu"],
+                               round(sum(d["otu"] for d in data["dives"]), 1),
+                               places=0)
+        self.assertGreater(totals["cns_pct"],
+                           max(d["cns_pct"] for d in data["dives"]))
+
+    def test_a_single_dive_has_no_day_block(self):
+        _code, out, _ = run_cli(["plan", "--depth", "30", "--time", "25",
+                                "--gas", "air"])
+        self.assertNotIn("Day total", out)
+        _code, out, _ = run_cli(["plan", "--depth", "30", "--time", "25",
+                                "--gas", "air", "--json"])
+        self.assertNotIn("day_totals", json.loads(out))
+
+    def test_one_dive_of_a_series_shows_only_that_dive(self):
+        code, out, _ = run_cli([*self.SERIES, "--dive-index", "2"])
+        self.assertEqual(code, 0)
+        self.assertNotIn("Day total", out)
+
+
+class TestSafetySurface(unittest.TestCase):
+    """The warnings are the whole safety surface, so the CLI must print them."""
+
+    def test_the_no_stop_overshoot_is_warned(self):
+        code, out, _ = run_cli(["plan", "--depth", "66", "--time", "5",
+                                "--gas", "air", "--gf-low", "0.85",
+                                "--gf-high", "0.85"])
+        self.assertEqual(code, 0)
+        self.assertIn("ceiling left", out)
+        self.assertIn("SurfGF 95% exceeds GF-High", out)
+
+    def test_cns_over_the_limit_is_warned(self):
+        _code, out, _ = run_cli(["plan", "--depth", "40", "--time", "60",
+                                "--gas", "ean32", "--deco-gas", "100"])
+        self.assertIn("over the NOAA single-exposure limit", out)
+
+    def test_the_working_density_tier_is_warned(self):
+        _code, out, _ = run_cli(["plan", "--depth", "32", "--time", "20",
+                                "--gas", "air", "--deco-gas", "50"])
+        self.assertIn("working limit", out)
+
+    def test_lost_bottom_gas_states_the_finding_not_a_verdict(self):
+        _code, out, _ = run_cli(["plan", "--depth", "30", "--time", "25",
+                                "--gas", "ean32", "--deco-gas", "50"])
+        self.assertIn("no schedule from depth", out)
+        self.assertNotIn("NOT survivable", out)
+
+    def test_a_deco_gas_used_as_travel_gas_is_noticed(self):
+        _code, out, _ = run_cli(["plan", "--depth", "60", "--time", "20",
+                                "--gas", "10/70", "--deco-gas", "50"])
+        self.assertIn("used as travel gas", out)
+
+    def test_notices_are_in_the_json(self):
+        _code, out, _ = run_cli(["plan", "--depth", "60", "--time", "20",
+                                "--gas", "10/70", "--deco-gas", "50", "--json"])
+        self.assertTrue(json.loads(out)["notices"])
+
+    def test_the_card_line_names_the_mix_at_each_switch(self):
+        _code, out, _ = run_cli(["plan", "--depth", "45", "--time", "25",
+                                "--gas", "21/35@24@232", "--deco-gas",
+                                "50@11@200", "--deco-gas", "100@11@200",
+                                "--sac", "18"])
+        line = next(l for l in out.splitlines() if l.startswith("Stops as"))
+        # the bar figures come off three different SPGs; each switch says which
+        self.assertIn("EAN50", line)
+        self.assertIn("O2", line)

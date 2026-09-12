@@ -28,9 +28,16 @@ ZHL-16C + Erik Baker gradient factors) in this repository.
 
 ## Rules
 
-- **Always relay the warnings.** ppO2/density/ceiling warnings are the only
-  caveat in the output — the printed disclaimer was removed deliberately
-  (`DECISIONS.md` #4 and #5).
+- **Always relay the warnings.** ppO2, gas density (5.2 g/L recommended and
+  6.2 g/L hard tiers), ceiling violations, the surfacing check (SurfGF vs
+  GF-High, ceiling left at the surface) and the oxygen clocks (CNS 80 % / 100 %,
+  OTU 300 daily) are the only caveat in the output — the printed disclaimer was
+  removed deliberately (`DECISIONS.md` #4, #5 and #33). `·` notices are a
+  separate, non-hazard channel: what the planner chose on the diver's behalf.
+- **On a repetitive series, relay the Day total**, not just the last dive: OTU
+  is a daily dose and CNS carries across the surface intervals.
+- `bailout_bottom_gas: null` means **no schedule can be planned from depth** —
+  a finding about the stack, not a prediction that the diver dies. Say so.
 - Don't invent numbers — run the model. If inputs are ambiguous (missing gas,
   time, or GF), ask one concise clarifying question.
 - Rock bottom and the emergency column are two different figures: rock bottom is

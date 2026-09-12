@@ -1100,3 +1100,99 @@ Two consequences:
   fix and it would not have been fixed by it. `buhlmann` keeps a one-line row
   and gets a "The model module" section below the map: one row per section,
   with the part that bites in its own column.
+
+
+## #33 — The warnings are the safety surface, so everything hazardous has to reach them
+
+A technical-diver audit of the whole tool (2026-09-12) found the model, the
+schedules and the gas arithmetic sound — 442 tests, four oracles, ruff and mypy
+clean — and the *safety surface* leaking in six places. Since the printed
+disclaimer was removed on purpose (see the scope note in `CLAUDE.md`), the
+warnings are the only caveat left, and every agent instruction in this repo —
+`.claude/agents/dive-planner.md`, `/plan-dive`, the skill — tells the reader to
+relay **the warnings**. A hazard that renders as an ordinary statistic is
+therefore outside the safety surface entirely, no matter how prominently it is
+printed. All six were the same mistake wearing different clothes.
+
+**1. A "no stops" verdict that was never re-checked during the ascent.**
+`plan --depth 66 --time 5 --gas air --gf-low 0.85 --gf-high 0.85` returned zero
+stops. The ceiling at the end of the bottom, evaluated at GF-Low, is 0.00 m, so
+the planner correctly concluded there was no obligation *at that moment* — but
+over the 6.6-minute ascent the slow compartments keep loading, the ceiling
+climbs to 3.65 m at 30 m, and the diver surfaces at SurfGF 95 % against a
+GF-High of 85 %, with 1.07 m of ceiling left. A sweep of 9–100 m × 3–60 min ×
+five mixes × 45 GF pairs found four such dives, every one of them at
+GF-Low ≥ 0.80 on a short deep bounce. Sane gradient factors never do it.
+
+That narrowness is the point, not a mitigation. The planner has a contract —
+*you surface at or below GF-High* — and nothing in the codebase asserted it, so
+the one corner that broke it broke silently. `report.surfacing_warnings` now
+checks the finished tissues against the plan's own GF-High and warns on both
+the residual ceiling and the SurfGF overshoot. It is deliberately a **post-hoc
+check on the result**, not a change to the scheduler: the scheduler agrees with
+GFDECO to 0.00 min on all seven cross-check cases (#21) and is not being
+touched to chase a corner. A guard that catches the whole class forever is
+worth more than a fix for the four dives found.
+
+**2. CNS % and OTU were never warnings at any value.** A 40 m / 60 min EAN32
+dive plans at **CNS 172 %** and printed it in the same neutral line as SurfGF,
+with no flag anywhere. `report.oxygen_clock_warnings` gives them tiers:
+`toxicity.CNS_WARN_PCT` 80 % (past which a contingency that lengthens the deco
+breaks the limit), `CNS_LIMIT_PCT` 100 % (NOAA single exposure) and
+`OTU_DAILY_LIMIT` 300 (Repex). These are **reporting thresholds, not model
+constants** — they enter no schedule and no computed dose — which is exactly
+what their registry entries say, since no reference export can ever pin them.
+
+**3. The oxygen clocks did not accumulate across a repetitive series.** The
+tissues were carried through the surface intervals; CNS and OTU were not, so
+each dive reported its own figure in isolation. A three-dive day printed
+"CNS 10 %, OTU 26" on dive 3 with a real day total near 22 % and 79. This is
+wrong on the definitions: **OTU is a daily dose** — Repex limits the day, not
+the dive — and CNS carries too, decaying on the surface. `report.series_totals`
+sums OTU and carries CNS through `toxicity.cns_after_interval`
+(`CNS_HALFTIME_MIN` 90 min, the Shearwater/MultiDeco convention). It takes the
+same `series` sequence `compute_series_result` was given, so the intervals
+cannot drift apart from the dives they separate.
+
+**4. Gas density warned only at the hard ceiling.** `DENSITY_MAX_G_L` 6.2 g/L
+was the only tier, while `Gas.density`'s own docstring cites Anthony &
+Mitchell's *recommended* maximum of 5.2 — the number the agencies teach and the
+one a gas plan is actually built to. Air crosses 5.2 at about 31 m and only
+reaches 6.2 at about 39 m, so the whole band where the paper says to add helium
+was unflagged, including the 30 m dive in this repo's own `dive_plan.json`.
+`DENSITY_WORKING_G_L` 5.2 is now an advisory tier beneath the hard one.
+
+**5. "Lost bottom gas: NOT survivable on this stack"** appeared on an ordinary
+30 m twinset dive carrying EAN50 and O₂. The clause after it is true —
+nothing else on the stack is breathable *at 30 m* — but the verdict in front of
+it is not something the model computed: you ascend to 21 m and take the 50 %.
+`bailout_schedule` returning None means *no schedule can be planned from
+depth*, which is a finding about the stack, not a prediction about the diver.
+The line now says that, and points at the shallowest mix's MOD.
+
+**6. A deco gas co-opted as travel gas said nothing.** Give the planner a
+hypoxic bottom mix and no travel gas and it descends on the shallowest
+breathable thing carried — with only a deco bottle on the stack, that is the
+deco bottle. The plan is right and the litres are billed, but it is not what
+was asked for, and many teams will not breathe a deco cylinder before the
+ascent. `PlanResult.notices` is the new home for this class: **things the
+planner chose on the diver's behalf**, rendered as `·` beside the `⚠` lines
+and kept separate from them because a notice is not a hazard and diluting the
+warnings is how a safety surface stops being read.
+
+Two smaller things went with them. `worst_ppo2_violations` keyed its reduction
+by `repr(gas)`, the one thing #8 forbids — EAN20.6 and EAN21.4 both print
+"EAN21", so two distinct mixes collapsed into one banner line under one of
+their names; it keys by the frozen `Gas` value now, like everything else. And
+the one-line card summary's `bar` column reports the pressure of the cylinder
+*in use*, so it jumps stack at each switch (124 back-gas → 196 on the 50 %);
+the framed card has a gas column to say which, that line did not, and it now
+names the mix wherever it changes — the same "only where it changes" rule
+`backup_line` already used.
+
+**What was deliberately left alone.** `GasPlan.divers` still defaults to 1,
+so "rock bottom" out of the box is get-yourself-up gas rather than the
+team-sharing standard the name implies. That is the repo owner's call and it is
+already documented in #28; a solo or CCR diver wants 1, and changing the
+default would silently move the reserve figure on every plan and every saved
+config. It is a setting, prominently in both front ends, not a defect.

@@ -620,3 +620,158 @@ class TestLegPressures(unittest.TestCase):
         self.assertTrue(all(len(r) == 5 for r in with_bar))
         # the surface row has no hold, so no gauge reading
         self.assertEqual(with_bar[-1][4], "")
+
+
+class TestSurfacingWarnings(unittest.TestCase):
+    """The schedule's own contract: surface at or below GF-High, no ceiling
+    left. Checked post-hoc, because the planner decides "no stops" from the
+    ceiling at the END OF THE BOTTOM and the slow compartments keep loading
+    through the ascent behind it (DECISIONS.md #33)."""
+
+    def test_the_deep_bounce_that_surfaced_over_gf_high_is_caught(self):
+        # 66 m for 5 min on air at GF 85/85: ceiling at the bottom is 0.00 m,
+        # so the planner returns ZERO stops — and the diver surfaces at
+        # SurfGF 95 % with 1.07 m of ceiling left. This was silent.
+        plan = b.DivePlan(gf_low=0.85, gf_high=0.85)
+        res = rp.compute_plan_result([b.Level(66.0, 5.0)], b.AIR, plan)
+        self.assertEqual([s for s in res.segments if s.kind == "stop"], [])
+        self.assertGreater(res.surf_gf, plan.gf_high)
+        self.assertGreater(res.surface_ceiling_m, 0.0)
+        text = " ".join(res.warnings)
+        self.assertIn("ceiling left", text)
+        self.assertIn("SurfGF", text)
+
+    def test_a_sane_dive_surfaces_clean(self):
+        plan = b.DivePlan(gf_low=0.30, gf_high=0.70,
+                          deco_gases=(b.EAN50, b.O2))
+        res = rp.compute_plan_result([b.Level(30.0, 25.0)], b.EAN32, plan)
+        self.assertEqual(res.warnings, [])
+        self.assertLessEqual(res.surf_gf, plan.gf_high)
+
+    def test_no_tissues_means_no_surfacing_check(self):
+        # The segment-only caller still gets the segment-derived warnings.
+        self.assertEqual(rp.surfacing_warnings(b.DivePlan(), None), [])
+
+
+class TestOxygenClockWarnings(unittest.TestCase):
+    """CNS and OTU as warnings, not statistics — an agent told to relay the
+    warnings must be told about a 172 % CNS dive."""
+
+    def test_over_the_noaa_limit(self):
+        out = rp.oxygen_clock_warnings(172.0, 50.0)
+        self.assertEqual(len(out), 1)
+        self.assertIn("172%", out[0])
+        self.assertIn("over the NOAA", out[0])
+
+    def test_the_advisory_tier(self):
+        out = rp.oxygen_clock_warnings(85.0, 50.0)
+        self.assertEqual(len(out), 1)
+        self.assertIn("past 80%", out[0])
+
+    def test_routine_exposure_is_silent(self):
+        self.assertEqual(rp.oxygen_clock_warnings(30.0, 80.0), [])
+
+    def test_otu_over_the_daily_dose(self):
+        out = rp.oxygen_clock_warnings(10.0, 340.0)
+        self.assertEqual(len(out), 1)
+        self.assertIn("daily Repex", out[0])
+
+    def test_absent_clocks_say_nothing(self):
+        self.assertEqual(rp.oxygen_clock_warnings(None, None), [])
+
+
+class TestDensityTiers(unittest.TestCase):
+    """Two tiers: Anthony & Mitchell's recommended 5.2 g/L maximum as well as
+    the 6.2 g/L hard ceiling. Air crosses 5.2 at about 31 m."""
+
+    def _warn(self, depth):
+        plan = b.DivePlan(deco_gases=(b.EAN50,))
+        res = rp.compute_plan_result([b.Level(depth, 15.0)], b.AIR, plan)
+        return " ".join(w for w in res.warnings if "density" in w)
+
+    def test_under_the_working_limit_is_silent(self):
+        self.assertEqual(self._warn(25.0), "")
+
+    def test_between_the_tiers_is_advisory(self):
+        text = self._warn(34.0)
+        self.assertIn("working limit", text)
+        self.assertIn("add helium", text)
+
+    def test_over_the_hard_ceiling_keeps_the_old_wording(self):
+        text = self._warn(45.0)
+        self.assertIn("exceeds", text)
+        self.assertNotIn("working limit", text)
+
+    def test_the_tiers_are_ordered(self):
+        self.assertLess(b.DENSITY_WORKING_G_L, b.DENSITY_MAX_G_L)
+
+
+class TestPlanNotices(unittest.TestCase):
+    """What the planner chose that the diver did not ask for."""
+
+    def test_a_deco_gas_used_as_travel_gas_is_announced(self):
+        plan = b.DivePlan(deco_gases=(b.EAN50,))
+        res = rp.compute_plan_result([b.Level(60.0, 20.0)],
+                                     b.Gas(0.10, 0.70), plan)
+        self.assertEqual(len(res.notices), 1)
+        self.assertIn("travel gas", res.notices[0])
+        self.assertIn("EAN50", res.notices[0])
+
+    def test_a_real_travel_gas_needs_no_notice(self):
+        plan = b.DivePlan(travel_gases=(b.Gas(0.35, 0.25),),
+                          deco_gases=(b.EAN50,))
+        res = rp.compute_plan_result([b.Level(60.0, 20.0)],
+                                     b.Gas(0.10, 0.70), plan)
+        self.assertEqual(res.notices, [])
+
+    def test_an_ordinary_dive_has_no_notices(self):
+        plan = b.DivePlan(deco_gases=(b.EAN50,))
+        res = rp.compute_plan_result([b.Level(30.0, 25.0)], b.EAN32, plan)
+        self.assertEqual(res.notices, [])
+
+
+_DAY_SERIES = [(0.0, [b.Level(30.0, 25.0)]),
+               (60.0, [b.Level(30.0, 25.0)]),
+               (30.0, [b.Level(24.0, 30.0)])]
+
+
+class TestSeriesTotals(unittest.TestCase):
+    """OTU is a daily dose by definition and CNS carries across the surface;
+    the per-dive results could not show either (DECISIONS.md #33)."""
+
+    SERIES = _DAY_SERIES
+
+    def _totals(self):
+        plan = b.DivePlan(deco_gases=(b.EAN50,))
+        results = rp.compute_series_result(self.SERIES, b.AIR, plan)
+        return results, rp.series_totals(results, self.SERIES)
+
+    def test_otu_is_the_plain_sum(self):
+        results, totals = self._totals()
+        self.assertAlmostEqual(totals.otu, sum(r.otu for r in results),
+                               places=9)
+
+    def test_the_day_exceeds_every_single_dive(self):
+        results, totals = self._totals()
+        self.assertGreater(totals.otu, max(r.otu for r in results))
+        self.assertGreater(totals.cns_pct, max(r.cns_pct for r in results))
+
+    def test_cns_decays_so_the_day_is_under_the_naive_sum(self):
+        results, totals = self._totals()
+        self.assertLess(totals.cns_pct, sum(r.cns_pct for r in results))
+
+    def test_a_longer_surface_interval_leaves_less_cns(self):
+        plan = b.DivePlan(deco_gases=(b.EAN50,))
+        out = []
+        for si in (30.0, 240.0):
+            series = [(0.0, [b.Level(30.0, 25.0)]), (si, [b.Level(30.0, 25.0)])]
+            res = rp.compute_series_result(series, b.AIR, plan)
+            out.append(rp.series_totals(res, series).cns_pct)
+        self.assertGreater(out[0], out[1])
+
+    def test_a_day_warning_is_not_repeated_from_a_dive(self):
+        # Each dive is clean here, so any day warning must be the day's own.
+        results, totals = self._totals()
+        for w in totals.warnings:
+            self.assertNotIn(w.removeprefix("day total: "),
+                             [x for r in results for x in r.warnings])

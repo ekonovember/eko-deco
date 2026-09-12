@@ -19,6 +19,7 @@ from deco import buhlmann as b
 from deco import contingency as ct
 from deco import dive_config as dc
 from deco import report as rp
+from deco import toxicity as tox
 
 
 def _positive_float(s: str) -> float:
@@ -563,15 +564,35 @@ def cmd_plan(args) -> int:
                 res, model_label, gas_lines, cont_lines,
                 saved_to if n == len(results) else None))
 
+    # The oxygen clocks are the one thing a day accumulates that the per-dive
+    # results cannot show: OTU is a *daily* Repex dose by definition, and CNS
+    # carries across the surface intervals decaying as it goes. Only for a real
+    # series — a single dive's totals are its own figures (DECISIONS.md #33).
+    totals = (rp.series_totals(results, series) if len(results) > 1 else None)
+
     if args.json:
         # A single dive keeps the flat shape it has always had, so nothing that
         # reads `deco plan --json` today has to learn about series.
         single = len(results) == 1 and args.dive_index is None
-        print(json.dumps(json_dives[0] if single else {"dives": json_dives},
-                         indent=2))
+        if single:
+            print(json.dumps(json_dives[0], indent=2))
+        else:
+            out: dict = {"dives": json_dives}
+            if totals is not None:
+                out["day_totals"] = {"cns_pct": round(totals.cns_pct, 1),
+                                     "otu": round(totals.otu, 1),
+                                     "warnings": totals.warnings}
+            print(json.dumps(out, indent=2))
     else:
         for line in text_lines:
             print(line)
+        if totals is not None and args.dive_index is None:
+            print(f"\n=== Day total over {len(results)} dives ===")
+            print(f"CNS {totals.cns_pct:.0f}% (carried across the surface "
+                  f"intervals) · OTU {totals.otu:.0f} "
+                  f"of {tox.OTU_DAILY_LIMIT:.0f} daily")
+            for w in totals.warnings:
+                print(f"⚠  {w}")
     return 0
 
 
@@ -631,6 +652,7 @@ def _plan_json(res: rp.PlanResult, model_label: str, gas_data, cont_data,
                        "density_g_l": round(r.density_g_l, 2)}
                       for r in res.gas_stack],
         "warnings": res.warnings,
+        "notices": res.notices,
     }
     if gas_data is not None:
         out["gas"] = gas_data
@@ -703,18 +725,38 @@ def _plan_text(res: rp.PlanResult, model_label: str, gas_lines, cont_lines,
         # to the stop + hold), so they add up to the runtimes.
         # With cylinders on the stack each stop also carries the pressure the
         # diver should see leaving it — the one gas figure an SPG can check.
+        # The bar figure is the pressure of the cylinder IN USE at that stop,
+        # so it jumps stack when the gas switches (124 back-gas → 196 on the
+        # 50 %). The framed card has a gas column that says which; this
+        # one-liner did not, leaving a column of numbers off three different
+        # SPGs with nothing to tell them apart. Name the mix wherever it
+        # changes — the same "only where it changes" rule `backup_line` uses.
         bars = res.leg_bars or [None] * len(legs)
+        parts = []
+        prev_gas: b.Gas | None = None
+        for leg, bar in zip(legs, bars, strict=True):
+            part = f"{leg.depth:g}m {leg.leg:d}′@{leg.run:d}"
+            if bar is not None:
+                tag = "" if leg.gas == prev_gas else f" {leg.gas!r}"
+                part += f"{tag} {bar:.0f}bar"
+            parts.append(part)
+            prev_gas = leg.gas
         lines.append("Stops as printed on a card (leave-at runtime · leg min): "
-                     + "  ".join(f"{l.depth:g}m {l.leg:d}′@{l.run:d}"
-                                 + ("" if bar is None else f" {bar:.0f}bar")
-                                 for l, bar in zip(legs, bars, strict=True)))
+                     + "  ".join(parts))
     lines.append(f"Backup line: {res.backup}")
     # The one contingency the deco-gas scenarios cannot express. Usually "no",
     # and saying so plainly is the point: it is what decides whether the stage
     # on your hip is a bailout or only an accelerant.
     if res.bailout is None:
-        lines.append("Lost bottom gas: NOT survivable on this stack — nothing "
-                     f"else is breathable at {res.max_depth_m:g} m")
+        # NOT "not survivable": nothing on the stack is breathable AT MAX
+        # DEPTH, which is the ordinary state of a 30 m twinset dive carrying
+        # EAN50 and O2 — you ascend to 21 m and take the 50 %. What cannot be
+        # planned is a schedule *from depth* on the remaining gas; calling that
+        # a survivability verdict states something the model never computed
+        # (DECISIONS.md #33).
+        lines.append("Lost bottom gas: no schedule from depth — nothing else "
+                     f"on the stack is breathable at {res.max_depth_m:g} m "
+                     "(ascend on a buddy's gas to the shallowest mix's MOD)")
     else:
         lines.append(f"Lost bottom gas: TTS {b.time_to_surface(res.bailout):.0f}"
                      f" min on " + ", ".join(
@@ -724,6 +766,8 @@ def _plan_text(res: rp.PlanResult, model_label: str, gas_lines, cont_lines,
                  f"Surface ceiling at GF-High: {res.surface_ceiling_m:.2f} m"
                  f"    SurfGF {res.surf_gf * 100:.0f}%")
     lines.extend(f"⚠  {w}" for w in res.warnings)
+    # Notices, not warnings: what the planner chose on the diver's behalf.
+    lines.extend(f"·  {n}" for n in res.notices)
     lines.extend(gas_lines)
     lines.extend(cont_lines)
     if saved_to:

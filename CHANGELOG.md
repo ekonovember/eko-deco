@@ -6,6 +6,57 @@ pre-1.0, so anything may still move.
 
 ## [Unreleased]
 
+### Fixed — six holes in the safety surface (DECISIONS #33)
+
+A technical-diver audit of the whole tool found the model, the schedules and
+the gas arithmetic sound, and the *warnings* — which are the only caveat the
+output carries, and the thing every agent instruction here says to relay —
+leaking in six places. A hazard that renders as an ordinary statistic is
+outside the safety surface however prominently it is printed.
+
+- **A "no stops" verdict was never re-checked during the ascent.** 66 m for
+  5 min on air at GF 85/85 planned *zero stops* and surfaced at SurfGF 95 %
+  against GF-High 85 %, with 1.07 m of ceiling left: the ceiling at the end of
+  the bottom is 0.00 m, but the slow compartments keep loading through the long
+  ascent and it rises behind the diver. Only GF-Low >= 0.80 on a short deep
+  bounce does it — but nothing asserted the planner's contract, so the corner
+  that broke it broke silently. `report.surfacing_warnings` now checks the
+  finished tissues against the plan's own GF-High. A post-hoc check on the
+  result; the scheduler is untouched.
+- **CNS % and OTU are warnings now, not statistics.** A 40 m / 60 min EAN32
+  dive plans at CNS 172 % and flagged nothing. Tiers: CNS 80 % advisory,
+  100 % (NOAA single exposure), OTU 300 (Repex daily dose).
+- **A repetitive series accumulates the oxygen clocks.** The tissues were
+  carried through the surface intervals; CNS and OTU were not, so a three-dive
+  day printed "CNS 10 %" on dive 3 with a day total near 22 %. `deco plan` with
+  several `--dive` flags now prints a **Day total** block (and `day_totals` in
+  `--json`): OTU summed — it is a *daily* dose by definition — and CNS carried
+  across the intervals, decaying with a 90 min half-time.
+- **Gas density warns at the 5.2 g/L working limit**, not only at the 6.2 g/L
+  hard ceiling. Air crosses 5.2 at about 31 m and 6.2 only at about 39 m, so
+  the whole band where Anthony & Mitchell say to add helium was unflagged —
+  including this repo's own 30 m `dive_plan.json`.
+- **"Lost bottom gas: NOT survivable on this stack"** is gone. It appeared on
+  an ordinary 30 m twinset dive carrying EAN50 and O2, where you simply ascend
+  to 21 m and take the 50 %. The line now states what the model actually found
+  — no schedule can be planned *from depth* — and points at the shallowest
+  mix's MOD.
+- **A deco gas used as travel gas says so.** New `PlanResult.notices` (`·`
+  lines beside the `⚠` ones, `notices` in `--json`): things the planner chose
+  on the diver's behalf, kept separate from hazards so the warnings stay worth
+  reading.
+
+### Fixed
+
+- `worst_ppo2_violations` keyed its reduction by `repr(gas)` — the one thing
+  DECISIONS #8 forbids. EAN20.6 and EAN21.4 both print "EAN21", so two distinct
+  mixes collapsed into one banner line under one of their names. Keyed by the
+  frozen `Gas` value now.
+- The one-line card summary names the mix wherever it changes. Its `bar` column
+  is the pressure of the cylinder *in use*, so it jumps stack at each switch
+  (124 back-gas -> 196 on the 50 %); the framed card has a gas column to say
+  which, that line did not.
+
 ### Fixed — documentation caught up with the code
 
 - **The README's two screenshots were 25 commits stale** — they predated the
@@ -13,7 +64,7 @@ pre-1.0, so anything may still move.
   the README and `CLAUDE.md` describe, and still showed the removed
   `Emergency × 1.50` multiplier. Regenerated from a fixed, reproducible dive.
 - **Test counts corrected everywhere** (README said 174/258/284, CONTRIBUTING
-  said 200; it is 442) and re-framed: the count is always `Ran 442 tests`, and
+  said 200; it is 480) and re-framed: the count is always `Ran 442 tests`, and
   it is the *skip* line that tells you what your machine lacks.
 - **Repetitive dives** and the **printable card PDF** were missing from the
   README's feature list entirely.

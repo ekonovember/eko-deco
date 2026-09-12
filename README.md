@@ -42,12 +42,28 @@ Erik Baker's gradient factors — a zero-dependency core, plus a CLI and a Tkint
 - Multi-gas support: bottom + multiple acceleration/deco gases + travel gases,
   switched automatically by ppO₂ window (MOD ceiling + hypoxia floor). Handles
   hypoxic trimixes (e.g. 10/70) that need a travel gas near the surface.
-- **Safety rails on every schedule**: segments breathed outside the ppO₂ window
-  (air below its MOD, a hypoxic mix with no travel gas) are flagged, never
-  silently planned; gas density over 6.2 g/L
-  (Anthony & Mitchell) warns too. Each plan reports **CNS%** (NOAA clock),
-  **OTU**, **END** and gas density, and swapped gradient factors
-  (GF-low > GF-high) are rejected as input errors.
+- **Safety rails on every schedule.** These are the whole caveat the output
+  carries — there is no printed disclaimer — so every hazard becomes a `⚠`
+  line rather than a statistic printed beside one (see
+  [DECISIONS.md](DECISIONS.md) #33):
+  - segments breathed outside the **ppO₂ window** (air below its MOD, a hypoxic
+    mix with no travel gas) are flagged, never silently planned;
+  - **gas density** in two tiers — over 5.2 g/L, Anthony & Mitchell's
+    recommended maximum (air passes it at ~31 m: add helium), and over the
+    6.2 g/L hard ceiling;
+  - the **surfacing check**: the schedule must leave you at or below GF-High
+    with no ceiling remaining, verified against the tissues it actually
+    produced — a short deep bounce at a high GF-Low can plan *no stops* and
+    still surface you over the line;
+  - the **oxygen clocks** as warnings: CNS past 80 % and past the NOAA 100 %
+    single-exposure limit, OTU past the 300 Repex daily dose. A repetitive
+    series accumulates both — OTU is a daily figure by definition, CNS carries
+    across the surface intervals — and prints a **Day total**.
+
+  Each plan also reports CNS %, OTU, END, gas density and SurfGF as figures,
+  and swapped gradient factors (GF-low > GF-high) are rejected as input errors.
+  Separate from the warnings, `·` **notices** say what the planner chose on
+  your behalf — a deco gas pressed into service as a travel gas, say.
 - **Fresh water and altitude**, not just sea-level salt: pick the water type
   (`--water salt|fresh`, or a metres-per-bar constant of your own) and the site
   altitude (`--altitude 1500`, or the surface pressure directly). Both move
@@ -308,7 +324,7 @@ python -m unittest discover -s tests -t . -v
 ```
 
 No install and no third-party packages needed — `tests/__init__.py` puts `src/`
-on the path. **442 tests** in three tiers:
+on the path. **480 tests** in three tiers:
 
 - **404 core tests** — constant counts, surface saturation, Haldane equivalence,
   NDLs against published Bühlmann values (±5 min), multi-level profiles,
@@ -324,7 +340,7 @@ on the path. **442 tests** in three tiers:
 - **12 third-party-oracle cross-checks** — `decotengu` and `decodaitengu` from
   the `[dev]` extra, so "who is wrong" has more than two votes.
 
-The count you see is always `Ran 442 tests`; what varies is the **skip** line,
+The count you see is always `Ran 480 tests`; what varies is the **skip** line,
 and a skip here means *this machine lacks something*, never *this data is
 missing*:
 

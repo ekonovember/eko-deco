@@ -233,10 +233,19 @@ def gas_stack_table(plan: b.DivePlan, bottom_gas: b.Gas) -> list[GasStackRow]:
 # -----------------------------------------------------------------------------
 
 def warning_lines(segments: Sequence[b.DiveSegment], plan: b.DivePlan,
-                  bottom_gas: b.Gas, max_depth_m: float) -> list[str]:
+                  bottom_gas: b.Gas, max_depth_m: float, *,
+                  tissues: b.Tissues | None = None,
+                  cns_pct: float | None = None,
+                  otu: float | None = None) -> list[str]:
     """The load-bearing warning texts for a planned dive: ceiling violations,
-    worst ppO2 offences, and the gas-density ceiling. One string per warning,
-    identical wording in every front end."""
+    worst ppO2 offences, the gas-density tiers, the surfacing check and the
+    oxygen clocks. One string per warning, identical wording in every front end.
+
+    The three keyword arguments are what the *finished* dive knows and a
+    segment list alone does not. They are optional so a caller holding only a
+    schedule still gets the segment-derived warnings, but `compute_plan_result`
+    always passes them — every one of them guards a hazard that the segment
+    scan cannot see (see DECISIONS.md #33)."""
     warnings = [f"level at {s.depth_start:g} m is above the "
                 f"{s.ceiling_m:.1f} m ceiling"
                 for s in b.ceiling_violations(segments)]
@@ -247,12 +256,92 @@ def warning_lines(segments: Sequence[b.DiveSegment], plan: b.DivePlan,
         else:
             warnings.append(f"ppO2 {v.ppo2:.2f} bar on {v.segment.gas!r} at "
                             f"{v.depth:.0f} m — hypoxic (min {v.limit:.2f})")
+    warnings.extend(surfacing_warnings(plan, tissues))
     density = bottom_gas.density(max_depth_m, plan.surface_p, plan.msw_per_bar)
     if density > b.DENSITY_MAX_G_L:
         warnings.append(f"gas density {density:.1f} g/L at {max_depth_m:g} m "
                         f"exceeds {b.DENSITY_MAX_G_L:g} g/L (CO2 retention "
                         f"risk)")
+    elif density > b.DENSITY_WORKING_G_L:
+        warnings.append(f"gas density {density:.1f} g/L at {max_depth_m:g} m "
+                        f"is over the {b.DENSITY_WORKING_G_L:g} g/L working "
+                        f"limit (add helium)")
+    warnings.extend(oxygen_clock_warnings(cns_pct, otu))
     return warnings
+
+
+def plan_notices(segments: Sequence[b.DiveSegment],
+                 plan: b.DivePlan) -> list[str]:
+    """Choices the planner made on the diver's behalf, stated plainly.
+
+    Right now there is one: a **deco gas pressed into service as a travel
+    gas**. Give the planner a hypoxic bottom mix and no travel gas and it will
+    descend on the shallowest breathable thing on the stack — which, with only
+    a deco bottle carried, is the deco bottle. The plan is correct and the
+    litres are billed, but it is not what was asked for, and plenty of teams
+    treat a deco cylinder as untouchable before the ascent. It showed only as a
+    mix name in the segment table (DECISIONS.md #33)."""
+    out = []
+    for s in segments:
+        if s.kind == "descent" and s.gas in plan.deco_gases and s.duration > 0:
+            out.append(
+                f"{s.gas!r} is a deco gas but was used as travel gas on the "
+                f"descent to {max(s.depth_start, s.depth_end):.0f} m — the "
+                f"bottom mix is hypoxic and no travel gas was given")
+            break
+    return out
+
+
+def surfacing_warnings(plan: b.DivePlan,
+                       tissues: b.Tissues | None) -> list[str]:
+    """The schedule's own contract, checked against the tissues it actually
+    left: you surface at or below GF-High, with no ceiling remaining.
+
+    This is a **post-hoc** check on purpose. The planner decides whether a dive
+    needs stops from the ceiling at the END OF THE BOTTOM, and on a short deep
+    bounce with a high GF-Low that ceiling can be 0 m while the slow
+    compartments are still loading — they keep on-gassing through the long
+    ascent, and the ceiling rises behind the diver. 66 m for 5 min on air at
+    GF 85/85 plans *no stops* and surfaces at SurfGF 95 % with 1.07 m of
+    ceiling left. Sane gradient factors (GF-Low <= 0.70) never do this, which
+    is exactly why it went unnoticed: nothing asserted the contract, so the one
+    corner that breaks it was silent (DECISIONS.md #33)."""
+    if tissues is None:
+        return []
+    out = []
+    ceiling = b.ceiling_depth(tissues, plan.gf_high, plan.surface_p,
+                              plan.msw_per_bar)
+    if ceiling > 1e-6:
+        out.append(f"surfaces with {ceiling:.1f} m of ceiling left at "
+                   f"GF-High — the schedule does not clear the obligation")
+    surf_gf = b.surface_gf(tissues, plan.surface_p)
+    if surf_gf > plan.gf_high + 1e-6:
+        out.append(f"SurfGF {surf_gf * 100:.0f}% exceeds GF-High "
+                   f"{plan.gf_high * 100:.0f}%")
+    return out
+
+
+def oxygen_clock_warnings(cns_pct: float | None,
+                          otu: float | None) -> list[str]:
+    """CNS % and OTU as warnings rather than statistics.
+
+    Printed beside SurfGF they read as trivia; a 172 % CNS dive plans without a
+    single flag, and every agent instruction in this repo says to relay *the
+    warnings*. So the thresholds live here, in the one place both front ends
+    render (DECISIONS.md #33)."""
+    out = []
+    if cns_pct is not None:
+        if cns_pct > tox.CNS_LIMIT_PCT:
+            out.append(f"CNS {cns_pct:.0f}% is over the NOAA single-exposure "
+                       f"limit ({tox.CNS_LIMIT_PCT:.0f}%)")
+        elif cns_pct > tox.CNS_WARN_PCT:
+            out.append(f"CNS {cns_pct:.0f}% — past {tox.CNS_WARN_PCT:.0f}%, "
+                       f"a contingency that lengthens the deco breaks the "
+                       f"{tox.CNS_LIMIT_PCT:.0f}% limit")
+    if otu is not None and otu > tox.OTU_DAILY_LIMIT:
+        out.append(f"OTU {otu:.0f} on this dive alone is over the "
+                   f"{tox.OTU_DAILY_LIMIT:.0f} daily Repex limit")
+    return out
 
 
 # -----------------------------------------------------------------------------
@@ -582,6 +671,10 @@ class PlanResult:
     #: is a finding, not a missing feature — see `buhlmann.bailout_schedule`.
     bailout: list[b.DiveSegment] | None = None
     warnings: list[str] = field(default_factory=list)
+    #: Things the planner DID that the diver did not ask for. Not hazards —
+    #: hazards are `warnings` — but choices a reader would otherwise have to
+    #: reverse-engineer from the segment table (see `plan_notices`).
+    notices: list[str] = field(default_factory=list)
     gas: GasReport | None = None
     contingency: list[list[ct.ContingencyCell]] | None = None
 
@@ -614,6 +707,44 @@ def compute_series_result(
             start_tissues=tissues))
         tissues = results[-1].tissues
     return results
+
+
+@dataclass(frozen=True)
+class SeriesTotals:
+    """A day's accumulated oxygen exposure across a repetitive series.
+
+    The tissues are carried through the surface intervals; the oxygen clocks
+    were not, so each dive reported its own figure in isolation. That is wrong
+    in both directions of use: **OTU is by definition a daily dose** (Repex
+    limits the day, not the dive), and CNS carries over too, decaying on the
+    surface with `toxicity.CNS_HALFTIME_MIN`. A three-dive day printing
+    "CNS 10%" on dive 3 hides a day total near 30 (DECISIONS.md #33)."""
+    #: CNS % standing at the END of the last dive, each earlier dive's
+    #: contribution decayed across the intervals that followed it.
+    cns_pct: float
+    #: Plain sum of every dive's OTU — the Repex day figure.
+    otu: float
+    #: The day's warnings, if the accumulated totals break a limit the
+    #: individual dives did not.
+    warnings: list[str]
+
+
+def series_totals(results: Sequence[PlanResult],
+                  series: Sequence[tuple[float, Sequence[b.Level]]]
+                  ) -> SeriesTotals:
+    """Accumulate the oxygen clocks over a day planned by
+    `compute_series_result`. `series` supplies the surface intervals — the same
+    sequence that was passed to it, so the two cannot drift."""
+    cns = 0.0
+    for (interval, _levels), res in zip(series, results, strict=True):
+        cns = tox.cns_after_interval(cns, interval) + res.cns_pct
+    otu = sum(r.otu for r in results)
+    day = oxygen_clock_warnings(cns, otu)
+    # Only report what the individual dives did not already say.
+    seen = {w for r in results for w in r.warnings}
+    return SeriesTotals(cns_pct=cns, otu=otu,
+                        warnings=[f"day total: {w}" for w in day
+                                  if w not in seen])
 
 
 def compute_plan_result(levels: Sequence[b.Level], bottom_gas: b.Gas,
@@ -658,7 +789,10 @@ def compute_plan_result(levels: Sequence[b.Level], bottom_gas: b.Gas,
                                             (bottom_gas,))
     except (ValueError, RuntimeError):
         result.bailout = None    # unplannable is a result, not a crash
-    result.warnings = warning_lines(segments, plan, bottom_gas, depth)
+    result.warnings = warning_lines(segments, plan, bottom_gas, depth,
+                                    tissues=tissues, cns_pct=result.cns_pct,
+                                    otu=result.otu)
+    result.notices = plan_notices(segments, plan)
     result.gas = gas_report(segments, bottom_gas, gas_plan, gases, plan)
     if contingency is not None:
         tb, ta, db, da = contingency

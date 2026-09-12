@@ -171,6 +171,12 @@ MOLAR_VOLUME = 22.414
 # Density above which work of breathing / CO2 retention risk is unacceptable
 # (Anthony & Mitchell 2015; preferred maximum is 5.2 g/L).
 DENSITY_MAX_G_L = 6.2
+# Anthony & Mitchell's *recommended* maximum — the number the training agencies
+# teach and the one a gas plan is actually built to. Air passes it at about
+# 31 m and only reaches DENSITY_MAX_G_L at about 39 m, so warning on the hard
+# ceiling alone leaves the whole band where the paper says to add helium
+# unflagged. Two tiers, not one (see DECISIONS.md #33).
+DENSITY_WORKING_G_L = 5.2
 
 
 @dataclass(frozen=True)
@@ -1160,7 +1166,10 @@ def worst_ppo2_violations(segments: Iterable[DiveSegment],
     the bottom; one line with the deepest ppO2 says everything)."""
     worst: dict = {}
     for v in ppo2_violations(segments, plan):
-        key = (repr(v.segment.gas), v.kind)
+        # Keyed by the frozen Gas VALUE, never its rounded repr: EAN20.6 and
+        # EAN21.4 both print "EAN21", and collapsing them would attribute one
+        # mix's ppO2 to the other's label on the banner (DECISIONS.md #8).
+        key = (v.segment.gas, v.kind)
         cur = worst.get(key)
         if (cur is None or (v.kind == "high" and v.ppo2 > cur.ppo2)
                 or (v.kind == "low" and v.ppo2 < cur.ppo2)):
