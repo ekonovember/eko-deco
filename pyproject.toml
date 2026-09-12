@@ -37,7 +37,8 @@ gui = ["matplotlib>=3.5"]
 # TEST ORACLES only (tests/python_oracles.py). Both are GPL-3: they are pip
 # dependencies of the test suite, never vendored, never imported by src/deco,
 # and never shipped in the wheel.
-dev = ["ruff>=0.6", "mypy>=1.11", "decotengu>=0.14", "decodaitengu>=1.2"]
+dev = ["ruff>=0.6", "mypy>=1.11", "coverage>=7.5",
+       "decotengu>=0.14", "decodaitengu>=1.2"]
 
 [project.scripts]
 deco = "deco.cli:main"
@@ -135,3 +136,27 @@ module = ["matplotlib.*", "numpy.*"]
 ignore_missing_imports = true
 follow_imports = "skip"
 follow_imports_for_stubs = true
+
+
+# --- coverage ----------------------------------------------------------------
+# Configured here so CI and a laptop measure the same thing. Branch coverage,
+# because the interesting failures in this codebase are branches nobody took:
+# DECISIONS #34 was a guard made unreachable by a clamp, and it read as an
+# ordinary uncovered line.
+#
+# The number is not the deliverable — reading the uncovered lines is. An
+# untested line and a DEAD line look identical in this report, and only one of
+# them is a bug.
+[tool.coverage.run]
+source = ["src/deco"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+skip_covered = false
+exclude_also = [
+    # A module's own demo entry point (`python -m deco.cards`), not a code path.
+    "if __name__ == .__main__.:",
+    # Type-checking-only imports never execute.
+    "if TYPE_CHECKING:",
+]

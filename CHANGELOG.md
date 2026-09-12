@@ -46,6 +46,17 @@ outside the safety surface however prominently it is printed.
   on the diver's behalf, kept separate from hazards so the warnings stay worth
   reading.
 
+### Added — a coverage gate on the core
+
+- `coverage>=7.5` in the `[dev]` extra, configured in `pyproject.toml` (branch
+  coverage, shared by CI and a laptop so the two measure the same thing).
+- A **CI job gating the stdlib-only core** — `buhlmann`, `report`, `toxicity`,
+  `contingency`, `dive_config`, `cli` — at **92 %**, a ratchet set just under
+  where it stands (94 %) so it catches a regression rather than posing as a
+  target. `app` and `cards` are reported, not gated: chasing a percentage
+  through Tk event handlers buys less than one more cross-check. The job
+  installs `[gui]` and both compilers so nothing skips out of the measurement.
+
 ### Fixed — an impossible gas mix constructed silently (DECISIONS #34)
 
 - **`Gas(0.50, 0.60)` — 110 % of a gas — passed validation.** The guard

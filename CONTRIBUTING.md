@@ -19,7 +19,7 @@ pip install -e ".[dev,gui]"
 ```
 
 Python 3.10+. The core needs no third-party packages; `[gui]` adds matplotlib
-and `[dev]` adds ruff and mypy.
+and `[dev]` adds ruff, mypy and coverage.
 
 ## The checks CI runs
 
@@ -27,7 +27,21 @@ and `[dev]` adds ruff and mypy.
 python -m unittest discover -s tests -t .   # 500 tests
 ruff check .
 mypy
+python -m coverage run -m unittest discover -s tests -t . && python -m coverage report
 ```
+
+CI gates coverage on the **stdlib-only core** — `buhlmann`, `report`,
+`toxicity`, `contingency`, `dive_config`, `cli` — at **92 %** branch coverage.
+That is a ratchet set just under where the core stands (94 %), not a target to
+climb: it is there to catch a regression. `app` and `cards` sit behind the
+`[gui]` extra and are reported but not gated.
+
+Measure with `[gui]` and the compilers installed, or the number is taken from a
+partial run. And **read the uncovered lines rather than the percentage** — an
+untested line and a *dead* line look identical in that report, and the one time
+it mattered ([DECISIONS.md](DECISIONS.md) #34) it was the dead one: a guard on
+`Gas` that a clamp had made unreachable, letting a 110 % gas mix construct
+silently.
 
 Optionally `pip install pre-commit && pre-commit install` to run the first two
 on every commit.

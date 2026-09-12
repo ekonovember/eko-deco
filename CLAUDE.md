@@ -158,6 +158,14 @@ python -m unittest tests.test_baker_crosscheck -v
 python -m tests.planner_diff
 # Lint + types (config in pyproject.toml; both are clean and CI enforces them)
 pip install -e ".[dev]" && ruff check . && mypy
+# Coverage. Branch coverage, config in pyproject.toml. CI gates the STDLIB-ONLY
+# core (buhlmann/report/toxicity/contingency/dive_config/cli) at >= 92 % — a
+# ratchet under where it stands (94 %), not a target; app/cards are reported,
+# not gated. Install [gui] and the compilers first or the number is measured
+# against a partial run. READ THE UNCOVERED LINES, don't chase the percentage:
+# an untested line and a dead one look identical here, and DECISIONS #34 was
+# the dead one.
+python -m coverage run -m unittest discover -s tests -t . && python -m coverage report
 ```
 
 Gas syntax: `air`, `o2`, `ean32` / `nx32` / `32`, trimix `21/35` (fO₂/fHe %).
@@ -324,7 +332,10 @@ value for an exact round-trip; the GUI preserves fields it has no control for.
   Numbers are stable — never reuse or renumber them.
 - User-visible change → a line in `CHANGELOG.md` under `[Unreleased]`.
 - Before you claim done: `python -m unittest discover -s tests -t .`,
-  `ruff check .`, `mypy`.
+  `ruff check .`, `mypy`. Touching the core? Add `python -m coverage run -m
+  unittest discover -s tests -t . && python -m coverage report` — CI gates the
+  stdlib-only modules at 92 %, and a new uncovered branch there is worth
+  looking at before it is worth explaining.
 
 ## Windows gotcha (UTF-8)
 

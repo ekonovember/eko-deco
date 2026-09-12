@@ -89,6 +89,43 @@ jobs:
       - run: ruff check --output-format=github .
       - run: mypy
 
+  # Coverage gates the STDLIB-ONLY core — buhlmann, report, toxicity,
+  # contingency, dive_config, cli — the modules the safety math and the warning
+  # surface live in. deco.app and deco.cards sit behind the [gui] extra and are
+  # reported but not gated: chasing a percentage through Tk event handlers buys
+  # less than one more cross-check.
+  #
+  # The whole suite runs with every toolchain installed, so the number is
+  # measured against a complete run and cannot drift when something silently
+  # skips. The threshold is a RATCHET set just under where the core stands
+  # (94 %), not a stretch goal — it exists to catch a regression, and raising it
+  # is a deliberate act.
+  #
+  # The percentage is the weakest thing this job produces. Reading the uncovered
+  # lines is what found DECISIONS #34: a guard that a clamp had made
+  # unreachable, indistinguishable in this report from a line nobody had tested.
+  coverage:
+    name: coverage (core >= 92%)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-python@v6
+        with:
+          python-version: "3.12"
+      - name: Install everything, so nothing skips out of the measurement
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y xvfb python3-tk g++ gfortran
+          pip install -e ".[dev,gui]"
+      - name: Run the whole suite under coverage
+        run: xvfb-run -a python -m coverage run -m unittest discover -s tests -t .
+      - name: The core must stay covered
+        run: |
+          python -m coverage report --fail-under=92 \
+            --include='*/deco/buhlmann.py,*/deco/report.py,*/deco/toxicity.py,*/deco/contingency.py,*/deco/dive_config.py,*/deco/cli.py'
+      - name: Front ends, for the record (not gated)
+        run: python -m coverage report
+
   gui:
     name: GUI smoke test (Xvfb)
     runs-on: ubuntu-latest

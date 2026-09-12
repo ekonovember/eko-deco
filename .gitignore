@@ -27,3 +27,9 @@ ui_settings.json
 *.dll
 tests/baker_oracle/gfdeco
 tests/baker_oracle/gfdeco.exe
+
+# coverage.py
+.coverage
+.coverage.*
+htmlcov/
+coverage.xml
