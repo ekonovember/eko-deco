@@ -163,6 +163,14 @@ Fixed 2026-08-06; `tests/test_buhlmann.TestReserveWorstMoment` pins it.*
 just the bottom gas's `emergency_gas_liters`. Two different numbers with two
 different jobs; keep them distinct.
 
+**Known optimism.** The `problem_minutes` are added *on the bottom*, but the
+ascent and deco that follow are taken from the schedule that was planned
+without them — so the reserve does not grow by the deco those extra minutes
+would add. On a deco dive the understatement is a few to a few dozen litres of
+gas, in the optimistic direction; it is the price of keeping rock bottom a
+reserve for the *planned* profile rather than an extra contingency re-plan
+(2026-10-25).
+
 ---
 
 ## #8 — One shared report layer, so the CLI and the GUI cannot drift

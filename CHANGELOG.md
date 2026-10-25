@@ -72,6 +72,35 @@ a dive began with, and every derived figure starts from it.
   this is recorded as an open 0.01 bar question rather than changed, and a
   test pins the band.
 
+### Fixed — the review's remaining input, density, JSON and wording gaps (DECISIONS #38–#40)
+
+- **Environment and rates are now bounded.** `DivePlan` checked only `> 0`,
+  so a unit slip planned a believable-but-wrong schedule: `--p-h2o 0.627`
+  (typo ×10) cut a 40/25 air+EAN50 TTS from 27.3 to 11.3 min, `--surface-p
+  1013` (mbar as bar) planned a 4-min dive that sprayed absurd warnings,
+  `--msw-per-bar 1` crashed with "Stop exceeded 24h", and `--ascent-rate 100`
+  was accepted in silence. Construction now rejects anything outside a loose
+  band (p_h2o 0.03–0.08, surface_p 0.5–1.2, msw_per_bar 9–11, ascent ≤ 30,
+  descent ≤ 60 m/min) — DECISIONS #38.
+- **The density warning named only the bottom gas.** A travel mix can be the
+  dense one: 120 m Tx10/70 with 21/35 travel is 6.6 g/L on the bottom but
+  6.85 g/L on the travel gas breathed at 66 m — the warning named the bottom
+  gas. It now names the densest mix actually breathed, at the depth it is
+  breathed there (DECISIONS #39).
+- **The cut-table JSON reported the stop hold, not the printed leg.** The
+  wetnotes text shows the `StopLeg` leg (ascent to the stop plus the hold);
+  `--json`'s contingency `stops` reported the raw hold, so the same stop read
+  one number in JSON and another in the card. The JSON now carries
+  `leg_min`/`run_min`/`hold_min`, the same notation as the main `stops`.
+- **"Ascend on a buddy's gas to the shallowest mix's MOD" named the wrong mix.**
+  Coming up you first reach the *deepest* MOD of the remaining gases (EAN50 at
+  22 m, not O₂ at 6 m), and with nothing but air on the stack it pointed at a
+  mix that does not exist. The line now names the first breathable mix, or says
+  nothing else is on the stack (DECISIONS #40).
+- DECISIONS #7 now records rock bottom's known optimism: the `problem_minutes`
+  are added on the bottom but the ascent/deco that follows is not lengthened by
+  them, so the reserve errs slightly low on a deco dive.
+
 ### Fixed — six holes in the safety surface (DECISIONS #33)
 
 A technical-diver audit of the whole tool found the model, the schedules and
