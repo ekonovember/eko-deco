@@ -65,7 +65,7 @@ python -m deco.cli plan --dive 30:25 --dive 30:25:60 --gas air --deco-gas 50    
 python -m deco.cli plan --depth 40 --time 25 --gas air --deco-gas 50 --gas-switch at-first-stop   # hold switches to the first stop
 ```
 
-Gas syntax: `air`, `o2`, `ean32` / `nx32` / `32`, trimix `21/35` (fO2/fHe %).
+Gas syntax: `air`, `o2`, `ean32` / `nx32` / `32`, trimix `21/35` (fO2/fHe **%** — a fraction such as `0.32` or `1` is refused with a "did you mean 32?" hint, and so is anything under 5 % O2).
 Defaults: GF 30/70 on the CLI (the library `DivePlan` uses 30/80), descent
 18 m/min, ascent 10 m/min, 3 m stops, last stop 3 m
 (`--last-stop 6` for the Shearwater/MultiDeco option), deco ppO2 1.6, sea level

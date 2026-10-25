@@ -168,7 +168,7 @@ pip install -e ".[dev]" && ruff check . && mypy
 python -m coverage run -m unittest discover -s tests -t . && python -m coverage report
 ```
 
-Gas syntax: `air`, `o2`, `ean32` / `nx32` / `32`, trimix `21/35` (fO₂/fHe %).
+Gas syntax: `air`, `o2`, `ean32` / `nx32` / `32`, trimix `21/35` (fO₂/fHe **%** — a fraction such as `0.32` or `1` is refused with a "did you mean 32?" hint, and so is anything under 5 % O₂).
 
 Gas planning: each cylinder has a tank size + fill pressure (`mix@tank@bar`, e.g.
 `air@24@232`). One baseline SAC/RMV (`sac_normal`, always in force — every plan

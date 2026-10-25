@@ -55,6 +55,12 @@ a dive began with, and every derived figure starts from it.
   first dive), like the whole `DivePlan` it already required;
   `reserve_candidates`, `emergency_gas_liters` and `rock_bottom_liters` take it
   as an optional keyword.
+- **The CLI took a fraction as a percentage.** `--gas 0.32` planned a 0.32 %
+  O₂ mix labelled "EAN0" (TTS 78 min, one hypoxic ⚠), and `--deco-gas 1`
+  — "1 = oxygen" — a silent EAN1 with a 1590 m MOD, the deco computed with no
+  oxygen at all and no warning. A config file has refused the same typo since
+  DECISIONS #9. The CLI now refuses any mix under 5 % O₂ (exit 2), with the
+  likely meaning in the message: `gas '0.32': 0.32 % oxygen — did you mean 32?`.
 - The GUI's **Profile** chart drew dive 2's ceiling from clean tissues (0.02 m
   where the real ceiling was 1.36 m, 40 m / 25 min air after 45 min). Plot
   only — no printed figure used it.

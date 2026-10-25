@@ -255,7 +255,7 @@ deco ndl     --depth 30 --gas air --altitude 1500     # shorter up a mountain
 deco tissues --depth 40 --time 20 --gas ean32 --json
 ```
 
-Gas syntax: `air`, `o2`, `ean32` / `nx32` / `32`, trimix `21/35` (fO₂/fHe %).
+Gas syntax: `air`, `o2`, `ean32` / `nx32` / `32`, trimix `21/35` (fO₂/fHe **%** — a fraction such as `0.32` or `1` is refused with a "did you mean 32?" hint, and so is anything under 5 % O₂).
 Each gas takes an optional cylinder suffix `mix@tank@bar` — tank size in litres
 and fill pressure in bar (e.g. `air@24@232` = 24 L twinset filled to 232 bar;
 `50@11` = 11 L stage at the default fill) — used for per-cylinder gas needs and

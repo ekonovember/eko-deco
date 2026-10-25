@@ -71,6 +71,35 @@ class TestArgumentValidation(unittest.TestCase):
         with self.assertRaises(ValueError):
             cli.parse_gas_spec("air@24@232@99")
 
+    def test_a_fraction_typed_as_a_percentage_is_refused(self):
+        # '--gas 0.32' planned a 0.32 % O2 mix labelled EAN0, and
+        # '--deco-gas 1' a silent EAN1 with a 1590 m MOD; a config file has
+        # refused the same typo since DECISIONS #9.
+        for spec, hint in (("0.32", "32"), ("1", "100"), ("ean0.5", "50"),
+                           ("0.21/0.35", "21")):
+            with self.subTest(spec=spec):
+                with self.assertRaises(ValueError) as cm:
+                    cli.parse_gas(spec)
+                self.assertIn(f"did you mean {hint}", str(cm.exception))
+
+    def test_an_implausibly_lean_mix_is_refused(self):
+        with self.assertRaises(ValueError):
+            cli.parse_gas("3/80")
+
+    def test_real_mixes_still_parse(self):
+        for spec, fo2 in (("air", 0.21), ("o2", 1.0), ("100", 1.0),
+                          ("ean32", 0.32), ("10/70", 0.10), ("5/90", 0.05)):
+            with self.subTest(spec=spec):
+                self.assertAlmostEqual(cli.parse_gas(spec).fO2, fo2)
+
+    def test_the_cli_exits_2_on_a_fraction(self):
+        for flag in ("--gas", "--deco-gas", "--travel-gas"):
+            with self.subTest(flag=flag):
+                code, _, err = run_cli(["plan", "--depth", "30", "--time", "20",
+                                        flag, "0.5"])
+                self.assertEqual(code, 2)
+                self.assertIn("did you mean 50", err)
+
     def test_gas_spec_tank_and_pressure_ok(self):
         gas, tank, pressure = cli.parse_gas_spec("ean32@11@200")
         self.assertAlmostEqual(gas.fO2, 0.32)

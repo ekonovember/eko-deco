@@ -43,8 +43,20 @@ def _positive_int(s: str) -> int:
     return v
 
 
+#: The leanest oxygen percentage the CLI accepts. Nothing below it is a
+#: breathing mix even at 100 m+, so a smaller number is a typo — almost always
+#: a fraction typed where the percentage belongs.
+MIN_O2_PCT = 5.0
+
+
 def parse_gas(spec: str) -> b.Gas:
-    """Parse 'air', 'ean32', 'nx32', '32', or trimix '21/35' (= 21% O2, 35% He)."""
+    """Parse 'air', 'ean32', 'nx32', '32', or trimix '21/35' (= 21% O2, 35% He).
+
+    The numbers are **percent**. A fraction is refused, not divided: ``0.32``
+    used to plan a 0.32 % O₂ mix labelled "EAN0" and ``--deco-gas 1`` a silent
+    EAN1 with a 1590 m MOD — the deco then computed with no oxygen at all. A
+    config file has refused the same typo since DECISIONS.md #9; the CLI is held
+    to it too, with the likely meaning in the error."""
     s = spec.strip().lower()
     if s == "air":
         return b.AIR
@@ -52,9 +64,18 @@ def parse_gas(spec: str) -> b.Gas:
         return b.O2
     if "/" in s:
         a, c = s.split("/", 1)
-        return b.Gas(float(a) / 100.0, float(c) / 100.0)
-    s = s.removeprefix("ean").removeprefix("nx")
-    return b.Gas(float(s) / 100.0)
+        o2, he = float(a), float(c)
+    else:
+        o2, he = float(s.removeprefix("ean").removeprefix("nx")), 0.0
+    if o2 < MIN_O2_PCT:
+        if o2 > 0 and o2 <= 1.0 and he <= 1.0:
+            meant = (f"{o2 * 100:g}/{he * 100:g}" if "/" in s
+                     else "100 (or 'o2')" if o2 == 1.0 else f"{o2 * 100:g}")
+            hint = f" — did you mean {meant}? Mixes are in percent"
+        else:
+            hint = f" — below {MIN_O2_PCT:g} % O2 is not a breathing mix"
+        raise ValueError(f"gas '{spec}': {o2:g} % oxygen{hint}")
+    return b.Gas(o2 / 100.0, he / 100.0)
 
 
 def parse_gas_spec(spec: str):
