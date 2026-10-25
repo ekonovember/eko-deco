@@ -257,17 +257,44 @@ def warning_lines(segments: Sequence[b.DiveSegment], plan: b.DivePlan,
             warnings.append(f"ppO2 {v.ppo2:.2f} bar on {v.segment.gas!r} at "
                             f"{v.depth:.0f} m — hypoxic (min {v.limit:.2f})")
     warnings.extend(surfacing_warnings(plan, tissues))
-    density = bottom_gas.density(max_depth_m, plan.surface_p, plan.msw_per_bar)
-    if density > b.DENSITY_MAX_G_L:
-        warnings.append(f"gas density {density:.1f} g/L at {max_depth_m:g} m "
-                        f"exceeds {b.DENSITY_MAX_G_L:g} g/L (CO2 retention "
-                        f"risk)")
-    elif density > b.DENSITY_WORKING_G_L:
-        warnings.append(f"gas density {density:.1f} g/L at {max_depth_m:g} m "
-                        f"is over the {b.DENSITY_WORKING_G_L:g} g/L working "
-                        f"limit (add helium)")
+    warnings.extend(density_warnings(segments, plan, bottom_gas, max_depth_m))
     warnings.extend(oxygen_clock_warnings(cns_pct, otu))
     return warnings
+
+
+def density_warnings(segments: Sequence[b.DiveSegment], plan: b.DivePlan,
+                     bottom_gas: b.Gas, max_depth_m: float) -> list[str]:
+    """The densest mix actually breathed, at the depth it is breathed there.
+
+    Density is a property of a mix at a depth, and the hazard is whichever mix
+    the plan puts in the diver's lungs densest. Judging only the bottom gas at
+    max depth missed exactly the case where a *travel* mix is the dense one:
+    120 m Tx10/70 with a 21/35 travel is 6.6 g/L on the bottom but 6.85 g/L on
+    the 21/35 breathed at 66 m on the way up — the travel gas exceeded the
+    hard ceiling while the warning named the bottom gas (DECISIONS.md #39).
+
+    Each segment's gas is quoted at that segment's deepest point (a gas is
+    densest where it is breathed deepest), the same worst-case convention
+    `gas_stack_table` uses at the mix's own MOD."""
+    worst_g_l = -1.0
+    worst_depth = max_depth_m
+    worst_gas = bottom_gas
+    for s in segments:
+        if s.duration <= 0:
+            continue
+        depth = max(s.depth_start, s.depth_end)
+        d = s.gas.density(depth, plan.surface_p, plan.msw_per_bar)
+        if d > worst_g_l:
+            worst_g_l, worst_depth, worst_gas = d, depth, s.gas
+    if worst_g_l > b.DENSITY_MAX_G_L:
+        return [f"gas density {worst_g_l:.1f} g/L on {worst_gas!r} at "
+                f"{worst_depth:g} m exceeds {b.DENSITY_MAX_G_L:g} g/L "
+                f"(CO2 retention risk)"]
+    if worst_g_l > b.DENSITY_WORKING_G_L:
+        return [f"gas density {worst_g_l:.1f} g/L on {worst_gas!r} at "
+                f"{worst_depth:g} m is over the {b.DENSITY_WORKING_G_L:g} "
+                f"g/L working limit (add helium)"]
+    return []
 
 
 def plan_notices(segments: Sequence[b.DiveSegment],

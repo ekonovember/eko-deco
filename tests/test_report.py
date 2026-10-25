@@ -710,6 +710,19 @@ class TestDensityTiers(unittest.TestCase):
     def test_the_tiers_are_ordered(self):
         self.assertLess(b.DENSITY_WORKING_G_L, b.DENSITY_MAX_G_L)
 
+    def test_the_densest_mix_breathed_wins_not_the_bottom_gas(self):
+        """A travel mix can be denser than the bottom mix: 21/35 at 66 m is
+        6.85 g/L where 10/70 at 120 m is 6.6, so the warning must name the
+        travel gas (the bottom gas was the only one judged before)."""
+        plan = b.DivePlan(travel_gases=(b.Gas(0.21, 0.35),),
+                          deco_gases=(b.EAN50,))
+        res = rp.compute_plan_result([b.Level(120.0, 15.0)], b.Gas(0.10, 0.70),
+                                     plan)
+        text = " ".join(w for w in res.warnings if "density" in w)
+        self.assertIn("21/35", text)
+        self.assertIn("66 m", text)
+        self.assertIn("exceeds", text)
+
 
 class TestPlanNotices(unittest.TestCase):
     """What the planner chose that the diver did not ask for."""

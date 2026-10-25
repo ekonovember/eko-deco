@@ -1396,3 +1396,19 @@ water is ~10 m/bar, nobody ascends at 100 m/min). No legitimate plan sits near
 a bound. `surface_p_at_altitude(3000)` is 0.70 bar, comfortably inside. A
 future hyperbaric or deep-cave niche that genuinely needs one of these would
 relax the constant in one place rather than fight a parser.
+
+## #39 — The density warning names the densest mix breathed, not the bottom gas
+
+Density is a property of a mix at a depth. The hazard is whichever mix the plan
+puts in the diver's lungs densest, and the old warning judged only the bottom
+gas at max depth. That missed the case where a **travel** mix is the dense one:
+120 m Tx10/70 with a 21/35 travel gas is 6.6 g/L on the bottom but 6.85 g/L on
+the 21/35 breathed at 66 m on the way up — the travel gas exceeded the 6.2 g/L
+hard ceiling while the warning named only the bottom gas. The `gas_stack_table`
+already flagged the travel gas's density (`dense`), but per #33 a table
+annotation is not an ⚠ warning, so the hazard did not reach the safety surface.
+
+`warning_lines` now scans the segments and warns about the densest gas actually
+breathed, quoted at the depth it is breathed there (each segment's gas at its
+deepest point — the same worst-case convention `gas_stack_table` uses). The
+wording gains the mix name so the message cannot be read as the bottom gas's.
