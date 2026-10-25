@@ -610,3 +610,22 @@ class TestRepeatDiveContingenciesInTheGui(unittest.TestCase):
         for (_l1, s1), (_l2, s2) in zip(got, expect, strict=True):
             self.assertAlmostEqual(b.time_to_surface(s1),
                                    b.time_to_surface(s2), places=9)
+
+    def test_the_profile_ceiling_starts_from_the_residual_loading(self):
+        # Only a plot, but a plot that showed 0.02 m of ceiling where there
+        # were 1.36 m is a plot that lies.
+        seen = []
+        real = b.ceiling_profile
+
+        def spy(segments, plan=None, start_tissues=None, step=0.5):
+            seen.append(start_tissues)
+            return real(segments, plan, start_tissues, step)
+
+        b.ceiling_profile = spy
+        try:
+            self.app.recompute()
+        finally:
+            b.ceiling_profile = real
+        self.assertTrue(seen)
+        self.assertIsNotNone(seen[-1])
+        self.assertEqual(seen[-1].pN2, self.res.start_tissues.pN2)

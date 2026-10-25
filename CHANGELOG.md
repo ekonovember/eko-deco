@@ -36,6 +36,9 @@ a dive began with, and every derived figure starts from it.
   first dive), like the whole `DivePlan` it already required;
   `reserve_candidates`, `emergency_gas_liters` and `rock_bottom_liters` take it
   as an optional keyword.
+- The GUI's **Profile** chart drew dive 2's ceiling from clean tissues (0.02 m
+  where the real ceiling was 1.36 m, 40 m / 25 min air after 45 min). Plot
+  only — no printed figure used it.
 
 ### Fixed — six holes in the safety surface (DECISIONS #33)
 

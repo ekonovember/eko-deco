@@ -1289,6 +1289,9 @@ there:
   is the one place this is made *required* (a keyword with no default): it is
   the call both front ends make per scenario, and it already refused to guess
   the `DivePlan` (#24).
+* **The Profile chart's ceiling curve** (`ceiling_profile(…, start_tissues)`
+  in the GUI). Only a plot, and fixed with the rest because a ceiling curve
+  that reads 0.02 m over a 1.36 m ceiling is a plot that lies.
 
 **The invariant every test here asserts** is the planner's own contract: any
 scenario derived from a dive, flown on the tissues that dive really started
