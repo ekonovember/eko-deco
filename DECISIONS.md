@@ -1273,6 +1273,10 @@ there:
   1's schedule. Flown on dive 2's real tissues that cell surfaces at **SurfGF
   94 %** against GF-High 70 %, with ceiling left. The table exists for a failed
   computer, when it is the only source of truth on the dive.
+* **The lost-bottom-gas bailout** (`bailout_schedule(…, start_tissues)`
+  in `compute_plan_result`). 30 m / 40 min Tx 21/35, EAN32 travel, EAN50
+  deco, 45 min interval: TTS 27.3 on dive 2, identical to dive 1; the real
+  figure is 43.3, 16 minutes longer.
 
 **The invariant every test here asserts** is the planner's own contract: any
 scenario derived from a dive, flown on the tissues that dive really started

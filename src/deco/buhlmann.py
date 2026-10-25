@@ -955,6 +955,10 @@ def bailout_schedule(segments: Sequence[DiveSegment], plan: DivePlan,
     Losing the bottom gas is the case the deco-gas scenarios cannot express, and
     it is the one that decides whether the stage you carry is a bailout or just
     an accelerant.
+
+    `start_tissues` must be what `segments` were planned from: the bottom phase
+    is replayed onto it, so on a repetitive dive leaving it out re-flies the
+    ascent on a diver who never made dive 1 (DECISIONS.md #35).
     """
     remaining = [g for g in (bottom_gas, *plan.travel_gases, *plan.deco_gases)
                  if g not in lost]

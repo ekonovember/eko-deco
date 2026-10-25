@@ -794,7 +794,7 @@ def compute_plan_result(levels: Sequence[b.Level], bottom_gas: b.Gas,
     result.leg_bars = leg_pressures(segments, gas_plan, gases, plan)
     try:
         result.bailout = b.bailout_schedule(segments, plan, bottom_gas,
-                                            (bottom_gas,))
+                                            (bottom_gas,), start_tissues)
     except (ValueError, RuntimeError):
         result.bailout = None    # unplannable is a result, not a crash
     result.warnings = warning_lines(segments, plan, bottom_gas, depth,

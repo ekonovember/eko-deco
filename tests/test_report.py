@@ -885,3 +885,17 @@ class TestRepeatDiveContingenciesCarryResidualLoading(unittest.TestCase):
         centre = second.contingency[1][1]
         self.assertAlmostEqual(b.time_to_surface(centre.segments),
                                second.tts_min, places=6)
+
+    def test_the_lost_bottom_gas_bailout_surfaces_within_gf_high(self):
+        # 30 m / 40 min Tx 21/35, EAN32 travel, EAN50 deco: losing the bottom
+        # gas is survivable here, so there is a bailout to check. It used to be
+        # re-flown from clean tissues - TTS 27 on dive 2 where the truth is 43.
+        plan = b.DivePlan(gf_low=0.30, gf_high=0.70,
+                          travel_gases=(b.EAN32,), deco_gases=(b.EAN50,))
+        first, second, start = self._day(plan=plan,
+                                         levels=[b.Level(30.0, 40.0)])
+        self.assertIsNotNone(second.bailout)
+        self.assertLessEqual(self._surf_gf(second.bailout, plan, start),
+                             plan.gf_high + 1e-6)
+        self.assertGreater(b.time_to_surface(second.bailout),
+                           b.time_to_surface(first.bailout))

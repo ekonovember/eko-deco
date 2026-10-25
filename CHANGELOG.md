@@ -17,6 +17,10 @@ a dive began with, and every derived figure starts from it.
   41′, the cut-table cell for the very same depth and time said 29′, and
   flown on the real tissues it surfaces at SurfGF 94 % on GF-High 70 %. CLI
   (`--contingency`) and the GUI's cut-table card both fixed.
+- **"Lost bottom gas" on dive 2 was re-flown from clean tissues.** 30 m /
+  40 min Tx 21/35 + EAN32 travel + EAN50, twice with 45 min between: the
+  bailout said TTS 28′ on both dives; on dive 2 it is 44′. CLI (`Lost bottom
+  gas`, `bailout_bottom_gas` in `--json`) and the GUI's bottom-gas column.
 
 ### Fixed — six holes in the safety surface (DECISIONS #33)
 
