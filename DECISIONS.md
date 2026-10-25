@@ -1361,29 +1361,30 @@ with the post-hoc surfacing warning; GFDECO would put stops on it, and that is
 a change to the no-deco gate (#21), not to the first stop.
 
 
-## #37 — The bottom-gas ppO₂ limit is 1.4 + the switch tolerance (open, owner's call)
+## #37 — The ppO₂ tolerance is the Perdix's 0.04 (owner's decision, 2026-10-25)
 
-`ppo2_violations` flags any gas above its limit **plus `ppo2_switch_tol`**:
-1.4 + 0.05 = 1.45 for a bottom or travel gas, 1.6 + 0.05 = 1.65 for a deco
-gas. EAN32 at 35 m (ppO₂ 1.44) is therefore planned with no warning, and at
-36 m the message reads "over the 1.45 limit". A review (2026-10-25) asked
-whether the tolerance should apply to the bottom gas at all: it exists to snap
-deco switches onto the stop grid (O₂ at 6 m despite its 5.9 m MOD), and on the
-bottom there is nothing to snap.
+`ppo2_violations` flags any gas above its limit **plus `ppo2_switch_tol`**. With
+the old 0.05 that was 1.45 for a bottom or travel gas and 1.65 for a deco gas.
+A review (2026-10-25) asked whether the tolerance should apply to the bottom gas
+at all: it exists to snap deco switches onto the stop grid (O₂ at 6 m despite
+its 5.9 m MOD), and on the bottom there is nothing to snap.
 
-**Recorded, not changed.** The Perdix manual (Adv. Config 2) answers it the
-same way we do, with a tolerance on both: ppO₂ flashes red "more than 0.04
-above" **OC Mod. PPO2** 1.40 and "greater than 0.04 above" **OC Deco PPO2**
-1.61 — 1.44 and 1.65. So the tolerance is the Shearwater behaviour, and the
-deco threshold is identical; the bottom one differs by **0.01 bar** (1.45 vs
-1.44). Dropping the tolerance for the bottom gas would warn at 1.40 and be
-stricter than the computer the diver carries. Closing the 0.01 bar would need
-a bottom-specific tolerance — a new plan input wired through config, CLI and
-GUI (#19) for one hundredth of a bar.
+The Perdix manual (Adv. Config 2) answers it with a tolerance on both: ppO₂
+flashes red "more than 0.04 above" **OC Mod. PPO2** 1.40 and "greater than 0.04
+above" **OC Deco PPO2** 1.61 — 1.44 and 1.65. Dropping the tolerance for the
+bottom gas would warn at 1.40 and be stricter than the computer the diver
+carries.
 
-That is the owner's decision, not a review fix. `TestBottomGasPpO2Band` pins
-the current band (1.44 silent, 1.48 flagged against 1.45) so whichever way it
-goes, it goes on purpose.
+**Decision (eko): use the Perdix's tolerance.** `ppo2_switch_tol` defaults to
+**0.04** everywhere (library, CLI, config, GUI). The bottom threshold is now
+1.44, identical to the Perdix; EAN32 at 35 m (1.444) warns on both. The deco
+threshold is 1.6 + 0.04 = **1.64**, 0.01 bar under the Perdix's 1.65 because
+eko-deco's deco setting is 1.60 where Shearwater's is 1.61 — moving that would
+move every MOD and switch depth, so it stays. Switch snapping is unaffected in
+practice (O₂ at 6 m is 1.61, inside either tolerance); no golden or
+cross-check schedule changed. A config that stores its own
+`ppo2_switch_tol` keeps it. `TestBottomGasPpO2Band` pins 1.412 silent and
+1.444 flagged against 1.44.
 
 ## #38 — Environment and rates are bounded to plausible ranges
 

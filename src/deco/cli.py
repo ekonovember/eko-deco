@@ -901,10 +901,11 @@ def main(argv: list[str] | None = None) -> int:
                              "Baker's Minimum_Deco_Stop_Time. 1 makes a "
                              "table-friendly schedule; 0.1 a near-continuous "
                              "one.")
-    common.add_argument("--ppo2-switch-tol", type=_nonneg_float, default=0.05,
+    common.add_argument("--ppo2-switch-tol", type=_nonneg_float, default=0.04,
                         help="How far over --ppo2-deco a gas switch may be "
                              "rounded deeper to land on a stop depth (bar). "
-                             "0.05 is what puts O2 on the 6 m stop.")
+                             "Default 0.04 = the Perdix tolerance; it also puts "
+                             "O2 on the 6 m stop (1.61).")
     common.add_argument("--dive", dest="dive", action="append", metavar="SPEC",
                         help="One square dive of a repetitive series, "
                              "DEPTH:RUNTIME[:SURFACE_INTERVAL] (the interval "

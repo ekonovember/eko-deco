@@ -22,7 +22,7 @@
   "ppo2_bottom": 1.4,
   "ppo2_deco": 1.6,
   "ppo2_min": 0.18,
-  "ppo2_switch_tol": 0.05,
+  "ppo2_switch_tol": 0.04,
   "min_stop_time": 1.0,
   "gas_switch_policy": "at-mod",
   "repeats": [],

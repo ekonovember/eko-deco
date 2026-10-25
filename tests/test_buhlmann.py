@@ -1254,24 +1254,24 @@ class TestSurfaceInterval(unittest.TestCase):
 
 
 class TestBottomGasPpO2Band(unittest.TestCase):
-    """The bottom gas is flagged above `ppo2_bottom + ppo2_switch_tol` — 1.45
-    with the defaults, not 1.40 (DECISIONS.md #37). Pinned so the band moves
-    only on purpose: a Perdix flashes at OC Mod. PPO2 + 0.04 = 1.44, so the two
-    differ by 0.01 bar, and whether to close that is the owner's call."""
+    """The bottom gas is flagged above `ppo2_bottom + ppo2_switch_tol` — 1.44
+    with the defaults, the Perdix band (OC Mod. PPO2 1.40 + 0.04, DECISIONS.md
+    #37). Pinned so the band moves only on purpose."""
 
     def _high(self, depth):
         plan = b.DivePlan()
         segs, _ = b.plan_dive(depth, 20.0, b.EAN32, plan)
         return [v for v in b.ppo2_violations(segs, plan) if v.kind == "high"]
 
-    def test_ean32_at_35m_is_inside_the_tolerance(self):
-        # ppO2 1.444: over the 1.40 setting, under the 1.45 limit.
-        self.assertEqual(self._high(35.0), [])
+    def test_ean32_at_34m_is_inside_the_tolerance(self):
+        # ppO2 1.412: over the 1.40 setting, under the 1.44 limit.
+        self.assertEqual(self._high(34.0), [])
 
-    def test_ean32_at_36m_is_flagged_against_1_45(self):
-        vs = self._high(36.0)
+    def test_ean32_at_35m_is_flagged_against_1_44(self):
+        # ppO2 1.444 — a Perdix flashes here too ("more than 0.04 above").
+        vs = self._high(35.0)
         self.assertTrue(vs)
-        self.assertAlmostEqual(vs[0].limit, 1.45, places=9)
+        self.assertAlmostEqual(vs[0].limit, 1.44, places=9)
 
 
 class TestWorstPpO2KeyedByValue(unittest.TestCase):

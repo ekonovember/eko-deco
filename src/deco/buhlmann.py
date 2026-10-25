@@ -504,7 +504,7 @@ class DivePlan:
     # Rounding a switch *deeper* than the MOD is only allowed while the ppO2
     # excess stays within this tolerance (bar); otherwise the switch rounds
     # down to the next shallower stop.
-    ppo2_switch_tol: float = 0.05
+    ppo2_switch_tol: float = 0.04
     # WHERE on the ascent a deco gas is switched to. "at-mod" (default) takes it
     # as soon as the ppO2 allows, at the stop depth `switch_depth` snaps to —
     # what MultiDeco, Shearwater and this planner have always done, and what

@@ -947,7 +947,7 @@ class DecoApp:
         self.ppo2_min = self._add_spin(pp2, "", 0.0, 0.5, 0.01, 0.18,
                                        fmt="%.2f", unit="min", label_width=8,
                                        unit_width=7)
-        self.ppo2_switch_tol = self._add_spin(pp2, "", 0.0, 0.5, 0.01, 0.05,
+        self.ppo2_switch_tol = self._add_spin(pp2, "", 0.0, 0.5, 0.01, 0.04,
                                               fmt="%.2f", unit="switch tol",
                                               unit_width=10)
         sw = ttk.Frame(body)
@@ -1315,7 +1315,7 @@ class DecoApp:
             ppo2_bottom=self._num(self.ppo2_bottom, 1.4, lo=0.1),
             ppo2_deco=self._num(self.ppo2_deco, 1.6, lo=0.1),
             ppo2_min=self._num(self.ppo2_min, 0.18, lo=0.0),
-            ppo2_switch_tol=self._num(self.ppo2_switch_tol, 0.05, lo=0.0),
+            ppo2_switch_tol=self._num(self.ppo2_switch_tol, 0.04, lo=0.0),
             gas_switch_policy=self.gas_switch_policy.get(),
             min_stop_time=self._num(self.min_stop_time, 1.0, lo=0.01),
             p_h2o=self._num(self.p_h2o, b.P_H2O, lo=0.0001),
@@ -2068,7 +2068,7 @@ class DecoApp:
             self.ppo2_bottom.set(f"{cfg.get('ppo2_bottom', 1.4):.2f}")
             self.ppo2_deco.set(f"{cfg.get('ppo2_deco', 1.6):.2f}")
             self.ppo2_min.set(f"{cfg.get('ppo2_min', 0.18):.2f}")
-            self.ppo2_switch_tol.set(f"{cfg.get('ppo2_switch_tol', 0.05):.2f}")
+            self.ppo2_switch_tol.set(f"{cfg.get('ppo2_switch_tol', 0.04):.2f}")
             self.gas_switch_policy.set(
                 cfg.get('gas_switch_policy', 'at-mod'))
             self.min_stop_time.set(f"{cfg.get('min_stop_time', 1.0):g}")
@@ -2153,7 +2153,7 @@ class DecoApp:
             "ppo2_bottom": self._num(self.ppo2_bottom, 1.4, lo=0.1),
             "ppo2_deco": self._num(self.ppo2_deco, 1.6, lo=0.1),
             "ppo2_min": self._num(self.ppo2_min, 0.18, lo=0.0),
-            "ppo2_switch_tol": self._num(self.ppo2_switch_tol, 0.05, lo=0.0),
+            "ppo2_switch_tol": self._num(self.ppo2_switch_tol, 0.04, lo=0.0),
             "gas_switch_policy": self.gas_switch_policy.get(),
             "min_stop_time": self._num(self.min_stop_time, 1.0, lo=0.01),
             "p_h2o_bar": self._num(self.p_h2o, b.P_H2O, lo=0.0001),

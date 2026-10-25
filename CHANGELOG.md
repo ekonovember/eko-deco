@@ -65,12 +65,14 @@ a dive began with, and every derived figure starts from it.
   where the real ceiling was 1.36 m, 40 m / 25 min air after 45 min). Plot
   only — no printed figure used it.
 
-### Documented — the bottom-gas ppO₂ band (DECISIONS #37)
+### Changed — the ppO₂ tolerance is the Perdix's 0.04, not 0.05 (DECISIONS #37)
 
-- The bottom gas is flagged above 1.45 bar (1.4 + the 0.05 switch tolerance),
-  not 1.40 — the docs said 1.4. A Perdix does the same with 0.04 (1.44), so
-  this is recorded as an open 0.01 bar question rather than changed, and a
-  test pins the band.
+- `ppo2_switch_tol` defaults to **0.04** (CLI, config, GUI, library): the bottom
+  gas is flagged above **1.44** bar, as a Perdix flashes "more than 0.04 above"
+  OC Mod. PPO2 1.40 — EAN32 at 35 m (1.444) now warns. The deco threshold
+  becomes 1.64 (Perdix: 1.61 + 0.04 = 1.65). No schedule in the golden or
+  cross-check suites changed; configs that store `ppo2_switch_tol` keep their
+  own value.
 
 ### Fixed — the review's remaining input, density, JSON and wording gaps (DECISIONS #38–#40)
 
