@@ -899,3 +899,47 @@ class TestRepeatDiveContingenciesCarryResidualLoading(unittest.TestCase):
                              plan.gf_high + 1e-6)
         self.assertGreater(b.time_to_surface(second.bailout),
                            b.time_to_surface(first.bailout))
+
+    def test_every_lost_deco_gas_scenario_surfaces_within_gf_high(self):
+        # Lost EAN50 on dive 2 used to be planned clean: TTS 40 where the
+        # truth is 58, surfacing at SurfGF 96 % on GF-High 70 %.
+        _first, second, start = self._day()
+        scenarios = rp.lost_gas_scenarios(second)
+        self.assertEqual([label for label, _ in scenarios],
+                         ["OK", "EAN50", "O2", "all"])
+        for label, segs in scenarios:
+            with self.subTest(lost=label):
+                self.assertLessEqual(self._surf_gf(segs, self.PLAN, start),
+                                     self.PLAN.gf_high + 1e-6)
+
+
+class TestLostGasScenarios(unittest.TestCase):
+    """The lost-deco-gas columns, computed once in the report layer (they used
+    to be derived inside the GUI, which is where they lost the residual
+    loading — DECISIONS.md #35)."""
+
+    PLAN = b.DivePlan(deco_gases=(b.EAN50, b.O2))
+
+    def test_ok_first_then_one_per_gas_then_all(self):
+        res = rp.compute_plan_result([b.Level(45.0, 25.0)], b.Gas(0.21, 0.35),
+                                     self.PLAN)
+        out = rp.lost_gas_scenarios(res)
+        self.assertEqual([lbl for lbl, _ in out], ["OK", "EAN50", "O2", "all"])
+        self.assertIs(out[0][1], res.segments)
+        self.assertNotIn(b.EAN50, {s.gas for s in out[1][1]})
+        self.assertEqual({s.gas for s in out[3][1]}, {b.Gas(0.21, 0.35)})
+
+    def test_one_deco_gas_has_no_all_column(self):
+        res = rp.compute_plan_result([b.Level(40.0, 25.0)], b.AIR,
+                                     b.DivePlan(deco_gases=(b.EAN50,)))
+        self.assertEqual([lbl for lbl, _ in rp.lost_gas_scenarios(res)],
+                         ["OK", "EAN50"])
+
+    def test_a_survivable_bailout_is_the_last_column(self):
+        plan = b.DivePlan(travel_gases=(b.EAN32,), deco_gases=(b.EAN50,))
+        res = rp.compute_plan_result([b.Level(30.0, 40.0)], b.Gas(0.21, 0.35),
+                                     plan)
+        self.assertIsNotNone(res.bailout)
+        label, segs = rp.lost_gas_scenarios(res)[-1]
+        self.assertEqual(label, "bottom gas")
+        self.assertIs(segs, res.bailout)

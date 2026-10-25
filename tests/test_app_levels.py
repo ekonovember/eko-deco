@@ -17,6 +17,7 @@ try:
     import tkinter as tk
 
     from deco import app
+    from deco import buhlmann as b
     from deco import dive_config as dc
     from deco import report as rp
     _root = tk.Tk()
@@ -599,3 +600,13 @@ class TestRepeatDiveContingenciesInTheGui(unittest.TestCase):
         self.assertNotEqual(planned, stale)
         self.assertIn(a._card_text(planned), self._runtime())
         self.assertNotIn(a._card_text(stale), self._runtime())
+
+    def test_the_lost_gas_columns_are_the_report_layers(self):
+        # The GUI renders the scenarios; it does not plan them (#24, #35).
+        a, res = self.app, self.res
+        expect = rp.lost_gas_scenarios(res)
+        got = a._lost_gas_scenarios(res)
+        self.assertEqual([lbl for lbl, _ in got], [lbl for lbl, _ in expect])
+        for (_l1, s1), (_l2, s2) in zip(got, expect, strict=True):
+            self.assertAlmostEqual(b.time_to_surface(s1),
+                                   b.time_to_surface(s2), places=9)

@@ -21,6 +21,12 @@ a dive began with, and every derived figure starts from it.
   40 min Tx 21/35 + EAN32 travel + EAN50, twice with 45 min between: the
   bailout said TTS 28′ on both dives; on dive 2 it is 44′. CLI (`Lost bottom
   gas`, `bailout_bottom_gas` in `--json`) and the GUI's bottom-gas column.
+- **The GUI's "lost EAN50 / lost O₂ / all" columns on dive 2 were planned
+  clean.** On the 45 m dive above, lost EAN50 printed TTS 41′ where the truth
+  is 59′, surfacing at SurfGF 96 % on GF-High 70 % — on the runtime card and
+  in the per-scenario gas usage. The scenarios moved out of the GUI into
+  `report.lost_gas_scenarios`, which plans every column from the result's
+  own loading.
 
 ### Fixed — six holes in the safety surface (DECISIONS #33)
 

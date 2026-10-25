@@ -18,7 +18,7 @@ Design rules (see CLAUDE.md):
 from __future__ import annotations
 
 from collections.abc import Sequence
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from typing import overload
 
 from deco import buhlmann as b
@@ -683,6 +683,41 @@ class PlanResult:
     #: bailout, lost-deco-gas columns, rock bottom, the ceiling curve) has to
     #: start from it too; each used to start clean (DECISIONS.md #35).
     start_tissues: b.Tissues | None = None
+
+
+def lost_gas_scenarios(res: PlanResult
+                       ) -> list[tuple[str, list[b.DiveSegment]]]:
+    """The lost-gas contingency columns, MultiDeco-style: the planned dive
+    (``"OK"``), one re-plan per deco gas without it (labelled by the mix), with
+    two or more deco gases an ``"all"`` worst case, and — only where it can be
+    flown at all — ``"bottom gas"``, the `PlanResult.bailout`.
+
+    Only deco-role gases are lost here: bottom and travel gases always stay. A
+    lost gas is simply dropped from the deco stack — levels never name a gas —
+    and a scenario that cannot be planned (a hypoxic gap, say) drops its column
+    rather than inventing one.
+
+    Every re-plan starts from `res.start_tissues`, the loading the dive itself
+    began with. These columns used to be planned inside the GUI from clean
+    tissues, so on dive 2 of a day "lost EAN50" printed TTS 40 where the truth
+    was 58 and surfaced at SurfGF 96 % on GF-High 70 % (DECISIONS.md #35)."""
+    scenarios: list[tuple[str, list[b.DiveSegment]]] = [("OK", res.segments)]
+    deco = res.plan.deco_gases
+    losses: list[tuple[str, tuple[b.Gas, ...]]] = [(repr(g), (g,)) for g in deco]
+    if len(deco) > 1:
+        losses.append(("all", tuple(deco)))
+    for label, lost in losses:
+        remaining = tuple(d for d in deco if d not in lost)
+        try:
+            segs, _ = b.plan_multilevel(res.levels, res.bottom_gas,
+                                        replace(res.plan, deco_gases=remaining),
+                                        res.start_tissues)
+        except (ValueError, RuntimeError):
+            continue
+        scenarios.append((label, segs))
+    if res.bailout is not None:
+        scenarios.append(("bottom gas", res.bailout))
+    return scenarios
 
 
 def compute_series_result(

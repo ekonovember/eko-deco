@@ -26,7 +26,7 @@ import re
 import sys
 import textwrap
 import tkinter as tk
-from dataclasses import dataclass, replace
+from dataclasses import dataclass
 from tkinter import font as tkfont
 from tkinter import ttk
 from typing import Any, Literal
@@ -1384,49 +1384,19 @@ class DecoApp:
         # crash mid-keystroke.
         res = results[min(self._dive_idx, len(results) - 1)]
         levels = res.levels
-        scenarios = self._lost_gas_scenarios(levels, gas, plan, res.segments,
-                                             res.bailout)
+        scenarios = self._lost_gas_scenarios(res)
         self._draw(res.segments, res.max_depth_m, levels[-1].runtime,
                    b.ceiling_profile(res.segments, plan), levels)
         self._write_readout(res, scenarios, results)
         self._write_runtime(res, scenarios)
         self._plan_ok = True                # a valid plan is now on every surface
 
-    def _lost_gas_scenarios(self, levels, gas, plan, segs,
-                            bailout=None) -> list[tuple[str, list]]:
-        """Contingency schedules for losing deco gas, MultiDeco-style: the normal
-        dive ("OK"), then one re-plan per deco gas without it, and — with two or
-        more deco gases — an "all" worst case with every deco gas gone. Only
-        Deco-role gases can be lost; bottom and travel gases always stay. Works
-        for any number of deco gases (nothing assumes two).
-
-        A lost gas is simply dropped from the deco stack; levels never name a
-        gas (selection is automatic by role), so nothing else needs rewriting.
-
-        Losing the BOTTOM gas is a different question and gets a different
-        answer: the bottom phase already happened, so it is not re-planned —
-        only the ascent is re-flown on what is left (`buhlmann.bailout_schedule`).
-        Its column appears only when that is actually survivable, which on most
-        deep dives it is not: with the back gas gone and every stage above its
-        MOD there is no schedule to print, and a column that quietly showed one
-        anyway would be the most dangerous cell on the card."""
-        scenarios: list[tuple[str, list]] = [("OK", segs)]
-        deco = plan.deco_gases
-        losses = [(repr(g), (g,)) for g in deco]        # (label, gases lost)
-        if len(deco) > 1:
-            losses.append(("all", tuple(deco)))
-        for label, lost in losses:
-            remaining = tuple(d for d in deco if d not in lost)
-            try:
-                lost_segs, _ = b.plan_multilevel(
-                    levels, gas, replace(plan, deco_gases=remaining))
-            except (ValueError, RuntimeError):
-                continue       # a scenario that can't be planned (e.g. hypoxic
-                               # gap) just drops its column
-            scenarios.append((label, lost_segs))
-        if bailout is not None:
-            scenarios.append(("bottom gas", bailout))
-        return scenarios
+    @staticmethod
+    def _lost_gas_scenarios(res: rp.PlanResult) -> list[tuple[str, list]]:
+        """The lost-gas columns for `res` — `report.lost_gas_scenarios`, which
+        owns them. They used to be planned here, from clean tissues, so dive 2
+        of a day printed dive 1's contingencies (DECISIONS.md #24, #35)."""
+        return rp.lost_gas_scenarios(res)
 
     @staticmethod
     def _stops_by_depth(segs) -> tuple[dict, float]:

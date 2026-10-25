@@ -1277,6 +1277,11 @@ there:
   in `compute_plan_result`). 30 m / 40 min Tx 21/35, EAN32 travel, EAN50
   deco, 45 min interval: TTS 27.3 on dive 2, identical to dive 1; the real
   figure is 43.3, 16 minutes longer.
+* **The lost-deco-gas columns** (`report.lost_gas_scenarios`). These were
+  re-planned inside the GUI — a front end deriving numbers, against #8/#24, and
+  exactly where the loading went missing: lost EAN50 on the 45 m dive above
+  read TTS 40.3 against a real 58.3 and surfaced at SurfGF 96 %. They are
+  computed in the report layer now, from the result, and the GUI renders them.
 
 **The invariant every test here asserts** is the planner's own contract: any
 scenario derived from a dive, flown on the tissues that dive really started
