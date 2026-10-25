@@ -202,6 +202,32 @@ class TestCLI(unittest.TestCase):
                 self.assertIn("stops", c)
                 self.assertIn("tts_min", c)
 
+    def test_plan_json_contingency_stops_use_the_printed_leg(self):
+        import contextlib
+        import io
+        import json
+
+        from deco import cli
+        buf = io.StringIO()
+        with contextlib.redirect_stdout(buf):
+            rc = cli.main(["plan", "--depth", "40", "--time", "20",
+                           "--gas", "air", "--deco-gas", "50",
+                           "--contingency", "--json"])
+        self.assertEqual(rc, 0)
+        cell = json.loads(buf.getvalue())["contingency"]["rows"][1]["cells"][1]
+        # The cut-table JSON is the printed-schedule notation: `leg_min` (ascent
+        # to the stop plus the hold) must differ from `hold_min` on a real stop,
+        # so the same stop reads one number in JSON and in the wetnotes text.
+        stops = cell["stops"]
+        self.assertTrue(stops)
+        for s in stops:
+            self.assertIn("leg_min", s)
+            self.assertIn("run_min", s)
+            self.assertIn("hold_min", s)
+        self.assertFalse(all(s["leg_min"] == round(s["hold_min"], 1)
+                             for s in stops),
+                         "leg should include the ascent, not just the hold")
+
 
 class TestMultiGasTravel(unittest.TestCase):
     HYPOXIC = b.Gas(0.10, 0.70)   # 10/70 hypoxic trimix

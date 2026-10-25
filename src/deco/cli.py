@@ -430,9 +430,15 @@ def _contingency_output(grid, planned_depth: float, planned_time: float):
         for c in row:
             entry = {"depth_m": c.depth, "plannable": c.segments is not None}
             if c.segments is not None:
-                entry["stops"] = [{"depth_m": s.depth_start,
-                                   "min": round(s.duration, 1)}
-                                  for s in c.segments if s.kind == "stop"]
+                # The printed-schedule notation, like the main `stops` block —
+                # `leg_min` is the ascent to the stop plus the hold, the number
+                # `ContingencyCell.text()` prints (DECISIONS.md #17). Reporting
+                # the raw hold here made the same stop read one number in JSON
+                # and another in the wetnotes text.
+                entry["stops"] = [{"depth_m": l.depth, "leg_min": l.leg,
+                                   "run_min": l.run, "hold_min": l.hold,
+                                   "gas": repr(l.gas)}
+                                  for l in b.stop_legs(c.segments)]
                 entry["tts_min"] = round(b.time_to_surface(c.segments), 2)
                 entry["runtime_min"] = round(b.total_runtime(c.segments), 2)
             cells.append(entry)
