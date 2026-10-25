@@ -421,9 +421,11 @@ class TestGasReportTakesTheWholePlan(unittest.TestCase):
     def test_deco_sac_bills_the_deco_cylinder(self):
         segs, plan = self._dive()
         gases = [("Bottom", b.AIR, 24.0, 232.0), ("Deco", self.EAN50, 11.0, 200.0)]
-        one = rp.gas_report(segs, b.AIR, b.GasPlan(sac=20.0), gases, plan)
+        one = rp.gas_report(segs, b.AIR, b.GasPlan(sac=20.0), gases, plan,
+                            start_tissues=None)
         two = rp.gas_report(segs, b.AIR,
-                            b.GasPlan(sac=20.0, sac_deco=12.0), gases, plan)
+                            b.GasPlan(sac=20.0, sac_deco=12.0), gases, plan,
+                            start_tissues=None)
         # The bottom gas is billed the same either way; only the deco mix moves,
         # and it moves by exactly the ratio of the two rates.
         self.assertAlmostEqual(self._liters(one)[b.AIR],
@@ -441,8 +443,10 @@ class TestGasReportTakesTheWholePlan(unittest.TestCase):
             surface_p=b.surface_p_at_altitude(1500),
             msw_per_bar=b.MSW_PER_BAR_FRESH)
         gp = b.GasPlan(sac=20.0)
-        sea = rp.gas_report(sea_segs, b.AIR, gp, gases, sea_plan)
-        alt = rp.gas_report(alt_segs, b.AIR, gp, gases, alt_plan)
+        sea = rp.gas_report(sea_segs, b.AIR, gp, gases, sea_plan,
+                            start_tissues=None)
+        alt = rp.gas_report(alt_segs, b.AIR, gp, gases, alt_plan,
+                            start_tissues=None)
         self.assertLess(self._liters(alt)[b.AIR], self._liters(sea)[b.AIR])
         self.assertLess(alt.rock_bottom_l, sea.rock_bottom_l)
 
@@ -577,7 +581,8 @@ class TestLegPressures(unittest.TestCase):
         segs, plan = self._dive()
         gp = b.GasPlan(sac=20.0, sac_deco=15.0)
         bars = rp.leg_pressures(segs, gp, self.GASES, plan)
-        rep = rp.gas_report(segs, b.AIR, gp, self.GASES, plan)
+        rep = rp.gas_report(segs, b.AIR, gp, self.GASES, plan,
+                            start_tissues=None)
         deco = next(c for c in rep.cylinders if c.gas == b.EAN50)
         last = [bar for leg, bar in zip(b.stop_legs(segs), bars, strict=True)
                 if leg.gas == b.EAN50][-1]
@@ -943,3 +948,46 @@ class TestLostGasScenarios(unittest.TestCase):
         label, segs = rp.lost_gas_scenarios(res)[-1]
         self.assertEqual(label, "bottom gas")
         self.assertIs(segs, res.bailout)
+
+
+class TestRepeatDiveRockBottom(unittest.TestCase):
+    """Rock bottom's worst moment is found by re-planning the dive cut short at
+    each level end; on dive 2 those cut-short dives must start from dive 2's
+    loading too (DECISIONS.md #35). Air, 40 m to 30 min then 12 m to 40, GF
+    30/70, SAC 20, 60 min interval: 6912 L reported where it is 7487 — 7.7 %
+    under, on the one number #7 says may only err upward."""
+
+    PLAN = b.DivePlan(gf_low=0.30, gf_high=0.70)
+    LEVELS: ClassVar = [b.Level(40.0, 30.0), b.Level(12.0, 40.0)]
+    GP = b.GasPlan(sac=20.0)
+
+    def test_the_cut_short_candidates_start_from_the_residual_loading(self):
+        series = [(0.0, self.LEVELS), (60.0, self.LEVELS)]
+        first, second = rp.compute_series_result(series, b.AIR, self.PLAN,
+                                                 self.GP)
+        start = b.surface_interval(first.tissues, 60.0, self.PLAN)
+        cut = b.plan_multilevel(self.LEVELS[:1], b.AIR, self.PLAN, start)[0]
+        truth = b.rock_bottom_liters(second.segments, b.AIR, self.GP,
+                                     self.PLAN,
+                                     candidates=[cut, second.segments])
+        self.assertAlmostEqual(second.gas.rock_bottom_l, truth, places=6)
+        self.assertGreater(second.gas.rock_bottom_l, first.gas.rock_bottom_l)
+
+    def test_the_library_helpers_take_the_loading_too(self):
+        first = rp.compute_plan_result(self.LEVELS, b.AIR, self.PLAN, self.GP)
+        start = b.surface_interval(first.tissues, 60.0, self.PLAN)
+        segs, _ = b.plan_multilevel(self.LEVELS, b.AIR, self.PLAN, start)
+        cands = b.reserve_candidates(segs, self.PLAN, b.AIR,
+                                     start_tissues=start)
+        self.assertAlmostEqual(
+            b.rock_bottom_liters(segs, b.AIR, self.GP, self.PLAN,
+                                 start_tissues=start),
+            b.rock_bottom_liters(segs, b.AIR, self.GP, self.PLAN,
+                                 candidates=cands), places=9)
+
+    def test_gas_report_will_not_guess_the_loading(self):
+        # Like the DivePlan (#24), the loading is required: omitting it is a
+        # TypeError, not a clean-tissue figure.
+        segs, _ = b.plan_multilevel(self.LEVELS, b.AIR, self.PLAN)
+        with self.assertRaises(TypeError):
+            rp.gas_report(segs, b.AIR, self.GP, [], self.PLAN)  # type: ignore[call-arg]

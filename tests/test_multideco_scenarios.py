@@ -206,7 +206,8 @@ class TestGasVolumes(unittest.TestCase):
         self.assertEqual(gp.sac_for(EAN50, (EAN50, O2)), 16.0)
         self.assertEqual(gp.sac_for(SCENARIOS[2][1], (EAN50, O2)),
                          MD_BOTTOM_RMV)
-        rep = rp.gas_report(segs, SCENARIOS[2][1], gp, [], _dive_plan(2))
+        rep = rp.gas_report(segs, SCENARIOS[2][1], gp, [], _dive_plan(2),
+                            start_tissues=None)
         by_gas = {c.gas: c for c in rep.cylinders}
         self.assertLess(
             abs(by_gas[EAN50].liters - MD_LITERS[2]["OK"][EAN50])

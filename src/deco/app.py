@@ -1801,7 +1801,8 @@ class DecoApp:
                     usage_rows.append([""] * ncols)   # blank row between scenarios
                 scen = ("OK" if label == "OK"
                         else "All" if label == "all" else label)
-                srep = rp.gas_report(ss, gas, gp, gas_rows_raw, plan)
+                srep = rp.gas_report(ss, gas, gp, gas_rows_raw, plan,
+                                     start_tissues=res.start_tissues)
                 tot_need = tot_emrg = tot_have = 0.0
                 for i, c in enumerate(srep.cylinders):
                     have_l = c.tank_l * c.pressure_bar

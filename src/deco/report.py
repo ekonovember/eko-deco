@@ -515,20 +515,23 @@ class GasReport:
 def gas_report(segments: Sequence[b.DiveSegment],
                bottom_gas: b.Gas, gas_plan: b.GasPlan,
                gases: Sequence[GasRow],
-               plan: b.DivePlan) -> GasReport: ...
+               plan: b.DivePlan, *,
+               start_tissues: b.Tissues | None) -> GasReport: ...
 
 
 @overload
 def gas_report(segments: Sequence[b.DiveSegment],
                bottom_gas: b.Gas, gas_plan: None,
                gases: Sequence[GasRow],
-               plan: b.DivePlan) -> None: ...
+               plan: b.DivePlan, *,
+               start_tissues: b.Tissues | None) -> None: ...
 
 
 def gas_report(segments: Sequence[b.DiveSegment],
                bottom_gas: b.Gas, gas_plan: b.GasPlan | None,
                gases: Sequence[GasRow],
-               plan: b.DivePlan) -> GasReport | None:
+               plan: b.DivePlan, *,
+               start_tissues: b.Tissues | None) -> GasReport | None:
     """Per-mix need/have accounting for a planned dive, or None without a
     ``GasPlan``. Mixes appear in the order they are first breathed; same-mix
     cylinders act as one bank (`aggregate_banks`).
@@ -541,6 +544,13 @@ def gas_report(segments: Sequence[b.DiveSegment],
     had typed, saved and could see on screen changed no number anywhere, and an
     altitude dive was billed at sea level. Omitting a plan is now a TypeError
     rather than a wrong figure (DECISIONS.md #24).
+
+    ``start_tissues`` — the loading the dive was planned from, ``None`` for
+    clean tissues — is **required for the same reason**: the worst-moment
+    reserve re-plans the dive cut short at each level end, and on dive 2 of a
+    day those re-plans used to start clean and understate rock bottom (7.7 %
+    on a 40 m → 12 m air profile). A keyword with no default, so a caller has
+    to say which (DECISIONS.md #35).
 
     Overloaded so a caller that *has* a ``GasPlan`` (the GUI always does) gets
     a plain ``GasReport`` back and does not have to re-prove non-None at every
@@ -555,7 +565,8 @@ def gas_report(segments: Sequence[b.DiveSegment],
     # handed to every cylinder. Derived per gas — which is what happened before
     # — a three-level dive with three mixes re-planned the same two truncated
     # dives six times, three quarters of the cost of this whole function.
-    candidates = (b.reserve_candidates(segments, plan, bottom_gas)
+    candidates = (b.reserve_candidates(segments, plan, bottom_gas,
+                                       start_tissues=start_tissues)
                   if gas_plan.emergency else None)
     cylinders: list[CylinderNeed] = []
     seen: list[b.Gas] = []
@@ -836,7 +847,8 @@ def compute_plan_result(levels: Sequence[b.Level], bottom_gas: b.Gas,
                                     tissues=tissues, cns_pct=result.cns_pct,
                                     otu=result.otu)
     result.notices = plan_notices(segments, plan)
-    result.gas = gas_report(segments, bottom_gas, gas_plan, gases, plan)
+    result.gas = gas_report(segments, bottom_gas, gas_plan, gases, plan,
+                            start_tissues=start_tissues)
     if contingency is not None:
         tb, ta, db, da = contingency
         result.contingency = ct.contingency_schedules(

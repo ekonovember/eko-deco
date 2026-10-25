@@ -1384,7 +1384,8 @@ def levels_of(segments: Sequence[DiveSegment]) -> list[Level]:
 
 
 def reserve_candidates(segments: Sequence[DiveSegment], plan: DivePlan,
-                       bottom_gas: Gas | None = None
+                       bottom_gas: Gas | None = None, *,
+                       start_tissues: Tissues | None = None
                        ) -> list[list[DiveSegment]]:
     """The candidate "worst moment" profiles a reserve is the maximum over —
     one per level end, each the dive re-planned as if it had ended there.
@@ -1404,6 +1405,11 @@ def reserve_candidates(segments: Sequence[DiveSegment], plan: DivePlan,
     is taken from the deepest bottom-phase segment, which is what the gas
     actually breathed down there is; callers that know the declared bottom gas
     (`report.gas_report` does) should pass it rather than have it inferred.
+
+    `start_tissues` is what `segments` were planned from, and the cut-short
+    dives start from it too. Leaving it out on a repetitive dive re-planned
+    them clean: 6912 L of rock bottom where the truth is 7487 on an air
+    40 m → 12 m profile after a 60 min interval (DECISIONS.md #35).
     """
     segs = list(segments)
     levels = levels_of(segs)
@@ -1415,14 +1421,16 @@ def reserve_candidates(segments: Sequence[DiveSegment], plan: DivePlan,
     # Re-planning the truncated dive is exact: levels are contiguous, so
     # cutting the profile short cannot change the tissue history before the cut.
     return [segs if k == len(levels)
-            else plan_multilevel(levels[:k], bottom_gas, plan)[0]
+            else plan_multilevel(levels[:k], bottom_gas, plan,
+                                 start_tissues)[0]
             for k in range(1, len(levels) + 1)]
 
 
 def emergency_gas_liters(segments: Sequence[DiveSegment], gas: Gas,
                          gas_plan: GasPlan, plan: DivePlan, *,
                          candidates: Sequence[Sequence[DiveSegment]] | None
-                         = None) -> float:
+                         = None,
+                         start_tissues: Tissues | None = None) -> float:
     """Litres of `gas` that must be held in reserve ("rock bottom" logic) for a
     problem striking at **the worst moment of the dive** — evaluated at the end
     of every level, not only the last one, and the largest reserve returned.
@@ -1464,9 +1472,11 @@ def emergency_gas_liters(segments: Sequence[DiveSegment], gas: Gas,
     several gases against one profile; None recomputes it. It is a keyword and
     it is optional because the candidates are an optimisation, never an input:
     the answer for a given gas must not depend on who else was asked.
+    `start_tissues` is what `segments` were planned from; it only matters when
+    the candidates are built here (see `reserve_candidates`).
     """
-    cands = (reserve_candidates(segments, plan) if candidates is None
-             else candidates)
+    cands = (reserve_candidates(segments, plan, start_tissues=start_tissues)
+             if candidates is None else candidates)
     return max(_reserve_at(c, gas, gas_plan, plan) for c in cands)
 
 
@@ -1502,7 +1512,8 @@ def _reserve_at(segs: Sequence[DiveSegment], gas: Gas, gas_plan: GasPlan,
 def rock_bottom_liters(segments: Sequence[DiveSegment], bottom_gas: Gas,
                        gas_plan: GasPlan, plan: DivePlan, *,
                        candidates: Sequence[Sequence[DiveSegment]] | None
-                       = None) -> float:
+                       = None,
+                       start_tissues: Tissues | None = None) -> float:
     """Minimum gas ("rock bottom") in litres of the back/bottom gas: the reserve
     needed to survive a problem at the worst moment (the end of the worst level,
     see `emergency_gas_liters`)
@@ -1517,6 +1528,8 @@ def rock_bottom_liters(segments: Sequence[DiveSegment], bottom_gas: Gas,
     realistic back-gas reserve rather than the whole schedule billed to back
     gas.
 
-    `candidates` is passed straight through — see `emergency_gas_liters`."""
+    `candidates` and `start_tissues` are passed straight through — see
+    `emergency_gas_liters`."""
     return emergency_gas_liters(segments, bottom_gas, gas_plan, plan,
-                                candidates=candidates)
+                                candidates=candidates,
+                                start_tissues=start_tissues)

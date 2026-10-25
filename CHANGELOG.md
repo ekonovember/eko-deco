@@ -27,6 +27,15 @@ a dive began with, and every derived figure starts from it.
   in the per-scenario gas usage. The scenarios moved out of the GUI into
   `report.lost_gas_scenarios`, which plans every column from the result's
   own loading.
+- **Rock bottom on a multi-level repeat dive was understated.** The
+  worst-moment search re-plans the dive cut short at each level end, and those
+  re-plans started clean: air, 40 m to 30 min then 12 m to 40, GF 30/70, SAC
+  20, 60 min interval — 6912 L reported, 7487 L real (−7.7 %), on the one
+  number DECISIONS #7 allows to err only upward. `report.gas_report` now
+  **requires** `start_tissues=` (a keyword with no default — pass `None` for a
+  first dive), like the whole `DivePlan` it already required;
+  `reserve_candidates`, `emergency_gas_liters` and `rock_bottom_liters` take it
+  as an optional keyword.
 
 ### Fixed — six holes in the safety surface (DECISIONS #33)
 

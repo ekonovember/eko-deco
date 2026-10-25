@@ -1282,6 +1282,13 @@ there:
   exactly where the loading went missing: lost EAN50 on the 45 m dive above
   read TTS 40.3 against a real 58.3 and surfaced at SurfGF 96 %. They are
   computed in the report layer now, from the result, and the GUI renders them.
+* **Rock bottom's worst-moment candidates** (`reserve_candidates(…,
+  start_tissues=…)`). The dive is re-planned cut short at each level end;
+  those re-plans started clean, so a deep-then-shallow repeat dive came out
+  low — 6912 L against 7487 on air 40 m → 12 m after 60 min. `report.gas_report`
+  is the one place this is made *required* (a keyword with no default): it is
+  the call both front ends make per scenario, and it already refused to guess
+  the `DivePlan` (#24).
 
 **The invariant every test here asserts** is the planner's own contract: any
 scenario derived from a dive, flown on the tissues that dive really started
