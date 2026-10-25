@@ -867,6 +867,18 @@ class TestDomainValidation(unittest.TestCase):
             with self.assertRaises(ValueError, msg=kw):
                 b.DivePlan(**kw)
 
+    def test_plan_rejects_implausible_environment_and_rates(self):
+        for kw in ({"p_h2o": 0.627}, {"surface_p": 1013.0},
+                   {"msw_per_bar": 1.0}, {"ascent_rate": 100.0},
+                   {"descent_rate": 100.0}):
+            with self.assertRaises(ValueError, msg=kw):
+                b.DivePlan(**kw)
+
+    def test_plan_accepts_altitude_and_fresh_water_within_bounds(self):
+        b.DivePlan(surface_p=b.surface_p_at_altitude(3000))
+        b.DivePlan(msw_per_bar=b.MSW_PER_BAR_FRESH)
+        b.DivePlan(p_h2o=b.P_H2O_BUHLMANN)
+
     def test_plan_rejects_negative_last_stop(self):
         with self.assertRaises(ValueError):
             b.DivePlan(last_stop_depth=-3.0)

@@ -1376,3 +1376,23 @@ GUI (#19) for one hundredth of a bar.
 That is the owner's decision, not a review fix. `TestBottomGasPpO2Band` pins
 the current band (1.44 silent, 1.48 flagged against 1.45) so whichever way it
 goes, it goes on purpose.
+
+## #38 — Environment and rates are bounded to plausible ranges
+
+A review (2026-10-25) found `DivePlan` checked only that `p_h2o`, `surface_p`,
+`msw_per_bar` and the rates were `> 0`, so a unit slip planned a
+believable-but-wrong schedule: `--p-h2o 0.627` (a typo ×10) cut a 40 m/25 min
+air+EAN50 TTS from 27.3 to 11.3 min with no note, `--surface-p 1013` (mbar
+typed as bar) planned a 4-min dive that then sprayed absurd warnings,
+`--msw-per-bar 1` crashed with an unhandled `Stop exceeded 24h`, and
+`--ascent-rate 100` was accepted in silence.
+
+`DivePlan` now rejects, at construction, anything outside a loose plausibility
+band — `p_h2o` 0.03–0.08 bar, `surface_p` 0.5–1.2 bar, `msw_per_bar` 9–11
+m/bar, ascent ≤ 30 m/min, descent ≤ 60 m/min. The bounds are deliberately
+loose: they exclude only numbers no body of water or physiology produces
+(vapour pressure at body temperature is ~0.06 bar, sea level is ~1.013 bar,
+water is ~10 m/bar, nobody ascends at 100 m/min). No legitimate plan sits near
+a bound. `surface_p_at_altitude(3000)` is 0.70 bar, comfortably inside. A
+future hyperbaric or deep-cave niche that genuinely needs one of these would
+relax the constant in one place rather than fight a parser.

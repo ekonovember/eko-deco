@@ -533,6 +533,29 @@ class DivePlan:
             v = getattr(self, name)
             if v <= 0:
                 raise ValueError(f"{name} must be > 0 (got {v:g})")
+        # Plausibility ranges. `> 0` alone let a unit slip through and plan a
+        # believable-but-wrong schedule: `--p-h2o 0.627` (a typo ×10) cut a
+        # 40/25 air+EAN50 TTS from 27.3 to 11.3 min, `--surface-p 1013` (mbar
+        # typed as bar) planned a 4-min dive with absurd warnings, `--msw-per-bar
+        # 1` crashed out with "Stop exceeded 24h", and `--ascent-rate 100` was
+        # accepted in silence. The bounds are loose on purpose — they only
+        # exclude numbers no body of water or physiology produces (DECISIONS
+        # #38).
+        if not (0.03 <= self.p_h2o <= 0.08):
+            raise ValueError(
+                f"p_h2o must be 0.03-0.08 bar (got {self.p_h2o:g})")
+        if not (0.5 <= self.surface_p <= 1.2):
+            raise ValueError(
+                f"surface_p must be 0.5-1.2 bar (got {self.surface_p:g})")
+        if not (9.0 <= self.msw_per_bar <= 11.0):
+            raise ValueError(
+                f"msw_per_bar must be 9-11 m per bar (got {self.msw_per_bar:g})")
+        if not (0.0 < self.ascent_rate <= 30.0):
+            raise ValueError(
+                f"ascent_rate must be <= 30 m/min (got {self.ascent_rate:g})")
+        if not (0.0 < self.descent_rate <= 60.0):
+            raise ValueError(
+                f"descent_rate must be <= 60 m/min (got {self.descent_rate:g})")
         if self.last_stop_depth < 0:
             raise ValueError(
                 f"last_stop_depth must be >= 0 m (got {self.last_stop_depth:g})")

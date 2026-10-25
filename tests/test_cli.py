@@ -41,6 +41,17 @@ class TestArgumentValidation(unittest.TestCase):
         self.assertEqual(code, 2)
         self.assertIn("must be > 0", err)
 
+    def test_implausible_environment_rejected_cleanly(self):
+        for flag, val, needle in (
+                ("--p-h2o", "0.627", "p_h2o"),
+                ("--surface-p", "1013", "surface_p"),
+                ("--msw-per-bar", "1", "msw_per_bar"),
+                ("--ascent-rate", "100", "ascent_rate")):
+            code, _, err = run_cli(["plan", "--depth", "30", "--time", "20",
+                                    flag, val])
+            self.assertEqual(code, 2, msg=(flag, val))
+            self.assertIn(needle, err)
+
     def test_negative_sac_rejected(self):
         code, _, _err = run_cli(["plan", "--depth", "30", "--time", "20",
                                  "--sac", "-20"])
