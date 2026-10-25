@@ -617,9 +617,9 @@ class TestRepeatDiveContingenciesInTheGui(unittest.TestCase):
         seen = []
         real = b.ceiling_profile
 
-        def spy(segments, plan=None, start_tissues=None, step=0.5):
+        def spy(segments, plan=None, start_tissues=None, step=0.5, **kw):
             seen.append(start_tissues)
-            return real(segments, plan, start_tissues, step)
+            return real(segments, plan, start_tissues, step, **kw)
 
         b.ceiling_profile = spy
         try:

@@ -6,6 +6,25 @@ pre-1.0, so anything may still move.
 
 ## [Unreleased]
 
+### Changed — the first stop is checked on arrival, as Baker does (DECISIONS #36)
+
+- **After a short deep bounce the first stop sat above the GF-Low line.** The
+  first stop was the GF-Low ceiling *on leaving the bottom*, rounded; on a
+  short deep dive the slow compartments keep loading on the way up and the
+  ceiling rises behind the diver. 51 m / 5 min air, GF 30/70: ceiling 5.8 m on
+  leaving (stop 6 m), 7.7 m on arriving there — a GF of 0.38 held where 0.30
+  was set. Erik Baker's GFDECO runs a *projected ascent* for exactly this and
+  deepens the stop; eko-deco now does the same, so the GF anchor equals
+  GFDECO's first stop exactly on all nine cross-check cases (it used to be
+  allowed a 3 m step of slack).
+- Effect: only short deep bounces move — 51 m / 5 min air GF 30/70 goes from
+  `6/6 3/1` to `9/5 6/1 3/1` (TTS 7.3 either way), 54 m / 5 min air GF 20/85
+  from `9/5 6/1 3/1` (TTS 7.3) to `12/5 9/1 6/1 3/1` (TTS 8.3). Ordinary deco
+  dives are unchanged: 40 m / 25 min air GF 30/70 is still
+  `18/3 15/2 12/4 9/6 6/10 3/24`, RT 74; 50 m / 20 min Tx 21/35 + EAN50 + O₂
+  still RT 45. No deep stops were added: the stop moves only as deep as the
+  model's own GF-Low ceiling demands.
+
 ### Fixed — repetitive dives: the contingencies were planned on clean tissues (DECISIONS #35)
 
 A code review found residual nitrogen reaching dive 2's plan and none of the

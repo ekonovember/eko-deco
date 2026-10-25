@@ -1303,3 +1303,51 @@ The parameter stays optional in `buhlmann`/`contingency`: clean tissues are the
 honest default for a lone dive, exactly as for `plan_multilevel`, and the
 library has callers outside a series. What is no longer optional is passing it
 on — `report` and the GUI take it from the `PlanResult`, never re-supply it.
+
+
+## #36 — Baker's projected ascent: the first stop is checked on arrival
+
+The first stop used to be the GF-Low ceiling **at the moment of leaving the
+bottom**, rounded to the grid (#21) — and nothing looked again. On a short
+deep bounce that is not where the ceiling is when the diver gets there: the
+slow compartments are still below ambient on the way up, keep loading, and the
+ceiling rises behind the ascent. 51 m / 5 min on air at GF 30/70 leaves the
+bottom with a 5.8 m ceiling (stop 6 m); during the ascent the ceiling peaks at
+9.1 m, and on arrival at 6 m it stands at 7.7 m. The stop was held 1.7 m above
+the line GF-Low draws, at a GF of 0.38 where 0.30 was set. A review sweep of
+~6000 plans found fifteen such dives, every one a 4–6 minute bounce; none
+broke GF-High, so this was a broken GF-Low contract, not an M-value one.
+
+**Baker's code handles it, and this repo follows Baker** (#2, #21).
+`gfdeco.f` calls `PROJECTED_ASCENT` right after rounding the first stop: fly
+the ascent to it on a copy of the tissues, and if any compartment's loading
+on arrival exceeds what GF-Low allows there, move the stop one step deeper and
+try again. `_first_stop_depth` does the same, using the planner's own `_move`
+for the trial ascent — same rates, same gas switches — so the stop it accepts
+is the one the diver will arrive at. `_ascend` and `ceiling_profile` both call
+it, so the curve still anchors where the schedule does.
+
+**Shearwater.** A Perdix computes its ceiling live, so in the water the
+displayed first stop deepens as the ceiling rises; the projected ascent is how
+a planner arrives at the same stop in advance. No photographed Shearwater
+*plan* of such a bounce exists in `examples/` yet, so "matches Shearwater" is
+an inference from how the unit works, not a capture — a 51 m / 5 min air GF
+30/70 sheet would settle it.
+
+**What it is not.** This is not a deep stop. Nothing is added below the
+model's own GF-Low ceiling; the stop moves only as far as that ceiling has
+actually risen, and an ordinary deco dive — where the ceiling falls on the way
+up — is untouched (40 m / 25 min air, 50 m / 20 min Tx 21/35 + EAN50 + O₂:
+identical schedules). Pyle/"deep stop" additions remain out of scope.
+
+**Evidence.** Against GFDECO the GF anchor now matches exactly on every
+cross-check case, including two new bounces (51 m / 5 min air 30/70: 9 m;
+54 m / 5 min air 20/85: 12 m, TTS 8.3 where we said 7.3); the anchor test's
+3 m tolerance, which existed to absorb this, is gone. `TestProjectedAscent`
+sweeps 180 short dives and asserts the GF-Low ceiling on arrival at the first
+stop is never deeper than the stop.
+
+**Left alone.** An NDL ascent (rounded ceiling 0) is not projected. The
+66 m / 5 min GF 85/85 corner of #33 — no stops, surfacing over GF-High — stays
+with the post-hoc surfacing warning; GFDECO would put stops on it, and that is
+a change to the no-deco gate (#21), not to the first stop.

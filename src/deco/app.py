@@ -1386,7 +1386,8 @@ class DecoApp:
         levels = res.levels
         scenarios = self._lost_gas_scenarios(res)
         self._draw(res.segments, res.max_depth_m, levels[-1].runtime,
-                   b.ceiling_profile(res.segments, plan, res.start_tissues),
+                   b.ceiling_profile(res.segments, plan, res.start_tissues,
+                                     bottom_gas=res.bottom_gas),
                    levels)
         self._write_readout(res, scenarios, results)
         self._write_runtime(res, scenarios)

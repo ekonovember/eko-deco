@@ -4,7 +4,8 @@ GFDECO (tests/baker_oracle/gfdeco.f, compiled on demand; module skips without
 gfortran) is the published reference for the gradient-factor convention that
 Shearwater, MultiDeco/V-Planner and most tech dive computers implement:
 
-* first stop = ceiling at GF-low rounded up to the step size,
+* first stop = ceiling at GF-low rounded up to the step size, deepened by his
+  PROJECTED_ASCENT check until the ceiling on arrival is no deeper than it,
 * GF slope anchored at that rounded first stop, static for the ascent,
 * Schreiner-equation ramps, whole-minute stops,
 * initial saturation (P_surf - P_H2O) * 0.79,
@@ -84,9 +85,11 @@ def eko_schedule(depth, time, gas, deco, gf, **plan_kw):
 
 
 def eko_anchor(depth, time, gas, gf_low):
-    """eko-deco's GF-low anchor: rounded first stop computed when leaving the
-    bottom — recomputed here exactly like plan_dive does."""
-    plan = b.DivePlan(descent_rate=18.0, surface_p=BAKER_SURFACE,
+    """eko-deco's GF-low anchor: the first stop as the planner derives it when
+    leaving the bottom — the rounded GF-low ceiling, deepened by the projected
+    ascent (`buhlmann._first_stop_depth`, DECISIONS.md #36)."""
+    plan = b.DivePlan(gf_low=gf_low, gf_high=max(gf_low, 0.85),
+                      descent_rate=18.0, surface_p=BAKER_SURFACE,
                       p_h2o=BAKER_P_H2O)
     t = b.Tissues.at_surface(plan.surface_p, b.AIR, plan.p_h2o)
     p0 = b.depth_to_p_amb(0.0, plan.surface_p, plan.msw_per_bar)
@@ -94,8 +97,7 @@ def eko_anchor(depth, time, gas, gf_low):
     t_desc = depth / plan.descent_rate
     b.update_tissues(t, gas, p0, p_bot, t_desc, plan.p_h2o)
     b.update_tissues(t, gas, p_bot, p_bot, max(0.0, time - t_desc), plan.p_h2o)
-    ceil = b.ceiling_depth(t, gf_low, plan.surface_p, plan.msw_per_bar)
-    return b._round_up_to_stop(ceil, plan.stop_interval)
+    return b._first_stop_depth(t, plan, gas, depth)
 
 
 # name, depth, time, eko gas, eko deco gases, baker gases, (gf_low, gf_high)
@@ -120,6 +122,14 @@ CASES = [
      [b.Gas(0.50), b.Gas(1.00)],
      [BakerGas(0.15, 0.55), BakerGas(0.50, 0, 21), BakerGas(1.00, 0, 6)],
      (0.30, 0.85)),
+    # Short deep bounces: the GF-Low ceiling RISES during the ascent (the slow
+    # compartments are still loading), so Baker's PROJECTED_ASCENT deepens the
+    # first stop. Before eko-deco did the same, it stopped at 6 m and 9 m here
+    # where GFDECO stops at 9 m and 12 m (DECISIONS.md #36).
+    ("51m/5min air 30/70 bounce", 51, 5, b.Gas(0.21), [],
+     [BakerGas(0.21)], (0.30, 0.70)),
+    ("54m/5min air 20/85 bounce", 54, 5, b.Gas(0.21), [],
+     [BakerGas(0.21)], (0.20, 0.85)),
 ]
 
 # eko-deco now implements Baker's own stop discretisation — hold to the second,
@@ -156,16 +166,18 @@ class TestBakerSchedules(unittest.TestCase):
     def test_gf_anchor_matches_baker_first_stop(self):
         """The rounded first stop that anchors the GF slope — the defining
         choice of the Baker/Shearwater convention. eko-deco's computed anchor
-        must equal GFDECO's first stop within one 3 m step (GFDECO can push
-        the first stop one step deeper via its PROJECTED_ASCENT check)."""
+        must equal GFDECO's first stop. It used to be allowed one 3 m step of
+        slack, because GFDECO deepens the first stop through its
+        PROJECTED_ASCENT check and eko-deco did not; now it does, so the slack
+        is gone (DECISIONS.md #36)."""
         for name, depth, time, ge, _dge, bg, gf in CASES:
             with self.subTest(name):
                 r = bd.plan(depth, time, bg, gf[0], gf[1])
                 if r.first_stop is None:
                     continue
                 anchor = eko_anchor(depth, time, ge, gf[0])
-                self.assertLessEqual(
-                    abs(anchor - r.first_stop), 3.0,
+                self.assertAlmostEqual(
+                    anchor, r.first_stop, places=6,
                     msg=f"eko anchor {anchor} vs GFDECO first stop "
                         f"{r.first_stop}\n  baker: {r.stops}")
 

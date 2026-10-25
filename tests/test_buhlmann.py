@@ -1278,3 +1278,71 @@ class TestCompartmentABDegenerate(unittest.TestCase):
         for idx in (0, 7, 15):
             a, bb = b.compartment_ab(0.0, 0.0, idx)
             self.assertEqual((a, bb), (b.N2_A[idx], b.N2_B[idx]))
+
+
+class TestProjectedAscent(unittest.TestCase):
+    """Baker's PROJECTED_ASCENT: the first stop is deepened until the GF-Low
+    ceiling on ARRIVAL is no deeper than the stop (DECISIONS.md #36). Without
+    it a short deep bounce held its first stop above the GF-Low line — the
+    ceiling rises during the ascent while the slow compartments still load."""
+
+    @staticmethod
+    def _arrival(segs, plan):
+        """(first stop depth, GF-Low ceiling on arriving there) or None."""
+        be = b._bottom_phase_end(segs)
+        t = b.tissues_after(segs[:be], plan)
+        for s in segs[be:]:
+            if s.kind == "stop":
+                return s.depth_start, b.ceiling_depth(
+                    t, plan.gf_low, plan.surface_p, plan.msw_per_bar)
+            b.update_tissues(
+                t, s.gas,
+                b.depth_to_p_amb(s.depth_start, plan.surface_p, plan.msw_per_bar),
+                b.depth_to_p_amb(s.depth_end, plan.surface_p, plan.msw_per_bar),
+                s.duration, plan.p_h2o)
+        return None
+
+    def test_51m_5min_air_stops_first_at_9m(self):
+        plan = b.DivePlan(gf_low=0.30, gf_high=0.70)
+        segs, _ = b.plan_dive(51.0, 5.0, b.AIR, plan)
+        first, ceil = self._arrival(segs, plan)
+        self.assertEqual(first, 9.0)
+        self.assertLessEqual(ceil, first + 1e-6)
+
+    def test_no_first_stop_sits_above_the_gf_low_line_on_arrival(self):
+        tx = b.Gas(0.18, 0.45)
+        cases = [(gas, deco, d, t, gf)
+                 for gas, deco in ((b.AIR, ()), (b.EAN32, (b.EAN50,)),
+                                   (tx, (b.EAN50, b.O2)))
+                 for d in (36.0, 45.0, 51.0, 60.0, 72.0)
+                 for t in (4.0, 5.0, 6.0, 8.0)
+                 for gf in ((0.30, 0.70), (0.20, 0.85), (0.50, 0.80))]
+        for gas, deco, d, t, (lo, hi) in cases:
+            plan = b.DivePlan(gf_low=lo, gf_high=hi, deco_gases=deco)
+            try:
+                segs, _ = b.plan_dive(d, t, gas, plan)
+            except ValueError:
+                continue                      # time shorter than the descent
+            got = self._arrival(segs, plan)
+            if got is None:
+                continue
+            with self.subTest(gas=repr(gas), depth=d, time=t, gf=(lo, hi)):
+                self.assertLessEqual(got[1], got[0] + 1e-6)
+
+    def test_an_ordinary_dive_is_not_moved(self):
+        # 40 m / 25 min air GF 30/70: the ceiling falls on the way up, so the
+        # projection accepts the rounded ceiling unchanged.
+        plan = b.DivePlan(gf_low=0.30, gf_high=0.70)
+        segs, _ = b.plan_dive(40.0, 25.0, b.AIR, plan)
+        self.assertEqual(self._arrival(segs, plan)[0], 18.0)
+
+    def test_the_ceiling_curve_anchors_where_the_schedule_does(self):
+        plan = b.DivePlan(gf_low=0.30, gf_high=0.70)
+        segs, _ = b.plan_dive(51.0, 5.0, b.AIR, plan)
+        prof = b.ceiling_profile(segs, plan, bottom_gas=b.AIR)
+        run_first = sum(s.duration for s in
+                        segs[:next(i for i, s in enumerate(segs)
+                                   if s.kind == "stop")])
+        # On arrival at 9 m the drawn ceiling is the GF-Low one, under 9 m.
+        at = min(prof, key=lambda p: abs(p[0] - run_first))
+        self.assertLessEqual(at[1], 9.0 + 1e-6)

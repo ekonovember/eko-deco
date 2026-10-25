@@ -786,6 +786,51 @@ def plan_multilevel(levels: Sequence[Level], bottom_gas: Gas,
     return segs, tissues
 
 
+def _first_stop_depth(tissues: Tissues, plan: DivePlan, bottom_gas: Gas,
+                      bottom_depth: float, exclude: Sequence[Gas] = ()) -> float:
+    """The first deco stop for an ascent leaving `bottom_depth` with `tissues`
+    — 0.0 when there is none — derived Baker's way, in two steps.
+
+    1. The GF-Low ceiling rounded to the stop grid (`_round_up_to_stop`, the
+       strictly next step), and no shallower than `last_stop_depth`.
+    2. **Projected ascent** (gfdeco.f's ``PROJECTED_ASCENT``): fly the ascent to
+       that stop on a copy of the tissues and, if the GF-Low ceiling on ARRIVAL
+       is deeper than the stop, deepen it by one `stop_interval` and try again.
+       The slow compartments keep loading on the way up, so after a short deep
+       bounce the ceiling rises behind the diver: 51 m / 5 min on air at GF
+       30/70 leaves the bottom with a 5.8 m ceiling (first stop 6 m), and
+       arrives at 6 m with a 7.7 m one — a stop held 1.7 m above the line
+       GF-Low draws, at a GF of 0.38 where 0.30 was set. Baker deepens to 9 m,
+       and so does this (DECISIONS.md #36).
+
+    The trial ascent is the real one — the same `_move`, switching gas at the
+    same depths — so the stop it accepts is the stop the diver arrives at with
+    that ceiling. It never deepens past the bottom itself.
+
+    An NDL ascent (step 1 gives 0) is not projected: whether a no-stop verdict
+    survives the ascent is checked on the finished tissues instead
+    (`report.surfacing_warnings`, DECISIONS.md #33).
+    """
+    ceil_low = ceiling_depth(tissues, plan.gf_low, plan.surface_p, plan.msw_per_bar)
+    first = _round_up_to_stop(ceil_low, plan.stop_interval)
+    if first <= 0:
+        return 0.0
+    first = max(first, plan.last_stop_depth)
+    while first + plan.stop_interval <= bottom_depth + 1e-9:
+        probe = tissues.copy()
+
+        def gas_for(d: float, stop: float = first) -> Gas:
+            return plan.best_gas(d, bottom_gas, stop, exclude)
+
+        _move(probe, [], plan, bottom_gas, bottom_depth, first, gas_for,
+              "ascent", None, first)
+        if (ceiling(probe, plan.gf_low)
+                <= depth_to_p_amb(first, plan.surface_p, plan.msw_per_bar) + 1e-6):
+            break
+        first += plan.stop_interval
+    return first
+
+
 def _ascend(tissues: Tissues, segs: list[DiveSegment], plan: DivePlan,
             bottom_gas: Gas, bottom_depth: float,
             exclude: Sequence[Gas] = ()) -> None:
@@ -801,11 +846,9 @@ def _ascend(tissues: Tissues, segs: list[DiveSegment], plan: DivePlan,
     last-stop rule — is unchanged, because this is the same code the normal
     plan runs.
     """
-    # ---- find first stop using GF-Low ----
-    ceil_low = ceiling_depth(tissues, plan.gf_low, plan.surface_p, plan.msw_per_bar)
-    first_stop_depth = _round_up_to_stop(ceil_low, plan.stop_interval)
-    if first_stop_depth > 0:
-        first_stop_depth = max(first_stop_depth, plan.last_stop_depth)
+    # ---- find first stop: GF-Low ceiling, then Baker's projected ascent ----
+    first_stop_depth = _first_stop_depth(tissues, plan, bottom_gas, bottom_depth,
+                                         exclude)
 
     def ascent_gas_for(d: float) -> Gas:
         # `first_stop_depth` is read at call time, not captured by value: on an
@@ -1195,7 +1238,8 @@ def worst_ppo2_violations(segments: Iterable[DiveSegment],
 def ceiling_profile(segments: Sequence[DiveSegment],
                     plan: DivePlan | None = None,
                     start_tissues: Tissues | None = None,
-                    step: float = 0.5) -> list[tuple[float, float]]:
+                    step: float = 0.5, *,
+                    bottom_gas: Gas | None = None) -> list[tuple[float, float]]:
     """(runtime_min, ceiling_m) samples along a planned dive, for plotting.
 
     Re-walks `segments` with the same tissue math as the planner (Schreiner is
@@ -1204,7 +1248,11 @@ def ceiling_profile(segments: Sequence[DiveSegment],
     towards GF-High at the surface, anchored on the first stop derived exactly
     as plan_multilevel derives it — so the curve agrees with the schedule it is
     drawn under. On a no-deco dive the anchor is the surface, gf_at returns
-    GF-High everywhere, and the ceiling stays at 0."""
+    GF-High everywhere, and the ceiling stays at 0.
+
+    The first stop includes the projected ascent (`_first_stop_depth`), which
+    re-flies the ascent and so needs the dive's `bottom_gas`; left None it is
+    taken from the deepest bottom-phase segment, as `reserve_candidates` does."""
     if plan is None:
         plan = DivePlan()
     segs = list(segments)
@@ -1217,12 +1265,12 @@ def ceiling_profile(segments: Sequence[DiveSegment],
     run = 0.0
     for i, s in enumerate(segs):
         if i == bottom_end:
-            first = _round_up_to_stop(
-                ceiling_depth(tissues, plan.gf_low,
-                              plan.surface_p, plan.msw_per_bar),
-                plan.stop_interval)
-            if first > 0:
-                first = max(first, plan.last_stop_depth)
+            bottom = segs[:bottom_end]
+            deepest = max(bottom, key=lambda x: max(x.depth_start, x.depth_end),
+                          default=None)
+            gas = bottom_gas or (deepest.gas if deepest else AIR)
+            first = _first_stop_depth(tissues, plan, gas,
+                                      bottom[-1].depth_end if bottom else 0.0)
             p_first_stop = (depth_to_p_amb(first, plan.surface_p,
                                            plan.msw_per_bar)
                             if first > 0 else plan.surface_p)
