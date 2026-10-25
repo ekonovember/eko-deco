@@ -49,6 +49,16 @@ def _positive_int(s: str) -> int:
 MIN_O2_PCT = 5.0
 
 
+def _first_breathable(plan: b.DivePlan, bottom_gas: b.Gas) -> rp.GasStackRow | None:
+    """The first remaining mix that becomes breathable on the ascent — the one
+    with the **deepest** MOD among the travel and deco gases, since that is the
+    depth a diver reaches first coming up (DECISIONS.md #40). None when the
+    stack carries nothing but the bottom gas."""
+    rows = rp.gas_stack_table(plan, bottom_gas)
+    remaining = [r for r in rows if r.role != "Bottom"]
+    return max(remaining, key=lambda r: r.mod_m, default=None)
+
+
 def parse_gas(spec: str) -> b.Gas:
     """Parse 'air', 'ean32', 'nx32', '32', or trimix '21/35' (= 21% O2, 35% He).
 
@@ -781,9 +791,15 @@ def _plan_text(res: rp.PlanResult, model_label: str, gas_lines, cont_lines,
         # planned is a schedule *from depth* on the remaining gas; calling that
         # a survivability verdict states something the model never computed
         # (DECISIONS.md #33).
+        first = _first_breathable(res.plan, res.bottom_gas)
+        if first is None:
+            target = ("ascend on a buddy's gas — nothing else is on the stack")
+        else:
+            target = (f"ascend on a buddy's gas to {first.mod_m:.0f} m "
+                      f"({first.gas!r})")
         lines.append("Lost bottom gas: no schedule from depth — nothing else "
                      f"on the stack is breathable at {res.max_depth_m:g} m "
-                     "(ascend on a buddy's gas to the shallowest mix's MOD)")
+                     f"({target})")
     else:
         lines.append(f"Lost bottom gas: TTS {b.time_to_surface(res.bailout):.0f}"
                      f" min on " + ", ".join(

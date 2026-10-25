@@ -613,6 +613,17 @@ class TestSafetySurface(unittest.TestCase):
         self.assertIn("no schedule from depth", out)
         self.assertNotIn("NOT survivable", out)
 
+    def test_lost_bottom_gas_names_the_first_breathable_mix(self):
+        _code, out, _ = run_cli(["plan", "--depth", "30", "--time", "25",
+                                "--gas", "ean32", "--deco-gas", "50"])
+        self.assertIn("ascend on a buddy's gas to 22 m (EAN50)", out)
+
+    def test_lost_bottom_gas_with_nothing_else_on_the_stack(self):
+        _code, out, _ = run_cli(["plan", "--depth", "30", "--time", "25",
+                                "--gas", "air"])
+        self.assertIn("nothing else is on the stack", out)
+        self.assertNotIn("shallowest", out)
+
     def test_a_deco_gas_used_as_travel_gas_is_noticed(self):
         _code, out, _ = run_cli(["plan", "--depth", "60", "--time", "20",
                                 "--gas", "10/70", "--deco-gas", "50"])

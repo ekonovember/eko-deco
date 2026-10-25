@@ -1412,3 +1412,17 @@ annotation is not an ⚠ warning, so the hazard did not reach the safety surface
 breathed, quoted at the depth it is breathed there (each segment's gas at its
 deepest point — the same worst-case convention `gas_stack_table` uses). The
 wording gains the mix name so the message cannot be read as the bottom gas's.
+
+## #40 — "Ascend on a buddy's gas" names the first mix that becomes breathable
+
+When the bottom gas is lost and nothing else is breathable at depth, the CLI's
+"Lost bottom gas" line used to say "ascend on a buddy's gas to the shallowest
+mix's MOD". That pointed at the wrong mix: ascending, the diver first reaches
+the **deepest** MOD of the remaining gases (EAN50 at 21 m), not the shallowest
+one (O₂ at 6 m) — and with nothing but air on the stack it pointed at a mix
+that does not exist.
+
+The line now names the first breathable mix and its depth — "ascend on a
+buddy's gas to 22 m (EAN50)" — computed as the remaining mix with the deepest
+MOD, and says plainly "nothing else is on the stack" when the stack carried
+only the bottom gas.

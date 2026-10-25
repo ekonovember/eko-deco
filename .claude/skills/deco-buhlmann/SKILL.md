@@ -105,7 +105,7 @@ a one-line schedule for a slate (`backup_line`), and whether losing the
 nothing else carried is breathable down there; on a deep dive that is the usual
 and correct answer — relay it as a finding about the stack, never as a missing
 feature and never as a verdict that the diver would die: you ascend to the
-shallowest mix's MOD and switch).
+first breathable mix's MOD and switch).
 
 A repetitive series also prints a **Day total** block (`day_totals` in
 `--json`): OTU summed — it is a daily dose by definition — and CNS carried
