@@ -1215,6 +1215,27 @@ class TestSurfaceInterval(unittest.TestCase):
         self.assertLess(sum(on_o2.pN2), sum(on_air.pN2))
 
 
+class TestBottomGasPpO2Band(unittest.TestCase):
+    """The bottom gas is flagged above `ppo2_bottom + ppo2_switch_tol` — 1.45
+    with the defaults, not 1.40 (DECISIONS.md #37). Pinned so the band moves
+    only on purpose: a Perdix flashes at OC Mod. PPO2 + 0.04 = 1.44, so the two
+    differ by 0.01 bar, and whether to close that is the owner's call."""
+
+    def _high(self, depth):
+        plan = b.DivePlan()
+        segs, _ = b.plan_dive(depth, 20.0, b.EAN32, plan)
+        return [v for v in b.ppo2_violations(segs, plan) if v.kind == "high"]
+
+    def test_ean32_at_35m_is_inside_the_tolerance(self):
+        # ppO2 1.444: over the 1.40 setting, under the 1.45 limit.
+        self.assertEqual(self._high(35.0), [])
+
+    def test_ean32_at_36m_is_flagged_against_1_45(self):
+        vs = self._high(36.0)
+        self.assertTrue(vs)
+        self.assertAlmostEqual(vs[0].limit, 1.45, places=9)
+
+
 class TestWorstPpO2KeyedByValue(unittest.TestCase):
     """`worst_ppo2_violations` reduces per (gas, kind) — and the key is the
     frozen `Gas` value, never its rounded label (DECISIONS.md #8). EAN20.6 and

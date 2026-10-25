@@ -65,6 +65,13 @@ a dive began with, and every derived figure starts from it.
   where the real ceiling was 1.36 m, 40 m / 25 min air after 45 min). Plot
   only — no printed figure used it.
 
+### Documented — the bottom-gas ppO₂ band (DECISIONS #37)
+
+- The bottom gas is flagged above 1.45 bar (1.4 + the 0.05 switch tolerance),
+  not 1.40 — the docs said 1.4. A Perdix does the same with 0.04 (1.44), so
+  this is recorded as an open 0.01 bar question rather than changed, and a
+  test pins the band.
+
 ### Fixed — six holes in the safety surface (DECISIONS #33)
 
 A technical-diver audit of the whole tool found the model, the schedules and
