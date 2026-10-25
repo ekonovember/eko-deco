@@ -1249,3 +1249,38 @@ bottom mix will not keep them conscious at the surface, and it now has a test.
 So do `cards.gas_line`, `cards.bars_from_plan`, the render path that puts
 warnings **onto** the card that goes underwater, and `save_sheet`, the A4
 imposition that is the file actually reaching the printer.
+
+
+## #35 — Everything derived from a repetitive dive starts from that dive's loading
+
+A code review (2026-10-25) found residual nitrogen reaching dive 2's **plan**
+and nothing planned *beside* it. `compute_series_result` handed `start_tissues`
+to `plan_multilevel` and nowhere else, and every contingency function took the
+same parameter as an optional argument defaulting to clean tissues — so each
+one, called without it, returned dive 1's answer for dive 2. The schedule,
+the surfacing warnings and the day's CNS/OTU were right; the backups a diver
+reaches for when something has gone wrong were not.
+
+The same class of bug as #24: an optional input whose default yields a
+plausible wrong number. The fix is the same shape too. `PlanResult` now
+records `start_tissues` — the loading the dive began with, `None` only for the
+first dive of a day — and every figure derived from a result takes it from
+there:
+
+* **The cut table** (`contingency.contingency_schedules(start_tissues=…)`).
+  45 m / 25 min Tx 21/35 + EAN50 + O₂, GF 30/70, twice with 30 min between:
+  dive 2 plans at TTS 40.3, and its own cut-table cell printed `· 29′` — dive
+  1's schedule. Flown on dive 2's real tissues that cell surfaces at **SurfGF
+  94 %** against GF-High 70 %, with ceiling left. The table exists for a failed
+  computer, when it is the only source of truth on the dive.
+
+**The invariant every test here asserts** is the planner's own contract: any
+scenario derived from a dive, flown on the tissues that dive really started
+from, surfaces at or below GF-High. Dive 1 is unaffected by construction —
+its `start_tissues` is `None` and every function already meant clean tissues
+by that.
+
+The parameter stays optional in `buhlmann`/`contingency`: clean tissues are the
+honest default for a lone dive, exactly as for `plan_multilevel`, and the
+library has callers outside a series. What is no longer optional is passing it
+on — `report` and the GUI take it from the `PlanResult`, never re-supply it.

@@ -677,6 +677,12 @@ class PlanResult:
     notices: list[str] = field(default_factory=list)
     gas: GasReport | None = None
     contingency: list[list[ct.ContingencyCell]] | None = None
+    #: The loading the dive STARTED from — residual nitrogen from the dives
+    #: before it, None for clean tissues (the first dive of a day). Kept on the
+    #: result because every contingency derived from this dive (cut table,
+    #: bailout, lost-deco-gas columns, rock bottom, the ceiling curve) has to
+    #: start from it too; each used to start clean (DECISIONS.md #35).
+    start_tissues: b.Tissues | None = None
 
 
 def compute_series_result(
@@ -777,6 +783,8 @@ def compute_plan_result(levels: Sequence[b.Level], bottom_gas: b.Gas,
         end_m=bottom_gas.end(depth, plan.surface_p, plan.msw_per_bar),
         density_g_l=bottom_gas.density(depth, plan.surface_p,
                                        plan.msw_per_bar),
+        start_tissues=(start_tissues.copy() if start_tissues is not None
+                       else None),
     )
     result.cns_pct, result.otu = tox.cns_otu(segments, plan.surface_p,
                                            plan.msw_per_bar)
@@ -798,5 +806,5 @@ def compute_plan_result(levels: Sequence[b.Level], bottom_gas: b.Gas,
         tb, ta, db, da = contingency
         result.contingency = ct.contingency_schedules(
             list(levels), bottom_gas, plan, time_before=tb, time_after=ta,
-            depth_before=db, depth_after=da)
+            depth_before=db, depth_after=da, start_tissues=start_tissues)
     return result

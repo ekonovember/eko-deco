@@ -6,6 +6,18 @@ pre-1.0, so anything may still move.
 
 ## [Unreleased]
 
+### Fixed — repetitive dives: the contingencies were planned on clean tissues (DECISIONS #35)
+
+A code review found residual nitrogen reaching dive 2's plan and none of the
+backups planned beside it. `PlanResult.start_tissues` now records the loading
+a dive began with, and every derived figure starts from it.
+
+- **The cut table of dive 2 printed dive 1's schedules.** 45 m / 25 min
+  Tx 21/35 + EAN50 + O₂ at GF 30/70, repeated after 30 min: the plan's TTS is
+  41′, the cut-table cell for the very same depth and time said 29′, and
+  flown on the real tissues it surfaces at SurfGF 94 % on GF-High 70 %. CLI
+  (`--contingency`) and the GUI's cut-table card both fixed.
+
 ### Fixed — six holes in the safety surface (DECISIONS #33)
 
 A technical-diver audit of the whole tool found the model, the schedules and

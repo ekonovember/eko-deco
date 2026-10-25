@@ -560,3 +560,42 @@ class TestRecomputeIsDebounced(unittest.TestCase):
         self.root = tk.Tk()                    # tearDown needs something live
         self.root.withdraw()
         self.root.after_cancel = self._real_cancel
+
+
+@unittest.skipUnless(_HAVE_GUI, "Tk/matplotlib GUI not available")
+class TestRepeatDiveContingenciesInTheGui(unittest.TestCase):
+    """Dive 2's contingencies on screen start from dive 2's loading, the same
+    as the plan above them (DECISIONS.md #35)."""
+
+    def setUp(self):
+        self.root = tk.Tk()
+        self.root.withdraw()
+        self.app = app.DecoApp(self.root)
+        self.app._add_dive()
+        self.app.surface_interval.set("30")
+        self.app.recompute()
+        self.res = rp.compute_series_result(
+            self.app._series(), self.app._bottom_gas(), self.app._make_plan(),
+            self.app._gas_plan(), self.app._gas_rows_raw())[1]
+
+    def tearDown(self):
+        self.root.destroy()
+
+    def _runtime(self):
+        return self.app.runtime_text.get("1.0", tk.END)
+
+    def test_the_cut_table_is_planned_on_the_residual_loading(self):
+        from deco import contingency as ct
+        res, a = self.res, self.app
+        tb, db = int(a.cont_tb.get()), int(a.cont_db.get())
+        kw = {"time_before": tb, "time_after": int(a.cont_ta.get()),
+              "depth_before": db, "depth_after": int(a.cont_da.get())}
+        true = ct.contingency_schedules(res.levels, res.bottom_gas, res.plan,
+                                        start_tissues=res.start_tissues, **kw)
+        clean = ct.contingency_schedules(res.levels, res.bottom_gas, res.plan,
+                                         **kw)
+        planned, stale = true[tb][db].text(), clean[tb][db].text()
+        # The day must actually move the planned cell, or this proves nothing.
+        self.assertNotEqual(planned, stale)
+        self.assertIn(a._card_text(planned), self._runtime())
+        self.assertNotIn(a._card_text(stale), self._runtime())

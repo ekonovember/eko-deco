@@ -829,3 +829,59 @@ class TestBailoutFailureIsAResult(unittest.TestCase):
         self.assertIsNone(res.bailout)
         # and the rest of the plan is intact
         self.assertGreater(res.total_runtime_min, 25.0)
+
+
+class TestRepeatDiveContingenciesCarryResidualLoading(unittest.TestCase):
+    """Every contingency derived from dive 2 of a day starts from the loading
+    dive 2 actually starts from, not from clean tissues (DECISIONS.md #35).
+
+    The invariant is the planner's own contract: a scenario flown on the
+    tissues the dive really began with surfaces at or below GF-High. Each
+    scenario used to be planned on clean tissues, so on a 30-minute interval
+    the cut-table cell for the planned dive itself surfaced at SurfGF 94 % on a
+    GF-High of 70 % — on the backup a diver reaches for when the computer has
+    died and there is no other source of truth."""
+
+    TX = b.Gas(0.21, 0.35)
+    PLAN = b.DivePlan(gf_low=0.30, gf_high=0.70, deco_gases=(b.EAN50, b.O2))
+    LEVELS: ClassVar = [b.Level(45.0, 25.0)]
+    SI = 30.0
+
+    def _day(self, plan=None, levels=None, bottom=None, gas_plan=None,
+             contingency=None):
+        plan = plan or self.PLAN
+        levels = levels or self.LEVELS
+        bottom = bottom or self.TX
+        series = [(0.0, levels), (self.SI, levels)]
+        first, second = rp.compute_series_result(series, bottom, plan,
+                                                 gas_plan, (), contingency)
+        start = b.surface_interval(first.tissues, self.SI, plan)
+        return first, second, start
+
+    def _surf_gf(self, segments, plan, start):
+        return b.surface_gf(b.tissues_after(segments, plan, start),
+                            plan.surface_p)
+
+    def test_the_result_records_the_loading_it_started_from(self):
+        first, second, start = self._day()
+        self.assertIsNone(first.start_tissues)
+        self.assertIsNotNone(second.start_tissues)
+        self.assertEqual(second.start_tissues.pN2, start.pN2)
+
+    def test_every_cut_table_cell_surfaces_within_gf_high(self):
+        _first, second, start = self._day(contingency=(1, 1, 1, 1))
+        for row in second.contingency or []:
+            for cell in row:
+                if cell.segments is None:
+                    continue
+                with self.subTest(depth=cell.depth, time=cell.bottom_time):
+                    self.assertLessEqual(
+                        self._surf_gf(cell.segments, self.PLAN, start),
+                        self.PLAN.gf_high + 1e-6)
+
+    def test_the_planned_cell_matches_the_planned_dive(self):
+        # Square dive at max depth and planned time: the centre cell IS the dive.
+        _first, second, _start = self._day(contingency=(1, 1, 1, 1))
+        centre = second.contingency[1][1]
+        self.assertAlmostEqual(b.time_to_surface(centre.segments),
+                               second.tts_min, places=6)

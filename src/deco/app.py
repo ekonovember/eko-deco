@@ -2005,7 +2005,8 @@ class DecoApp:
         if (tb or ta or db or da) and levels:
             grid = ct.contingency_schedules(levels, gas, plan,
                                            time_before=tb, time_after=ta,
-                                           depth_before=db, depth_after=da)
+                                           depth_before=db, depth_after=da,
+                                           start_tissues=res.start_tissues)
             cards.append("\n".join(self._cut_table_card(
                 grid, plan, depth, levels[-1].runtime)))
 

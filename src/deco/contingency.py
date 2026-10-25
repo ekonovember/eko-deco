@@ -23,6 +23,7 @@ from deco.buhlmann import (
     DiveSegment,
     Gas,
     Level,
+    Tissues,
     max_depth,
     plan_dive,
     stop_legs,
@@ -68,7 +69,8 @@ def contingency_schedules(levels: Sequence[Level], bottom_gas: Gas,
                           time_before: int = 1, time_after: int = 1,
                           depth_before: int = 1, depth_after: int = 1,
                           time_step: float = CONTINGENCY_TIME_STEP,
-                          depth_step: float = CONTINGENCY_DEPTH_STEP
+                          depth_step: float = CONTINGENCY_DEPTH_STEP,
+                          start_tissues: Tissues | None = None
                           ) -> list[list[ContingencyCell]]:
     """Backup "cut table" matrix for a bottom-timer (gauge) diver: schedules for
     the planned dive and its neighbours on a fixed grid.
@@ -86,7 +88,15 @@ def contingency_schedules(levels: Sequence[Level], bottom_gas: Gas,
 
     Unlike the lost-gas scenarios (which drop unplannable variants), the grid
     stays rectangular: an unplannable cell keeps its place with segments=None,
-    so renderers can align columns across rows. Tissues start fresh per cell.
+    so renderers can align columns across rows.
+
+    `start_tissues` is the loading the dive begins with, exactly as for
+    `plan_multilevel`, and every cell starts from it. On dive 2 of a day it is
+    the residual nitrogen dive 1 left behind; leaving it out planned every cell
+    on clean tissues, so the cell for the planned dive itself printed dive 1's
+    deco — 29′ against the plan's 41′ on 45 m/25 min after a 30 min interval,
+    surfacing at SurfGF 94 % on GF-High 70 % (DECISIONS.md #35). None is right
+    only for the first dive of a day.
     """
     d0 = max_depth(levels)
     if plan is None:
@@ -103,7 +113,7 @@ def contingency_schedules(levels: Sequence[Level], bottom_gas: Gas,
         row = []
         for d in depths:
             try:
-                segs, _ = plan_dive(d, t, bottom_gas, plan)
+                segs, _ = plan_dive(d, t, bottom_gas, plan, start_tissues)
             except (ValueError, RuntimeError):
                 segs = None
             row.append(ContingencyCell(d, t, segs))
